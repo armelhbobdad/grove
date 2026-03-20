@@ -256,6 +256,7 @@ pub fn update_task_target(project: &str, task_id: &str, new_target: &str) -> Res
 /// 批量更新任务的 target branch (当主仓库切换分支时使用)
 ///
 /// 将所有 target 为 old_target 的任务更新为 new_target
+#[allow(dead_code)]
 pub fn update_tasks_target_on_branch_switch(
     project: &str,
     old_target: &str,

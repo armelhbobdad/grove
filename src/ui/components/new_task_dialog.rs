@@ -91,6 +91,8 @@ pub fn render(
     let hint = Paragraph::new(Line::from(vec![
         Span::styled("Enter", Style::default().fg(colors.highlight)),
         Span::styled(" create  ", Style::default().fg(colors.muted)),
+        Span::styled("Tab", Style::default().fg(colors.highlight)),
+        Span::styled(" branch  ", Style::default().fg(colors.muted)),
         Span::styled("Esc", Style::default().fg(colors.highlight)),
         Span::styled(" cancel", Style::default().fg(colors.muted)),
     ]))

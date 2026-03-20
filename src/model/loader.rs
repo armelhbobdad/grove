@@ -10,8 +10,8 @@ use crate::storage::workspace::{self, project_hash};
 use super::{FileChanges, Worktree, WorktreeStatus};
 
 /// 从 Task 元数据加载 worktree 列表
-/// 返回: (current, other, archived)
-pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>, Vec<Worktree>) {
+/// 返回: (active, archived_placeholder)
+pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>) {
     // 1. 获取项目 key（路径的 hash）
     let project_key = project_hash(project_path);
 
@@ -86,30 +86,18 @@ pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>, Vec<
         .map(|task| task_to_worktree(task, &project_key, project_path, merging_commit.as_deref()))
         .collect();
 
-    // 分类到 current 和 other
-    let mut current = Vec::new();
-    let mut other = Vec::new();
+    // 所有活跃任务统一列表，按 updated_at 降序排列，Local Task 始终最前
+    let mut active = worktrees;
+    active.sort_by(|a, b| match (a.is_local, b.is_local) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => b.updated_at.cmp(&a.updated_at),
+    });
 
-    for (idx, task) in active_tasks.iter().enumerate() {
-        if task.is_local || task.target == current_branch {
-            current.push(worktrees[idx].clone());
-        } else {
-            other.push(worktrees[idx].clone());
-        }
-    }
-
-    // Local Task 始终排在 current 列表最上方
-    if let Some(pos) = current.iter().position(|w| w.is_local) {
-        if pos != 0 {
-            let local = current.remove(pos);
-            current.insert(0, local);
-        }
-    }
-
-    // 5. 懒加载归档任务（仅当需要时）
+    // 懒加载归档任务（仅当需要时）
     let archived = Vec::new(); // 初始为空，切换到 Archived Tab 时再加载
 
-    (current, other, archived)
+    (active, archived)
 }
 
 /// 加载归档任务（懒加载）
@@ -127,10 +115,12 @@ pub fn load_archived_worktrees(project_path: &str) -> Vec<Worktree> {
         }
     };
 
-    archived_tasks
+    let mut archived: Vec<Worktree> = archived_tasks
         .into_iter()
         .map(archived_task_to_worktree)
-        .collect()
+        .collect();
+    archived.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    archived
 }
 
 /// 将 Archived Task 转换为 UI Worktree (直接标记为 Archived 状态)

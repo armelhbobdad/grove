@@ -392,10 +392,9 @@ pub async fn list_tasks(
             .collect()
     } else {
         // Load active tasks
-        let (current, other, _) = loader::load_worktrees(&project.path);
-        current
+        let (active, _) = loader::load_worktrees(&project.path);
+        active
             .iter()
-            .chain(other.iter())
             .map(|wt| worktree_to_response(wt, &project_key))
             .collect()
     };
@@ -418,12 +417,9 @@ pub async fn get_task(
     let (project, project_key) = find_project_by_id(&id)?;
 
     // Load all worktrees and find the one with matching ID
-    let (current, other, _) = loader::load_worktrees(&project.path);
+    let (active, _) = loader::load_worktrees(&project.path);
 
-    let task = current
-        .iter()
-        .chain(other.iter())
-        .find(|wt| wt.id == task_id);
+    let task = active.iter().find(|wt| wt.id == task_id);
 
     if let Some(wt) = task {
         return Ok(Json(worktree_to_response(wt, &project_key)));
@@ -671,19 +667,15 @@ pub async fn recover_task(
         })?;
 
     // Load the recovered task to return
-    let (current, other, _) = loader::load_worktrees(&project.path);
-    let task = current
-        .iter()
-        .chain(other.iter())
-        .find(|wt| wt.id == task_id)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiErrorResponse {
-                    error: "Failed to find recovered task".to_string(),
-                }),
-            )
-        })?;
+    let (active, _) = loader::load_worktrees(&project.path);
+    let task = active.iter().find(|wt| wt.id == task_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                error: "Failed to find recovered task".to_string(),
+            }),
+        )
+    })?;
 
     Ok(Json(worktree_to_response(task, &project_key)))
 }

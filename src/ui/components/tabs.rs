@@ -18,7 +18,7 @@ pub fn render(
     colors: &ThemeColors,
     click_areas: &mut ClickAreas,
 ) {
-    let tabs = [ProjectTab::Current, ProjectTab::Other, ProjectTab::Archived];
+    let tabs = [ProjectTab::Active, ProjectTab::Archived];
 
     let mut spans = Vec::new();
     spans.push(Span::raw("   "));

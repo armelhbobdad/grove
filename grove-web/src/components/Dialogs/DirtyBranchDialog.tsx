@@ -10,10 +10,29 @@ export function DirtyBranchDialog({ error, onClose }: DirtyBranchDialogProps) {
   if (!error) return null;
 
   const title = `${error.operation} Blocked`;
-  const branchLabel = error.isWorktree ? "Task branch" : "Target branch";
-  const suggestion = error.isWorktree
-    ? "Please commit or stash your changes before retrying."
-    : "This usually means another task has uncommitted changes on the target branch. Please commit or stash those changes first.";
+
+  let mainMessage: React.ReactNode;
+  let suggestion: string;
+
+  if (error.isWorktree) {
+    mainMessage = (
+      <p>
+        Task branch{" "}
+        <code className="px-1.5 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-text)] font-mono text-xs">
+          {error.branch}
+        </code>{" "}
+        has uncommitted changes.
+      </p>
+    );
+    suggestion = "Please commit or stash your changes before retrying.";
+  } else {
+    mainMessage = (
+      <p>
+        The main repository has uncommitted changes.
+      </p>
+    );
+    suggestion = "Please commit or stash your changes in the main repository first, then retry.";
+  }
 
   return (
     <ConfirmDialog
@@ -26,13 +45,7 @@ export function DirtyBranchDialog({ error, onClose }: DirtyBranchDialogProps) {
       onCancel={onClose}
       message={
         <div className="flex flex-col gap-3">
-          <p>
-            {branchLabel}{" "}
-            <code className="px-1.5 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-text)] font-mono text-xs">
-              {error.branch}
-            </code>{" "}
-            has uncommitted changes.
-          </p>
+          {mainMessage}
           <p>{suggestion}</p>
         </div>
       }

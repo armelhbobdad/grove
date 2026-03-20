@@ -65,6 +65,7 @@ export interface DirtyBranchError {
   operation: "Sync" | "Merge";
   branch: string;
   isWorktree: boolean;
+  isMainRepo: boolean;
 }
 
 /**
@@ -76,12 +77,16 @@ function parseDirtyBranchError(
   taskBranch: string,
 ): DirtyBranchError | null {
   if (message.includes("Worktree has uncommitted changes")) {
-    return { operation, branch: taskBranch, isWorktree: true };
+    return { operation, branch: taskBranch, isWorktree: true, isMainRepo: false };
   }
-  // "Target branch 'main' has uncommitted changes" or "Cannot merge: 'main' has uncommitted changes"
+  // "Cannot merge: the main repository has uncommitted changes"
+  if (message.includes("main repository has uncommitted changes")) {
+    return { operation, branch: "", isWorktree: false, isMainRepo: true };
+  }
+  // Legacy: "Cannot merge: 'main' has uncommitted changes"
   const targetMatch = message.match(/['']([^'']+)[''].*has uncommitted changes/);
   if (targetMatch) {
-    return { operation, branch: targetMatch[1], isWorktree: false };
+    return { operation, branch: targetMatch[1], isWorktree: false, isMainRepo: true };
   }
   return null;
 }

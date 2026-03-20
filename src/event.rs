@@ -366,21 +366,19 @@ fn handle_project_key(app: &mut App, key: KeyEvent) {
             if app.project.preview_visible {
                 app.project.preview_sub_tab = PreviewSubTab::Stats;
             } else {
-                app.project.current_tab = ProjectTab::Current;
+                app.project.switch_to_tab(ProjectTab::Active);
             }
         }
         KeyCode::Char('2') => {
             if app.project.preview_visible {
                 app.project.preview_sub_tab = PreviewSubTab::Git;
             } else {
-                app.project.current_tab = ProjectTab::Other;
+                app.project.switch_to_tab(ProjectTab::Archived);
             }
         }
         KeyCode::Char('3') => {
             if app.project.preview_visible {
                 app.project.preview_sub_tab = PreviewSubTab::Notes;
-            } else {
-                app.project.current_tab = ProjectTab::Archived;
             }
         }
         KeyCode::Char('4') => {
@@ -627,6 +625,11 @@ fn handle_new_task_dialog_key(app: &mut App, key: KeyEvent) {
         // 取消
         KeyCode::Esc => {
             app.close_new_task_dialog();
+        }
+
+        // Tab 打开分支选择器
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.new_task_open_branch_selector();
         }
 
         // 删除字符

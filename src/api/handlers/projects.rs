@@ -272,22 +272,25 @@ pub async fn get_project(Path(id): Path<String>) -> Result<Json<ProjectResponse>
     let project = find_project_by_id(&id)?;
 
     // Load worktrees with status
-    let (current, other, _) = loader::load_worktrees(&project.path);
+    let (active, _) = loader::load_worktrees(&project.path);
     let archived = loader::load_archived_worktrees(&project.path);
 
     // Combine all tasks (parallel processing)
     use rayon::prelude::*;
-    let mut all_tasks: Vec<TaskResponse> = current
+    let mut all_tasks: Vec<TaskResponse> = active
         .iter()
-        .chain(other.iter())
         .chain(archived.iter())
         .collect::<Vec<_>>()
         .par_iter()
         .map(|wt| worktree_to_response(wt, &id))
         .collect();
 
-    // Sort by updated_at descending (newest first)
-    all_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    // Sort by updated_at descending (newest first), but Local Task always first
+    all_tasks.sort_by(|a, b| match (a.is_local, b.is_local) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => b.updated_at.cmp(&a.updated_at),
+    });
 
     // Get current branch
     let current_branch =
@@ -370,14 +373,14 @@ pub async fn get_stats(Path(id): Path<String>) -> Result<Json<ProjectStatsRespon
     let project_key = workspace::project_hash(&project.path);
 
     // Load all worktrees
-    let (current, other, _) = loader::load_worktrees(&project.path);
+    let (active, _) = loader::load_worktrees(&project.path);
     let archived = loader::load_archived_worktrees(&project.path);
 
     let mut live_tasks = 0u32;
     let mut idle_tasks = 0u32;
     let mut merged_tasks = 0u32;
 
-    for wt in current.iter().chain(other.iter()) {
+    for wt in active.iter() {
         match wt.status {
             crate::model::WorktreeStatus::Live => live_tasks += 1,
             crate::model::WorktreeStatus::Idle => idle_tasks += 1,
@@ -386,7 +389,7 @@ pub async fn get_stats(Path(id): Path<String>) -> Result<Json<ProjectStatsRespon
         }
     }
 
-    let total_tasks = current.len() as u32 + other.len() as u32;
+    let total_tasks = active.len() as u32;
     let archived_tasks = archived.len() as u32;
 
     // Calculate weekly activity from all tasks' edit history

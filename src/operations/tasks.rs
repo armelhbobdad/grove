@@ -87,12 +87,11 @@ pub fn merge_task(
         ));
     }
 
-    // 3. Check target uncommitted
+    // 3. Check main repo uncommitted (can't checkout to target branch if dirty)
     if git::has_uncommitted_changes(repo_path)? {
-        return Err(GroveError::git(format!(
-            "Cannot merge: '{}' has uncommitted changes. Please commit first.",
-            task.target
-        )));
+        return Err(GroveError::git(
+            "Cannot merge: the main repository has uncommitted changes. Please commit or stash your changes first.",
+        ));
     }
 
     // 3.5. Check if already merged
@@ -105,7 +104,8 @@ pub fn merge_task(
         )));
     }
 
-    // 4. Checkout target
+    // 4. Record original branch and checkout target
+    let original_branch = git::current_branch(repo_path)?;
     git::checkout(repo_path, &task.target)?;
 
     // 5. Load notes (non-fatal)
@@ -135,8 +135,13 @@ pub fn merge_task(
     // Handle error with rollback
     if let Err(e) = result {
         let _ = git::reset_merge(repo_path);
+        // Checkout back to original branch on error
+        let _ = git::checkout(repo_path, &original_branch);
         return Err(e);
     }
+
+    // Checkout back to original branch after successful merge
+    let _ = git::checkout(repo_path, &original_branch);
 
     // 7. Update task timestamp
     tasks::touch_task(project_key, task_id)?;
