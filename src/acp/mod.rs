@@ -1963,6 +1963,15 @@ pub struct ResolvedAgent {
     pub auth_header: Option<String>,
 }
 
+/// Check if a command exists in PATH using `which`.
+fn command_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// 解析 agent 名称到完整 agent 信息（支持 built-in + custom）
 pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
     // 1. Built-in agents
@@ -2035,6 +2044,32 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
                 agent_type: "local".into(),
                 command: "copilot".into(),
                 args: vec!["--acp".into()],
+                url: None,
+                auth_header: None,
+            });
+        }
+        "junie" => {
+            return Some(ResolvedAgent {
+                agent_type: "local".into(),
+                command: "junie".into(),
+                args: vec!["--acp".into(), "true".into()],
+                url: None,
+                auth_header: None,
+            });
+        }
+        "cursor" | "cursor-agent" => {
+            // Auto-detect: prefer "cursor-agent", fall back to "agent"
+            let command = if command_exists("cursor-agent") {
+                "cursor-agent"
+            } else if command_exists("agent") {
+                "agent"
+            } else {
+                "cursor-agent"
+            };
+            return Some(ResolvedAgent {
+                agent_type: "local".into(),
+                command: command.into(),
+                args: vec!["acp".into()],
                 url: None,
                 auth_header: None,
             });

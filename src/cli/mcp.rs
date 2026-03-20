@@ -1438,6 +1438,8 @@ const BUILTIN_AGENTS: &[(&str, &str)] = &[
     ("qwen", "Qwen"),
     ("opencode", "OpenCode"),
     ("copilot", "GitHub Copilot"),
+    ("cursor", "Cursor Agent"),
+    ("junie", "Junie"),
 ];
 
 fn list_agents_json() -> serde_json::Value {
