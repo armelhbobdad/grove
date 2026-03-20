@@ -1946,7 +1946,7 @@ fn build_chat_status_json(
 /// Extract the last plan file path from events
 fn extract_last_plan_file(events: &[acp::AcpUpdate]) -> Option<String> {
     events.iter().rev().find_map(|e| match e {
-        acp::AcpUpdate::PlanFileUpdate { path } => Some(path.clone()),
+        acp::AcpUpdate::PlanFileUpdate { path, .. } => Some(path.clone()),
         _ => None,
     })
 }

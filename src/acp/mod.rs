@@ -129,7 +129,10 @@ pub enum AcpUpdate {
     /// 待执行消息队列更新
     QueueUpdate { messages: Vec<QueuedMessage> },
     /// Plan file 路径更新（Write 工具在 plan mode 下写入 .md 文件时触发）
-    PlanFileUpdate { path: String },
+    PlanFileUpdate {
+        path: String,
+        content: Option<String>,
+    },
     /// 会话结束
     SessionEnded,
 }
@@ -633,7 +636,27 @@ impl acp::Client for GroveAcpClient {
                                 .as_ref()
                                 .is_some_and(|m| m.to_lowercase().contains("plan"))
                             {
-                                self.handle.emit(AcpUpdate::PlanFileUpdate { path });
+                                // 优先从 ACP ToolCallContent 提取原始内容（Diff.new_text）
+                                let plan_content = update
+                                    .fields
+                                    .content
+                                    .as_ref()
+                                    .and_then(|blocks| blocks.first())
+                                    .and_then(|tc| match tc {
+                                        acp::ToolCallContent::Diff(diff) => {
+                                            Some(diff.new_text.clone())
+                                        }
+                                        acp::ToolCallContent::Content(c) => {
+                                            Some(content_block_to_text(&c.content))
+                                        }
+                                        _ => None,
+                                    })
+                                    // Fallback：从本地文件系统读取
+                                    .or_else(|| std::fs::read_to_string(&path).ok());
+                                self.handle.emit(AcpUpdate::PlanFileUpdate {
+                                    path,
+                                    content: plan_content,
+                                });
                             }
                         }
                     }

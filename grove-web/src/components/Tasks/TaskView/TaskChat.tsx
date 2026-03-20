@@ -819,16 +819,25 @@ export function TaskChat({
           setPlanEntries(entries);
           // Auto-expand while in progress, auto-collapse when all done
           const allDone = entries.length > 0 && entries.every((e: PlanEntry) => e.status === "completed");
-          setShowPlan(!allDone);
+          const shouldOpen = !allDone;
+          setShowPlan(shouldOpen);
+          if (shouldOpen) { setShowPlanFile(false); setShowPendingQueue(false); }
           break;
         }
         case "plan_file_update":
           setPlanFilePath(msg.path);
           planFilePathRef.current = msg.path;
-          readFile(msg.path).then((res) => {
-            setPlanFileContent(res.content);
+          if (msg.content) {
+            setPlanFileContent(msg.content);
             setShowPlanFile(true);
-          }).catch(() => {});
+            setShowPlan(false); setShowPendingQueue(false);
+          } else {
+            readFile(msg.path).then((res) => {
+              setPlanFileContent(res.content);
+              setShowPlanFile(true);
+              setShowPlan(false); setShowPendingQueue(false);
+            }).catch(() => {});
+          }
           break;
         case "available_commands":
           setSlashCommands(msg.commands ?? []);
@@ -978,7 +987,9 @@ export function TaskChat({
         break;
       case "plan_file_update":
         state.planFilePath = msg.path;
-        // Don't fetch content in cache mode; will re-fetch when switching back
+        if (msg.content) {
+          state.planFileContent = msg.content;
+        }
         break;
       case "available_commands":
         state.slashCommands = msg.commands ?? [];
@@ -1193,6 +1204,8 @@ export function TaskChat({
       setIsTerminalMode(false);
       setIsInputExpanded(false);
       setShowPendingQueue(true);
+      setShowPlan(false);
+      setShowPlanFile(false);
       el.focus();
     } else {
       wsRef.current.send(JSON.stringify({ type: "prompt", text, attachments: contentAttachments }));
@@ -1934,7 +1947,7 @@ export function TaskChat({
       {/* Todo Section (from ACP Plan notifications) */}
       {planEntries.length > 0 && (
         <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
-          <button onClick={() => setShowPlan(!showPlan)}
+          <button onClick={() => { const next = !showPlan; setShowPlan(next); if (next) { setShowPlanFile(false); setShowPendingQueue(false); } }}
             className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
             <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
               <motion.div animate={{ rotate: showPlan ? 90 : 0 }} transition={{ duration: 0.15 }}>
@@ -1958,7 +1971,7 @@ export function TaskChat({
                 transition={{ duration: 0.2, ease: "easeInOut" }}
                 className="overflow-hidden"
               >
-                <div className="px-4 pb-2 space-y-1">
+                <div className="px-4 pb-2 space-y-1 max-h-96 overflow-y-auto">
                   {planEntries.map((entry, i) => (
                     <div key={i} className="flex items-center gap-2 py-0.5 text-sm">
                       {entry.status === "completed" ? (
@@ -1984,7 +1997,7 @@ export function TaskChat({
       {/* Plan Section (markdown plan file) */}
       {planFileContent && (
         <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
-          <button onClick={() => setShowPlanFile(!showPlanFile)}
+          <button onClick={() => { const next = !showPlanFile; setShowPlanFile(next); if (next) { setShowPlan(false); setShowPendingQueue(false); } }}
             className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
             <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
               <motion.div animate={{ rotate: showPlanFile ? 90 : 0 }} transition={{ duration: 0.15 }}>
@@ -2016,7 +2029,7 @@ export function TaskChat({
       {/* Pending Queue */}
       {pendingMessages.length > 0 && (
         <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
-          <button onClick={() => setShowPendingQueue(!showPendingQueue)}
+          <button onClick={() => { const next = !showPendingQueue; setShowPendingQueue(next); if (next) { setShowPlan(false); setShowPlanFile(false); } }}
             className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
             <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
               <motion.div animate={{ rotate: showPendingQueue ? 90 : 0 }} transition={{ duration: 0.15 }}>
@@ -2043,7 +2056,7 @@ export function TaskChat({
                 transition={{ duration: 0.2, ease: "easeInOut" }}
                 className="overflow-hidden"
               >
-                <div className="px-4 pb-2 space-y-1">
+                <div className="px-4 pb-2 space-y-1 max-h-96 overflow-y-auto">
                   {pendingMessages.map((msg, i) => (
                     <div key={i} className="flex items-center gap-2 py-1 text-sm">
                       <span className="text-xs text-[var(--color-text-muted)] w-4 shrink-0 text-right">{i + 1}</span>
