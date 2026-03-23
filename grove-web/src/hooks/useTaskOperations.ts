@@ -78,7 +78,11 @@ function parseDirtyBranchError(
   if (message.includes("Worktree has uncommitted changes")) {
     return { operation, branch: taskBranch, isWorktree: true };
   }
-  // "Target branch 'main' has uncommitted changes" or "Cannot merge: 'main' has uncommitted changes"
+  // "Cannot merge: the main repository has uncommitted changes"
+  if (message.includes("main repository has uncommitted changes")) {
+    return { operation, branch: "", isWorktree: false };
+  }
+  // Legacy: "Cannot merge: 'main' has uncommitted changes"
   const targetMatch = message.match(/['']([^'']+)[''].*has uncommitted changes/);
   if (targetMatch) {
     return { operation, branch: targetMatch[1], isWorktree: false };
@@ -262,7 +266,9 @@ export function useTaskOperations(
         setIsMerging(false);
 
         if (result.success) {
-          onShowMessage(result.message || "Merged successfully");
+          onShowMessage(result.warning
+            ? `${result.message} ⚠️ ${result.warning}`
+            : (result.message || "Merged successfully"));
           await onRefresh();
           // Trigger post-merge archive
           onTaskMerged?.(selectedTask.id, selectedTask.name);
@@ -295,7 +301,9 @@ export function useTaskOperations(
         setMergeError(null);
         const result = await apiMergeTask(projectId, selectedTask.id, method);
         if (result.success) {
-          onShowMessage(result.message || "Merged successfully");
+          onShowMessage(result.warning
+            ? `${result.message} ⚠️ ${result.warning}`
+            : (result.message || "Merged successfully"));
           setShowMergeDialog(false);
           await onRefresh();
           // Trigger post-merge archive

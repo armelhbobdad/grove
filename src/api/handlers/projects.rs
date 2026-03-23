@@ -146,9 +146,9 @@ fn worktree_to_response(wt: &crate::model::Worktree, _project_key: &str) -> Task
         branch: wt.branch.clone(),
         target: wt.target.clone(),
         status: status_to_string(&wt.status).to_string(),
-        additions: wt.file_changes.additions,
-        deletions: wt.file_changes.deletions,
-        files_changed: wt.file_changes.files_changed,
+        additions: 0,
+        deletions: 0,
+        files_changed: 0,
         commits,
         created_at: wt.created_at.to_rfc3339(),
         updated_at: wt.updated_at.to_rfc3339(),
@@ -170,23 +170,9 @@ fn find_project_by_id(id: &str) -> Result<workspace::RegisteredProject, StatusCo
 }
 
 /// Count tasks for a project
-fn count_project_tasks(project_key: &str) -> (u32, u32) {
+fn count_project_tasks(project_key: &str) -> u32 {
     let active_tasks = tasks::load_tasks(project_key).unwrap_or_default();
-
-    let mut live_count = 0u32;
-    let total = active_tasks.len() as u32;
-
-    // Check which tasks have live sessions
-    for task in &active_tasks {
-        let task_mux = crate::session::resolve_session_type(&task.multiplexer);
-        let session =
-            crate::session::resolve_session_name(&task.session_name, project_key, &task.id);
-        if crate::session::session_exists(&task_mux, &session) {
-            live_count += 1;
-        }
-    }
-
-    (total, live_count)
+    active_tasks.len() as u32
 }
 
 // ============================================================================
@@ -247,7 +233,7 @@ pub async fn list_projects() -> Result<Json<ProjectListResponse>, StatusCode> {
         .iter()
         .map(|p| {
             let id = workspace::project_hash(&p.path);
-            let (task_count, live_count) = count_project_tasks(&id);
+            let task_count = count_project_tasks(&id);
 
             ProjectListItem {
                 id,
@@ -255,7 +241,7 @@ pub async fn list_projects() -> Result<Json<ProjectListResponse>, StatusCode> {
                 path: p.path.clone(),
                 added_at: p.added_at.to_rfc3339(),
                 task_count,
-                live_count,
+                live_count: 0,
             }
         })
         .collect();
@@ -271,35 +257,47 @@ pub async fn list_projects() -> Result<Json<ProjectListResponse>, StatusCode> {
 pub async fn get_project(Path(id): Path<String>) -> Result<Json<ProjectResponse>, StatusCode> {
     let project = find_project_by_id(&id)?;
 
-    // Load worktrees with status
-    let (current, other, _) = loader::load_worktrees(&project.path);
-    let archived = loader::load_archived_worktrees(&project.path);
+    let project_name = project.name.clone();
+    let project_path = project.path.clone();
+    let added_at = project.added_at.to_rfc3339();
+    let id_clone = id.clone();
 
-    // Combine all tasks (parallel processing)
-    use rayon::prelude::*;
-    let mut all_tasks: Vec<TaskResponse> = current
-        .iter()
-        .chain(other.iter())
-        .chain(archived.iter())
-        .collect::<Vec<_>>()
-        .par_iter()
-        .map(|wt| worktree_to_response(wt, &id))
-        .collect();
+    // Heavy git I/O — run on blocking thread pool so other projects aren't starved
+    let (all_tasks, current_branch) = tokio::task::spawn_blocking(move || {
+        let active = loader::load_worktrees(&project_path);
+        let archived = loader::load_archived_worktrees(&project_path);
 
-    // Sort by updated_at descending (newest first)
-    all_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        use rayon::prelude::*;
+        let mut all_tasks: Vec<TaskResponse> = active
+            .iter()
+            .chain(archived.iter())
+            .collect::<Vec<_>>()
+            .par_iter()
+            .map(|wt| worktree_to_response(wt, &id_clone))
+            .collect();
 
-    // Get current branch
-    let current_branch =
-        git::current_branch(&project.path).unwrap_or_else(|_| "unknown".to_string());
+        // Sort: Local Task first, then by updated_at desc
+        all_tasks.sort_by(|a, b| match (a.is_local, b.is_local) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => b.updated_at.cmp(&a.updated_at),
+        });
+
+        let current_branch =
+            git::current_branch(&project_path).unwrap_or_else(|_| "unknown".to_string());
+
+        (all_tasks, current_branch)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ProjectResponse {
         id,
-        name: project.name,
+        name: project_name,
         path: project.path,
         current_branch,
         tasks: all_tasks,
-        added_at: project.added_at.to_rfc3339(),
+        added_at,
     }))
 }
 
@@ -369,15 +367,21 @@ pub async fn get_stats(Path(id): Path<String>) -> Result<Json<ProjectStatsRespon
     let project = find_project_by_id(&id)?;
     let project_key = workspace::project_hash(&project.path);
 
-    // Load all worktrees
-    let (current, other, _) = loader::load_worktrees(&project.path);
-    let archived = loader::load_archived_worktrees(&project.path);
+    // Load all worktrees on blocking thread pool
+    let project_path = project.path.clone();
+    let (active, archived) = tokio::task::spawn_blocking(move || {
+        let active = loader::load_worktrees(&project_path);
+        let archived = loader::load_archived_worktrees(&project_path);
+        (active, archived)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut live_tasks = 0u32;
     let mut idle_tasks = 0u32;
     let mut merged_tasks = 0u32;
 
-    for wt in current.iter().chain(other.iter()) {
+    for wt in active.iter() {
         match wt.status {
             crate::model::WorktreeStatus::Live => live_tasks += 1,
             crate::model::WorktreeStatus::Idle => idle_tasks += 1,
@@ -386,7 +390,7 @@ pub async fn get_stats(Path(id): Path<String>) -> Result<Json<ProjectStatsRespon
         }
     }
 
-    let total_tasks = current.len() as u32 + other.len() as u32;
+    let total_tasks = active.len() as u32;
     let archived_tasks = archived.len() as u32;
 
     // Calculate weekly activity from all tasks' edit history

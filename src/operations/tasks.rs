@@ -36,6 +36,8 @@ pub struct MergeResult {
     pub task_id: String,
     pub task_name: String,
     pub target_branch: String,
+    /// Warning message (e.g., failed to checkout back to original branch)
+    pub warning: Option<String>,
 }
 
 /// Merge a task branch into target
@@ -87,12 +89,11 @@ pub fn merge_task(
         ));
     }
 
-    // 3. Check target uncommitted
+    // 3. Check main repo uncommitted (can't checkout to target branch if dirty)
     if git::has_uncommitted_changes(repo_path)? {
-        return Err(GroveError::git(format!(
-            "Cannot merge: '{}' has uncommitted changes. Please commit first.",
-            task.target
-        )));
+        return Err(GroveError::git(
+            "Cannot merge: the main repository has uncommitted changes. Please commit or stash your changes first.",
+        ));
     }
 
     // 3.5. Check if already merged
@@ -105,7 +106,8 @@ pub fn merge_task(
         )));
     }
 
-    // 4. Checkout target
+    // 4. Record original branch and checkout target
+    let original_branch = git::current_branch(repo_path)?;
     git::checkout(repo_path, &task.target)?;
 
     // 5. Load notes (non-fatal)
@@ -135,8 +137,22 @@ pub fn merge_task(
     // Handle error with rollback
     if let Err(e) = result {
         let _ = git::reset_merge(repo_path);
+        // Checkout back to original branch on error
+        let _ = git::checkout(repo_path, &original_branch);
         return Err(e);
     }
+
+    // Checkout back to original branch after successful merge
+    let warning = if let Err(e) = git::checkout(repo_path, &original_branch) {
+        let msg = format!(
+            "Merge succeeded, but failed to switch back to '{}': {}",
+            original_branch, e
+        );
+        eprintln!("Warning: {}", msg);
+        Some(msg)
+    } else {
+        None
+    };
 
     // 7. Update task timestamp
     tasks::touch_task(project_key, task_id)?;
@@ -145,6 +161,7 @@ pub fn merge_task(
         task_id: task.id.clone(),
         task_name: task.name.clone(),
         target_branch: task.target.clone(),
+        warning,
     })
 }
 

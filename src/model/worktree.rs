@@ -49,8 +49,9 @@ impl WorktreeStatus {
     }
 }
 
-/// 文件变更统计
+/// 文件变更统计（overview 阶段不再计算，按需通过 diff API 获取）
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct FileChanges {
     pub additions: u32,
     pub deletions: u32,
@@ -58,6 +59,7 @@ pub struct FileChanges {
 }
 
 impl FileChanges {
+    #[allow(dead_code)]
     pub fn new(additions: u32, deletions: u32, files_changed: u32) -> Self {
         Self {
             additions,
@@ -82,7 +84,8 @@ pub struct Worktree {
     pub status: WorktreeStatus,
     /// 落后 target branch 的 commit 数（None 表示无需显示）
     pub commits_behind: Option<u32>,
-    /// 文件变更统计
+    /// 文件变更统计（overview 阶段不再计算）
+    #[allow(dead_code)]
     pub file_changes: FileChanges,
     /// 是否已归档
     pub archived: bool,
@@ -157,8 +160,7 @@ pub fn format_relative_time(dt: DateTime<Utc>) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProjectTab {
     #[default]
-    Current,
-    Other,
+    Active,
     Archived,
 }
 
@@ -166,17 +168,23 @@ impl ProjectTab {
     /// 切换到下一个 Tab（循环）
     pub fn next(&self) -> Self {
         match self {
-            ProjectTab::Current => ProjectTab::Other,
-            ProjectTab::Other => ProjectTab::Archived,
-            ProjectTab::Archived => ProjectTab::Current,
+            ProjectTab::Active => ProjectTab::Archived,
+            ProjectTab::Archived => ProjectTab::Active,
+        }
+    }
+
+    /// 切换到上一个 Tab（循环）
+    pub fn prev(&self) -> Self {
+        match self {
+            ProjectTab::Active => ProjectTab::Archived,
+            ProjectTab::Archived => ProjectTab::Active,
         }
     }
 
     /// Tab 显示名称
     pub fn label(&self) -> &'static str {
         match self {
-            ProjectTab::Current => "Current Branch",
-            ProjectTab::Other => "Other Branch",
+            ProjectTab::Active => "Active Tasks",
             ProjectTab::Archived => "Archived Tasks",
         }
     }
@@ -184,9 +192,8 @@ impl ProjectTab {
     /// 转换为数组索引
     pub fn index(&self) -> usize {
         match self {
-            ProjectTab::Current => 0,
-            ProjectTab::Other => 1,
-            ProjectTab::Archived => 2,
+            ProjectTab::Active => 0,
+            ProjectTab::Archived => 1,
         }
     }
 }

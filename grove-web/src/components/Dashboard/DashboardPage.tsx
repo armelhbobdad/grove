@@ -192,10 +192,8 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   }
 
   // Get tasks for current project (for live tasks list)
-  // Only show tasks whose target branch matches the current branch
-  const currentBranch = repoStatus?.currentBranch || selectedProject.currentBranch || "main";
   const liveTasks = selectedProject.tasks.filter(
-    t => (t.status === "live" || t.status === "idle") && t.target === currentBranch
+    t => t.status === "live" || t.status === "idle"
   );
 
   // Build project-specific stats from API data or fallback to task list

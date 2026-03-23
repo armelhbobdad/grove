@@ -97,13 +97,11 @@ export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed
     let cancelled = false;
     if (filter === "archived" && selectedProject) {
       setIsLoadingArchived(true);
-      const currentBranch = selectedProject.currentBranch || "main";
       apiListTasks(selectedProject.id, "archived")
         .then((tasks) => {
           if (cancelled) return;
           const filtered = tasks
-            .map(convertTaskResponse)
-            .filter((t) => t.target === currentBranch);
+            .map(convertTaskResponse);
           setArchivedTasks(filtered);
         })
         .catch((err) => {
@@ -119,10 +117,8 @@ export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed
   }, [filter, selectedProject]);
 
   // Get tasks for current project (combine active and archived)
-  // Filter by target branch matching current branch (except for archived tasks)
-  const currentBranch = selectedProject?.currentBranch || "main";
   const activeTasks = (selectedProject?.tasks || []).filter(
-    (t) => t.target === currentBranch
+    (t) => t.status !== "archived"
   );
   const tasks = filter === "archived" ? archivedTasks : activeTasks;
 

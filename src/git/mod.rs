@@ -95,6 +95,29 @@ pub fn current_branch(repo_path: &str) -> Result<String> {
     git_cmd(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
 }
 
+/// 获取仓库的 default branch（main/master 等）
+/// 优先从 origin/HEAD 推断，fallback 检查 main/master 是否存在
+pub fn default_branch(repo_path: &str) -> String {
+    // Try origin/HEAD (most reliable when remote exists)
+    if let Ok(ref_output) = git_cmd(repo_path, &["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        // "refs/remotes/origin/main" → "main"
+        if let Some(branch) = ref_output.strip_prefix("refs/remotes/origin/") {
+            return branch.to_string();
+        }
+    }
+
+    // Fallback: check if "main" or "master" branch exists locally
+    if git_cmd_check(repo_path, &["rev-parse", "--verify", "refs/heads/main"]) {
+        return "main".to_string();
+    }
+    if git_cmd_check(repo_path, &["rev-parse", "--verify", "refs/heads/master"]) {
+        return "master".to_string();
+    }
+
+    // Last resort: use current branch
+    current_branch(repo_path).unwrap_or_else(|_| "main".to_string())
+}
+
 /// 获取仓库根目录
 /// 执行: git rev-parse --show-toplevel
 pub fn repo_root(path: &str) -> Result<String> {
@@ -166,6 +189,7 @@ pub fn commits_behind(worktree_path: &str, branch: &str, target: &str) -> Result
 /// 获取文件变更统计 (相对于 target)
 /// 复用 diff_stat，保证和 diff API 的计算逻辑完全一致
 /// 返回: (additions, deletions, files_changed)
+#[allow(dead_code)]
 pub fn file_changes(worktree_path: &str, target: &str) -> Result<(u32, u32, u32)> {
     let entries = diff_stat(worktree_path, target)?;
     let additions = entries.iter().map(|e| e.additions).sum();

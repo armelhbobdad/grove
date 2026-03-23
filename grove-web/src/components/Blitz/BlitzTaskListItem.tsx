@@ -1,4 +1,4 @@
-import { Circle, CheckCircle, AlertTriangle, XCircle, ChevronUp, ChevronDown, Laptop } from "lucide-react";
+import { Circle, CheckCircle, AlertTriangle, XCircle, ChevronUp, ChevronDown, Laptop, Zap, Code } from "lucide-react";
 import type { BlitzTask } from "../../data/types";
 import type { TaskStatus } from "../../data/types";
 import { useIsMobile } from "../../hooks";
@@ -89,7 +89,6 @@ export function BlitzTaskListItem({
 }: BlitzTaskListItemProps) {
   const { task, projectName } = blitzTask;
   const statusConfig = getStatusConfig(task.status);
-  const StatusIcon = statusConfig.icon;
   const { isTouchDevice } = useIsMobile();
 
   return (
@@ -144,20 +143,22 @@ export function BlitzTaskListItem({
         />
       )}
       <div className="relative flex items-start gap-2.5">
-        {/* Status Icon — Local Task uses Laptop icon */}
+        {/* Task type icon: Local=Laptop, Agent=Bot, Regular=Code */}
         <div className="flex-shrink-0 mt-0.5">
           {task.isLocal ? (
             <Laptop
               className="w-3.5 h-3.5"
               style={{ color: "var(--color-accent)" }}
             />
+          ) : task.createdBy === "agent" ? (
+            <Zap
+              className="w-3.5 h-3.5"
+              style={{ color: "var(--color-info)" }}
+            />
           ) : (
-            <StatusIcon
-              className="w-3 h-3"
-              style={{
-                color: statusConfig.color,
-                fill: task.status === "live" ? statusConfig.color : "transparent",
-              }}
+            <Code
+              className="w-3.5 h-3.5"
+              style={{ color: "var(--color-highlight)" }}
             />
           )}
         </div>
@@ -210,12 +211,12 @@ export function BlitzTaskListItem({
               {projectName}
             </span>
 
-            {/* Code changes */}
-            <span className="text-xs">
-              <span className="text-[var(--color-success)]">+{task.additions}</span>
-              {" "}
-              <span className="text-[var(--color-error)]">-{task.deletions}</span>
-            </span>
+            {/* Target branch label (non-local tasks only) */}
+            {!task.isLocal && task.target && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--color-text-muted)]/10 text-[var(--color-text-muted)] truncate max-w-[200px]">
+                {task.target}
+              </span>
+            )}
 
             {/* Status label (only for non-live/idle states) */}
             {task.status !== "live" && task.status !== "idle" && (

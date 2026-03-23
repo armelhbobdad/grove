@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Circle, CheckCircle, AlertTriangle, XCircle, Archive, MoreVertical, Laptop } from "lucide-react";
+import { Circle, CheckCircle, AlertTriangle, XCircle, Archive, MoreVertical, Laptop, Zap, Code } from "lucide-react";
 import { useIsMobile } from "../../../hooks";
 import type { Task, TaskStatus } from "../../../data/types";
 
@@ -85,7 +85,6 @@ function getStatusConfig(status: TaskStatus): {
 
 export function TaskListItem({ task, isSelected, onClick, onDoubleClick, onContextMenu, notification }: TaskListItemProps) {
   const statusConfig = getStatusConfig(task.status);
-  const StatusIcon = statusConfig.icon;
   const { isMobile, isTouchDevice } = useIsMobile();
 
   return (
@@ -108,34 +107,23 @@ export function TaskListItem({ task, isSelected, onClick, onDoubleClick, onConte
       }`}
     >
       <div className="flex items-start gap-2.5">
-        {/* Status Icon — Local Task uses Laptop icon */}
+        {/* Task type icon: Local=Laptop, Agent=Bot, Regular=Code */}
         <div className="relative flex-shrink-0 mt-0.5">
           {task.isLocal ? (
             <Laptop
               className="w-3.5 h-3.5"
               style={{ color: "var(--color-accent)" }}
             />
+          ) : task.createdBy === "agent" ? (
+            <Zap
+              className="w-3.5 h-3.5"
+              style={{ color: "var(--color-info)" }}
+            />
           ) : (
-            <>
-              <StatusIcon
-                className="w-3 h-3"
-                style={{
-                  color: statusConfig.color,
-                  fill: task.status === "live" ? statusConfig.color : "transparent"
-                }}
-              />
-              {statusConfig.pulse && (
-                <span className="absolute inset-0 animate-ping">
-                  <Circle
-                    className="w-3 h-3"
-                    style={{
-                      fill: `${statusConfig.color}30`,
-                      color: "transparent"
-                    }}
-                  />
-                </span>
-              )}
-            </>
+            <Code
+              className="w-3.5 h-3.5"
+              style={{ color: "var(--color-highlight)" }}
+            />
           )}
         </div>
 
@@ -183,13 +171,11 @@ export function TaskListItem({ task, isSelected, onClick, onDoubleClick, onConte
             </div>
           </div>
 
-          <div className="flex items-center gap-2 mt-1">
-            {/* Code changes */}
-            {task.status !== "archived" && (
-              <span className="text-xs">
-                <span className="text-[var(--color-success)]">+{task.additions}</span>
-                {" "}
-                <span className="text-[var(--color-error)]">-{task.deletions}</span>
+          <div className="flex items-center gap-2 mt-1 min-h-[20px]">
+            {/* Target branch label (non-local tasks only) */}
+            {!task.isLocal && task.target && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--color-highlight)]/10 text-[var(--color-highlight)] truncate max-w-[200px]">
+                {task.target}
               </span>
             )}
 

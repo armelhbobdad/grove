@@ -18,7 +18,7 @@ export function useBlitzTasks() {
           try {
             const full = await getProject(p.id);
             return full.tasks
-              .filter((t) => t.target === full.current_branch && t.status !== "archived")
+              .filter((t) => t.status !== "archived")
               .map((t) => ({
                 task: convertTaskResponse(t),
                 projectId: full.id,

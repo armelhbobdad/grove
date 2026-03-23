@@ -19,6 +19,8 @@ pub enum BranchSelectorMode {
     RebaseTo,
     /// 在主仓库 checkout
     Checkout,
+    /// 新建任务时选择 target branch
+    NewTaskTarget,
 }
 
 /// 分支选择器数据
@@ -52,6 +54,20 @@ impl BranchSelectorData {
             task_name,
             current_target,
             mode: BranchSelectorMode::RebaseTo,
+        }
+    }
+
+    /// 创建 NewTaskTarget 模式的分支选择器
+    pub fn new_task_target(branches: Vec<String>, current_branch: String) -> Self {
+        let filtered_indices: Vec<usize> = (0..branches.len()).collect();
+        Self {
+            branches,
+            search: String::new(),
+            filtered_indices,
+            selected_index: 0,
+            task_name: String::new(),
+            current_target: current_branch,
+            mode: BranchSelectorMode::NewTaskTarget,
         }
     }
 
@@ -153,6 +169,7 @@ pub fn render(
     let title = match data.mode {
         BranchSelectorMode::RebaseTo => " Rebase To ",
         BranchSelectorMode::Checkout => " Checkout ",
+        BranchSelectorMode::NewTaskTarget => " Target Branch ",
     };
     let block = Block::default()
         .title(title)
@@ -184,6 +201,16 @@ pub fn render(
                 Span::styled("Current: ", Style::default().fg(colors.muted)),
                 Span::styled(&data.current_target, Style::default().fg(colors.highlight)),
             ]),
+        ],
+        BranchSelectorMode::NewTaskTarget => vec![
+            Line::from(vec![
+                Span::styled("Current target: ", Style::default().fg(colors.muted)),
+                Span::styled(&data.current_target, Style::default().fg(colors.highlight)),
+            ]),
+            Line::from(Span::styled(
+                "Select target branch for new task",
+                Style::default().fg(colors.muted),
+            )),
         ],
         BranchSelectorMode::Checkout => vec![
             Line::from(vec![

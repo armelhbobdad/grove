@@ -253,32 +253,6 @@ pub fn update_task_target(project: &str, task_id: &str, new_target: &str) -> Res
     Ok(())
 }
 
-/// 批量更新任务的 target branch (当主仓库切换分支时使用)
-///
-/// 将所有 target 为 old_target 的任务更新为 new_target
-pub fn update_tasks_target_on_branch_switch(
-    project: &str,
-    old_target: &str,
-    new_target: &str,
-) -> Result<usize> {
-    let mut tasks = load_tasks(project)?;
-    let mut updated_count = 0;
-
-    for task in tasks.iter_mut() {
-        if task.target == old_target {
-            task.target = new_target.to_string();
-            task.updated_at = Utc::now();
-            updated_count += 1;
-        }
-    }
-
-    if updated_count > 0 {
-        save_tasks(project, &tasks)?;
-    }
-
-    Ok(updated_count)
-}
-
 /// 更新 task 的 updated_at 时间戳
 pub fn touch_task(project: &str, task_id: &str) -> Result<()> {
     let mut tasks = load_tasks(project)?;
@@ -292,13 +266,18 @@ pub fn touch_task(project: &str, task_id: &str) -> Result<()> {
 }
 
 /// 创建 Local Task（指向主仓库的特殊任务，name 使用项目名称）
-pub fn create_local_task(repo_path: &str, current_branch: &str, project_name: &str) -> Task {
+pub fn create_local_task(
+    repo_path: &str,
+    current_branch: &str,
+    default_branch: &str,
+    project_name: &str,
+) -> Task {
     let now = Utc::now();
     Task {
         id: LOCAL_TASK_ID.to_string(),
         name: project_name.to_string(),
         branch: current_branch.to_string(),
-        target: current_branch.to_string(),
+        target: default_branch.to_string(),
         worktree_path: repo_path.to_string(),
         created_at: now,
         updated_at: now,

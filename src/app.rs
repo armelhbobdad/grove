@@ -84,9 +84,9 @@ pub struct ProjectState {
     /// 当前选中的 Tab
     pub current_tab: ProjectTab,
     /// 列表选择状态（每个 Tab 独立维护）
-    pub list_states: [ListState; 3], // Current, Other, Archived
+    pub list_states: [ListState; 2], // Active, Archived
     /// 各 Tab 的 Worktree 列表
-    pub worktrees: [Vec<Worktree>; 3],
+    pub worktrees: [Vec<Worktree>; 2],
     /// 项目路径
     pub project_path: String,
     /// 项目 key（路径的 hash，用于存储）
@@ -95,8 +95,8 @@ pub struct ProjectState {
     pub search_mode: bool,
     /// 搜索输入
     pub search_query: String,
-    /// 每个 Tab 的过滤索引 [Current, Other, Archived]
-    filtered_indices: [Vec<usize>; 3],
+    /// 每个 Tab 的过滤索引 [Active, Archived]
+    filtered_indices: [Vec<usize>; 2],
     /// 预览面板是否可见
     pub preview_visible: bool,
     /// 当前 sub-tab
@@ -121,21 +121,15 @@ impl ProjectState {
         let project_key = project_hash(project_path);
 
         // 从 Task 元数据加载真实数据
-        let (current, other, archived) = loader::load_worktrees(project_path);
+        let active = loader::load_worktrees(project_path);
 
         // TUI 过滤：移除只有 Chat 模式的任务（TUI 不支持）
-        let current = Self::filter_tui_tasks(current);
-        let other = Self::filter_tui_tasks(other);
-        let archived = Self::filter_tui_tasks(archived);
+        let active = Self::filter_tui_tasks(active);
+        let archived = Vec::new();
 
-        let mut current_state = ListState::default();
-        if !current.is_empty() {
-            current_state.select(Some(0));
-        }
-
-        let mut other_state = ListState::default();
-        if !other.is_empty() {
-            other_state.select(Some(0));
+        let mut active_state = ListState::default();
+        if !active.is_empty() {
+            active_state.select(Some(0));
         }
 
         let mut archived_state = ListState::default();
@@ -144,19 +138,18 @@ impl ProjectState {
         }
 
         // 初始化过滤索引（全部显示）
-        let current_indices: Vec<usize> = (0..current.len()).collect();
-        let other_indices: Vec<usize> = (0..other.len()).collect();
+        let active_indices: Vec<usize> = (0..active.len()).collect();
         let archived_indices: Vec<usize> = (0..archived.len()).collect();
 
         Self {
-            current_tab: ProjectTab::Current,
-            list_states: [current_state, other_state, archived_state],
-            worktrees: [current, other, archived],
+            current_tab: ProjectTab::Active,
+            list_states: [active_state, archived_state],
+            worktrees: [active, archived],
             project_path: project_path.to_string(),
             project_key,
             search_mode: false,
             search_query: String::new(),
-            filtered_indices: [current_indices, other_indices, archived_indices],
+            filtered_indices: [active_indices, archived_indices],
             preview_visible: true,
             preview_sub_tab: PreviewSubTab::Stats,
             panel_data: PanelData::default(),
@@ -177,14 +170,13 @@ impl ProjectState {
     /// 刷新数据
     pub fn refresh(&mut self) {
         git::cache::clear_all();
-        let (current, other, _) = loader::load_worktrees(&self.project_path);
+        let active = loader::load_worktrees(&self.project_path);
 
         // TUI 过滤：移除只有 Chat 模式的任务
-        let current = Self::filter_tui_tasks(current);
-        let other = Self::filter_tui_tasks(other);
+        let active = Self::filter_tui_tasks(active);
         let archived = loader::load_archived_worktrees(&self.project_path);
         let archived = Self::filter_tui_tasks(archived);
-        self.worktrees = [current, other, archived];
+        self.worktrees = [active, archived];
 
         // 清空搜索状态并重置过滤索引
         self.search_mode = false;
@@ -209,16 +201,16 @@ impl ProjectState {
         &self.list_states[self.current_tab.index()]
     }
 
-    /// 活跃任务数量（Current + Other，不包含 Archived）
+    /// 活跃任务数量（不包含 Archived）
     pub fn active_task_count(&self) -> usize {
-        self.worktrees[0].len() + self.worktrees[1].len()
+        self.worktrees[0].len()
     }
 
     /// 切换到下一个 Tab
     pub fn next_tab(&mut self) {
         self.current_tab = self.current_tab.next();
         // 懒加载 Archived tab
-        if self.current_tab == ProjectTab::Archived && self.worktrees[2].is_empty() {
+        if self.current_tab == ProjectTab::Archived && self.worktrees[1].is_empty() {
             self.load_archived();
         }
         self.ensure_selection();
@@ -226,13 +218,9 @@ impl ProjectState {
 
     /// 切换到上一个 Tab
     pub fn prev_tab(&mut self) {
-        self.current_tab = match self.current_tab {
-            ProjectTab::Current => ProjectTab::Archived,
-            ProjectTab::Other => ProjectTab::Current,
-            ProjectTab::Archived => ProjectTab::Other,
-        };
+        self.current_tab = self.current_tab.prev();
         // 懒加载 Archived tab
-        if self.current_tab == ProjectTab::Archived && self.worktrees[2].is_empty() {
+        if self.current_tab == ProjectTab::Archived && self.worktrees[1].is_empty() {
             self.load_archived();
         }
         self.ensure_selection();
@@ -241,7 +229,7 @@ impl ProjectState {
     /// 切换到指定 Tab（鼠标点击用）
     pub fn switch_to_tab(&mut self, tab: ProjectTab) {
         self.current_tab = tab;
-        if tab == ProjectTab::Archived && self.worktrees[2].is_empty() {
+        if tab == ProjectTab::Archived && self.worktrees[1].is_empty() {
             self.load_archived();
         }
         self.ensure_selection();
@@ -363,7 +351,7 @@ impl ProjectState {
 
     /// 懒加载归档任务
     fn load_archived(&mut self) {
-        self.worktrees[2] = loader::load_archived_worktrees(&self.project_path);
+        self.worktrees[1] = loader::load_archived_worktrees(&self.project_path);
     }
 
     /// 确保当前 Tab 有选中项
@@ -900,6 +888,8 @@ pub enum PendingAction {
     Reset { task_id: String },
     /// Checkout - 在主仓库 checkout 到选择的分支
     Checkout,
+    /// NewTaskTarget - 在新建任务时选择 target branch
+    NewTaskTarget,
     /// Exit - 退出 tmux session
     ExitSession,
 }
@@ -1256,6 +1246,23 @@ impl App {
     pub fn close_new_task_dialog(&mut self) {
         self.dialogs.show_new_task_dialog = false;
         self.dialogs.new_task_input.clear();
+    }
+
+    /// 在 New Task 弹窗中打开分支选择器
+    pub fn new_task_open_branch_selector(&mut self) {
+        let branches = match self.list_user_branches() {
+            Ok(b) => b,
+            Err(e) => {
+                self.show_toast(format!("Failed to list branches: {}", e));
+                return;
+            }
+        };
+        let current_target = self.async_ops.target_branch.clone();
+        self.async_ops.pending_action = Some(PendingAction::NewTaskTarget);
+        self.dialogs.branch_selector = Some(BranchSelectorData::new_task_target(
+            branches,
+            current_target,
+        ));
     }
 
     /// New Task 输入字符
@@ -2017,6 +2024,7 @@ impl App {
                 } => self.do_clean(&task_id, is_archived),
                 PendingAction::RebaseTo { .. } => {} // RebaseTo 不使用确认弹窗
                 PendingAction::Checkout => {}        // Checkout 不使用确认弹窗
+                PendingAction::NewTaskTarget => {}   // NewTaskTarget 不使用确认弹窗
                 PendingAction::Recover { task_id } => self.recover_worktree(&task_id),
                 PendingAction::Sync {
                     task_id,
@@ -2186,12 +2194,40 @@ impl App {
         });
     }
 
+    // ========== Branch Helpers ==========
+
+    /// 获取用户分支列表（过滤掉 Grove 管理的 worktree 分支，保留 Local Task 的分支）
+    fn list_user_branches(&self) -> Result<Vec<String>, crate::error::GroveError> {
+        use std::collections::HashSet;
+        let all_branches = git::list_branches(&self.project.project_path)?;
+
+        // 收集 Grove 管理的分支（跳过 Local Task，它的 branch 是用户的真实分支）
+        let mut grove_branches = HashSet::new();
+        if let Ok(active) = tasks::load_tasks(&self.project.project_key) {
+            for t in active {
+                if !t.is_local {
+                    grove_branches.insert(t.branch);
+                }
+            }
+        }
+        if let Ok(archived) = tasks::load_archived_tasks(&self.project.project_key) {
+            for t in archived {
+                grove_branches.insert(t.branch);
+            }
+        }
+
+        Ok(all_branches
+            .into_iter()
+            .filter(|b| !grove_branches.contains(b))
+            .collect())
+    }
+
     // ========== Checkout 功能 ==========
 
     /// 打开 Checkout 分支选择器（在主仓库执行 checkout）
     pub fn open_checkout_selector(&mut self) {
-        // 获取所有分支
-        let branches = match git::list_branches(&self.project.project_path) {
+        // 获取用户分支（过滤 Grove 管理的分支）
+        let branches = match self.list_user_branches() {
             Ok(b) => b,
             Err(e) => {
                 self.show_toast(format!("Failed to list branches: {}", e));
@@ -2228,8 +2264,8 @@ impl App {
         let task_name = wt.task_name.clone();
         let current_target = wt.target.clone();
 
-        // 获取所有分支
-        let branches = match git::list_branches(&self.project.project_path) {
+        // 获取用户分支（过滤 Grove 管理的分支）
+        let branches = match self.list_user_branches() {
             Ok(b) => b,
             Err(e) => {
                 self.show_toast(format!("Failed to list branches: {}", e));
@@ -2299,6 +2335,10 @@ impl App {
                     self.show_toast(format!("Target changed to {}", branch));
                 }
             }
+            Some(PendingAction::NewTaskTarget) => {
+                // 设置 target branch 并保持 New Task 弹窗打开
+                self.async_ops.target_branch = branch;
+            }
             Some(PendingAction::Checkout) => {
                 // 在主仓库执行 checkout
                 match git::has_uncommitted_changes(&self.project.project_path) {
@@ -2306,10 +2346,6 @@ impl App {
                         self.show_toast("Cannot checkout: uncommitted changes".to_string());
                     }
                     Ok(false) => {
-                        // 记录切换前的分支
-                        let old_branch =
-                            git::current_branch(&self.project.project_path).unwrap_or_default();
-
                         match git::checkout_branch(&self.project.project_path, &branch) {
                             Ok(_) => {
                                 // 使缓存失效
@@ -2318,31 +2354,7 @@ impl App {
                                     self.project.project_path
                                 ));
 
-                                // 更新所有任务的 target branch (将 old_branch -> new_branch)
-                                if !old_branch.is_empty() && old_branch != branch {
-                                    match tasks::update_tasks_target_on_branch_switch(
-                                        &self.project.project_key,
-                                        &old_branch,
-                                        &branch,
-                                    ) {
-                                        Ok(count) if count > 0 => {
-                                            self.show_toast(format!(
-                                                "Switched to {} ({} tasks updated)",
-                                                branch, count
-                                            ));
-                                        }
-                                        Ok(_) => {
-                                            self.show_toast(format!("Switched to {}", branch));
-                                        }
-                                        Err(e) => {
-                                            // 即使更新失败，也继续刷新界面
-                                            eprintln!("Failed to update tasks target: {}", e);
-                                            self.show_toast(format!("Switched to {}", branch));
-                                        }
-                                    }
-                                } else {
-                                    self.show_toast(format!("Switched to {}", branch));
-                                }
+                                self.show_toast(format!("Switched to {}", branch));
 
                                 self.project.refresh();
                             }
@@ -2837,7 +2849,7 @@ impl App {
         } else {
             match self.project.current_tab {
                 ProjectTab::Archived => vec![ActionType::Clean, ActionType::Recover],
-                ProjectTab::Current => vec![
+                ProjectTab::Active => vec![
                     // Edit
                     ActionType::Commit,
                     ActionType::Review,
@@ -2845,18 +2857,6 @@ impl App {
                     ActionType::RebaseTo,
                     ActionType::Sync,
                     ActionType::Merge,
-                    // Session
-                    ActionType::Archive,
-                    ActionType::Clean,
-                    ActionType::Reset,
-                ],
-                ProjectTab::Other => vec![
-                    // Edit
-                    ActionType::Commit,
-                    ActionType::Review,
-                    // Branch
-                    ActionType::RebaseTo,
-                    ActionType::Sync,
                     // Session
                     ActionType::Archive,
                     ActionType::Clean,

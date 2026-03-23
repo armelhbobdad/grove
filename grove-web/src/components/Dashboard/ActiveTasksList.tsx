@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Circle, ArrowRight, GitBranch, Laptop } from "lucide-react";
+import { Circle, ArrowRight, GitBranch, Laptop, Zap, Code } from "lucide-react";
 import type { Task } from "../../data/types";
 
 interface ActiveTasksListProps {
@@ -60,13 +60,10 @@ export function ActiveTasksList({ tasks, onTaskClick }: ActiveTasksListProps) {
             <div className="relative flex-shrink-0">
               {task.isLocal ? (
                 <Laptop className="w-3.5 h-3.5 text-[var(--color-accent)]" />
+              ) : task.createdBy === "agent" ? (
+                <Zap className="w-3.5 h-3.5 text-[var(--color-info)]" />
               ) : (
-                <>
-                  <Circle className="w-2.5 h-2.5 fill-[var(--color-success)] text-[var(--color-success)]" />
-                  <span className="absolute inset-0 animate-ping">
-                    <Circle className="w-2.5 h-2.5 fill-[var(--color-success)]/30 text-transparent" />
-                  </span>
-                </>
+                <Code className="w-3.5 h-3.5 text-[var(--color-highlight)]" />
               )}
             </div>
 
@@ -84,10 +81,7 @@ export function ActiveTasksList({ tasks, onTaskClick }: ActiveTasksListProps) {
               </div>
               <div className="flex items-center gap-1.5 mt-0.5 text-xs text-[var(--color-text-muted)]">
                 <GitBranch className="w-3 h-3" />
-                <span className="truncate max-w-[120px]">{task.branch}</span>
-                <span>•</span>
-                <span className="text-[var(--color-success)]">+{task.additions}</span>
-                <span className="text-[var(--color-error)]">-{task.deletions}</span>
+                <span className="truncate max-w-[240px]">{task.branch}</span>
               </div>
             </div>
 

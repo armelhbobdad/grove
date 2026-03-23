@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Calendar, GitCommit, FileCode, Clock, Activity, Loader2 } from "lucide-react";
-import { getTaskStats, type TaskStatsResponse } from "../../../../api";
+import { getTaskStats, getDiff, type TaskStatsResponse, type DiffResponse } from "../../../../api";
 import type { Task } from "../../../../data/types";
 import { compactPath } from "../../../../utils/pathUtils";
 
@@ -115,17 +115,26 @@ function formatRelativeTime(isoString: string): string {
 
 export function StatsTab({ projectId, task }: StatsTabProps) {
   const [stats, setStats] = useState<TaskStatsResponse | null>(null);
+  const [diffData, setDiffData] = useState<DiffResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const totalLines = task.additions + task.deletions;
+  const additions = diffData?.total_additions ?? 0;
+  const deletions = diffData?.total_deletions ?? 0;
+  const filesChanged = diffData?.files.length ?? 0;
 
-  // Load task stats from API
+  // Load task stats and diff data from API
   useEffect(() => {
     setIsLoading(true);
     setError(null);
-    getTaskStats(projectId, task.id)
-      .then(setStats)
+    Promise.all([
+      getTaskStats(projectId, task.id),
+      getDiff(projectId, task.id).catch(() => null),
+    ])
+      .then(([statsRes, diffRes]) => {
+        setStats(statsRes);
+        setDiffData(diffRes);
+      })
       .catch((err) => {
         console.error("Failed to load task stats:", err);
         setError("Failed to load stats");
@@ -163,8 +172,8 @@ export function StatsTab({ projectId, task }: StatsTabProps) {
         <StatCard
           icon={FileCode}
           label="Files Changed"
-          value={task.filesChanged}
-          subValue={`${task.additions} additions, ${task.deletions} deletions`}
+          value={filesChanged}
+          subValue={`${additions} additions, ${deletions} deletions`}
           delay={0.15}
         />
       </div>
@@ -189,7 +198,7 @@ export function StatsTab({ projectId, task }: StatsTabProps) {
           <div className="h-12 w-px bg-[var(--color-border)]" />
           <div className="flex-1">
             <div className="text-2xl font-semibold text-[var(--color-text)]">
-              {totalLines}
+              {additions + deletions}
             </div>
             <div className="text-xs text-[var(--color-text-muted)] mt-1">
               Total lines changed

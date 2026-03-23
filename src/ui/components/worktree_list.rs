@@ -30,9 +30,8 @@ pub fn render(
         Cell::from(""), // 通知标记
         Cell::from("TASK"),
         Cell::from("STATUS"),
-        Cell::from("BRANCH"),
+        Cell::from("TARGET"),
         Cell::from("↓"), // commits behind
-        Cell::from("FILES"),
         Cell::from("UPDATED"),
     ])
     .style(Style::default().fg(colors.muted))
@@ -93,35 +92,19 @@ pub fn render(
                         ),
                         ratatui::text::Span::raw(&wt.task_name),
                     ])
+                } else if wt.created_by == "agent" {
+                    ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled("⚡", Style::default().fg(colors.info)),
+                        ratatui::text::Span::raw(&wt.task_name),
+                    ])
                 } else {
                     ratatui::text::Line::from(wt.task_name.clone())
                 }),
                 Cell::from(wt.status.label()).style(icon_style),
-                Cell::from(if wt.is_local {
-                    // Local Task: 只显示当前分支
-                    ratatui::text::Line::from(vec![ratatui::text::Span::styled(
-                        &wt.branch,
-                        Style::default().fg(colors.muted),
-                    )])
-                } else {
-                    ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(&wt.branch, Style::default().fg(colors.muted)),
-                        ratatui::text::Span::styled(" → ", Style::default().fg(colors.muted)),
-                        ratatui::text::Span::styled(&wt.target, Style::default().fg(colors.text)),
-                    ])
-                }),
-                Cell::from(commits),
                 Cell::from(ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled(
-                        format!("+{}", wt.file_changes.additions),
-                        Style::default().fg(colors.status_live),
-                    ),
-                    ratatui::text::Span::raw(" "),
-                    ratatui::text::Span::styled(
-                        format!("-{}", wt.file_changes.deletions),
-                        Style::default().fg(colors.status_error),
-                    ),
+                    ratatui::text::Span::styled(&wt.target, Style::default().fg(colors.text)),
                 ])),
+                Cell::from(commits),
                 Cell::from(updated).style(Style::default().fg(colors.muted)),
             ])
             .style(row_style)
@@ -134,9 +117,8 @@ pub fn render(
         Constraint::Length(4),  // 通知标记
         Constraint::Fill(2),    // TASK (flex)
         Constraint::Length(8),  // STATUS
-        Constraint::Fill(2),    // BRANCH (flex)
+        Constraint::Fill(2),    // TARGET (flex)
         Constraint::Length(4),  // commits behind
-        Constraint::Length(10), // FILES
         Constraint::Length(14), // UPDATED
     ];
 
