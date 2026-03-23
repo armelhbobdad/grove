@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Trash2, Circle } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { Project } from "../../data/types";
 import { getProjectStyle } from "../../utils/projectStyle";
 import { compactPath } from "../../utils/pathUtils";
@@ -16,9 +16,8 @@ interface ProjectCardProps {
 
 export function ProjectCard({ project, isSelected, onSelect, onDoubleClick, onDelete, compact }: ProjectCardProps) {
   const { theme } = useTheme();
-  // Use taskCount/liveCount from list response, fallback to calculating from tasks array
+  // Use taskCount from list response, fallback to calculating from tasks array
   const taskCount = project.taskCount ?? project.tasks.length;
-  const liveCount = project.liveCount ?? project.tasks.filter((t) => t.status === "live").length;
   const { color, Icon } = getProjectStyle(project.id, theme.accentPalette);
 
   return (
@@ -64,24 +63,9 @@ export function ProjectCard({ project, isSelected, onSelect, onDoubleClick, onDe
 
       {/* Stats */}
       <div className="flex items-center gap-4 text-xs">
-        {/* Total tasks */}
         <span className="text-[var(--color-text-muted)]">
           {taskCount} {taskCount === 1 ? "Task" : "Tasks"}
         </span>
-
-        {/* Live tasks */}
-        <div className="flex items-center gap-1.5">
-          <Circle
-            className="w-3 h-3"
-            style={{
-              color: liveCount > 0 ? "var(--color-success)" : "var(--color-text-muted)",
-              fill: liveCount > 0 ? "var(--color-success)" : "transparent",
-            }}
-          />
-          <span className={liveCount > 0 ? "text-[var(--color-success)]" : "text-[var(--color-text-muted)]"}>
-            {liveCount} Live
-          </span>
-        </div>
       </div>
 
       {/* Delete button */}

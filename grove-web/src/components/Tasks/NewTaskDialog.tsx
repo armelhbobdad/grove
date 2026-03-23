@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { X, GitBranch, Plus, FileText, ChevronDown } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { X, GitBranch, Plus, FileText, ChevronDown, Loader2 } from "lucide-react";
 import { Button, Input } from "../ui";
 import { DialogShell } from "../ui/DialogShell";
 import { useProject } from "../../context";
@@ -22,20 +22,40 @@ export function NewTaskDialog({ isOpen, onClose, onCreate, isLoading, externalEr
   const [error, setError] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Load branches and reset target when dialog opens
   useEffect(() => {
     if (isOpen && selectedProject) {
       setTargetBranch(selectedProject.currentBranch || "main");
+      setIsLoadingBranches(true);
       getBranches(selectedProject.id, "local")
         .then((res) => {
           setBranches(res.branches.map((b) => b.name));
         })
         .catch(() => {
           setBranches([]);
+        })
+        .finally(() => {
+          setIsLoadingBranches(false);
         });
     }
   }, [isOpen, selectedProject]);
+
+  // Click outside to close dropdown
+  const handleClickOutside = useCallback((e: MouseEvent) => {
+    if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      setShowBranchDropdown(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showBranchDropdown) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showBranchDropdown, handleClickOutside]);
 
   const handleSubmit = async () => {
     if (!hasValidBranch) return;
@@ -142,7 +162,7 @@ export function NewTaskDialog({ isOpen, onClose, onCreate, isLoading, externalEr
                 </div>
 
                 {/* Target Branch (selectable) */}
-                <div className="relative">
+                <div className="relative" ref={dropdownRef}>
                   <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">
                     Target Branch
                   </label>
@@ -158,28 +178,43 @@ export function NewTaskDialog({ isOpen, onClose, onCreate, isLoading, externalEr
                           <GitBranch className="w-4 h-4 text-[var(--color-text-muted)]" />
                           <span className="text-sm text-[var(--color-text)]">{targetBranch}</span>
                         </div>
-                        <ChevronDown className={`w-4 h-4 text-[var(--color-text-muted)] transition-transform ${showBranchDropdown ? "rotate-180" : ""}`} />
+                        {isLoadingBranches ? (
+                          <Loader2 className="w-4 h-4 text-[var(--color-text-muted)] animate-spin" />
+                        ) : (
+                          <ChevronDown className={`w-4 h-4 text-[var(--color-text-muted)] transition-transform ${showBranchDropdown ? "rotate-180" : ""}`} />
+                        )}
                       </button>
-                      {showBranchDropdown && branches.length > 0 && (
+                      {showBranchDropdown && (
                         <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg shadow-lg">
-                          {branches.map((branch) => (
-                            <button
-                              key={branch}
-                              type="button"
-                              onClick={() => {
-                                setTargetBranch(branch);
-                                setShowBranchDropdown(false);
-                              }}
-                              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--color-bg-tertiary)] transition-colors
-                                ${branch === targetBranch ? "text-[var(--color-highlight)] bg-[var(--color-highlight)]/5" : "text-[var(--color-text)]"}`}
-                            >
-                              <GitBranch className="w-3.5 h-3.5 flex-shrink-0" />
-                              <span className="truncate">{branch}</span>
-                              {branch === selectedProject?.currentBranch && (
-                                <span className="ml-auto text-xs text-[var(--color-text-muted)] flex-shrink-0">current</span>
-                              )}
-                            </button>
-                          ))}
+                          {isLoadingBranches ? (
+                            <div className="flex items-center justify-center gap-2 px-3 py-3 text-sm text-[var(--color-text-muted)]">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Loading branches...</span>
+                            </div>
+                          ) : branches.length > 0 ? (
+                            branches.map((branch) => (
+                              <button
+                                key={branch}
+                                type="button"
+                                onClick={() => {
+                                  setTargetBranch(branch);
+                                  setShowBranchDropdown(false);
+                                }}
+                                className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--color-bg-tertiary)] transition-colors
+                                  ${branch === targetBranch ? "text-[var(--color-highlight)] bg-[var(--color-highlight)]/5" : "text-[var(--color-text)]"}`}
+                              >
+                                <GitBranch className="w-3.5 h-3.5 flex-shrink-0" />
+                                <span className="truncate">{branch}</span>
+                                {branch === selectedProject?.currentBranch && (
+                                  <span className="ml-auto text-xs text-[var(--color-text-muted)] flex-shrink-0">current</span>
+                                )}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-2 text-sm text-[var(--color-text-muted)]">
+                              No branches found
+                            </div>
+                          )}
                         </div>
                       )}
                       <p className="text-xs text-[var(--color-text-muted)] mt-1.5">

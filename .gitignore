@@ -18,9 +18,11 @@ Cargo.lock  # Uncomment if this is a library project
 # Development / Marketing materials (not for version control)
 .grove-dev/
 
-# Web Frontend (Node.js / React)
-grove-web/node_modules/
-grove-web/dist/
+# Generic Node.js / Web build artifacts
+**/node_modules/
+**/dist/
+
+# Web Frontend (React)
 grove-web/build/
 grove-web/.next/
 grove-web/.turbo/

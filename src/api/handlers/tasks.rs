@@ -143,6 +143,8 @@ pub struct RebaseToRequest {
 pub struct GitOperationResponse {
     pub success: bool,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// API error response (for returning error details with status codes)
@@ -332,20 +334,15 @@ fn worktree_to_response(wt: &crate::model::Worktree, _project_key: &str) -> Task
         })
         .collect();
 
-    // Count files changed
-    let files_changed = git::diff_stat(&wt.path, &wt.target)
-        .map(|stats| stats.len() as u32)
-        .unwrap_or(0);
-
     TaskResponse {
         id: wt.id.clone(),
         name: wt.task_name.clone(),
         branch: wt.branch.clone(),
         target: wt.target.clone(),
         status: status_to_string(&wt.status).to_string(),
-        additions: wt.file_changes.additions,
-        deletions: wt.file_changes.deletions,
-        files_changed,
+        additions: 0,
+        deletions: 0,
+        files_changed: 0,
         commits,
         created_at: wt.created_at.to_rfc3339(),
         updated_at: wt.updated_at.to_rfc3339(),
@@ -383,21 +380,27 @@ pub async fn list_tasks(
 
     let filter = query.filter.as_deref().unwrap_or("active");
 
-    let mut tasks: Vec<TaskResponse> = if filter == "archived" {
-        // Load archived tasks
-        let archived = loader::load_archived_worktrees(&project.path);
-        archived
-            .iter()
-            .map(|wt| worktree_to_response(wt, &project_key))
-            .collect()
-    } else {
-        // Load active tasks
-        let (active, _) = loader::load_worktrees(&project.path);
-        active
-            .iter()
-            .map(|wt| worktree_to_response(wt, &project_key))
-            .collect()
-    };
+    // Heavy git I/O — run on blocking thread pool
+    let project_path = project.path.clone();
+    let pk = project_key.clone();
+    let filter_owned = filter.to_string();
+    let mut tasks: Vec<TaskResponse> = tokio::task::spawn_blocking(move || {
+        if filter_owned == "archived" {
+            let archived = loader::load_archived_worktrees(&project_path);
+            archived
+                .iter()
+                .map(|wt| worktree_to_response(wt, &pk))
+                .collect()
+        } else {
+            let active = loader::load_worktrees(&project_path);
+            active
+                .iter()
+                .map(|wt| worktree_to_response(wt, &pk))
+                .collect()
+        }
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Sort by updated_at descending (newest first), but Local Task always first
     tasks.sort_by(|a, b| match (a.is_local, b.is_local) {
@@ -416,24 +419,25 @@ pub async fn get_task(
 ) -> Result<Json<TaskResponse>, StatusCode> {
     let (project, project_key) = find_project_by_id(&id)?;
 
-    // Load all worktrees and find the one with matching ID
-    let (active, _) = loader::load_worktrees(&project.path);
+    // Heavy git I/O — run on blocking thread pool
+    let project_path = project.path.clone();
+    let pk = project_key.clone();
+    let tid = task_id.clone();
+    let result: Option<TaskResponse> = tokio::task::spawn_blocking(move || {
+        let active = loader::load_worktrees(&project_path);
+        if let Some(wt) = active.iter().find(|wt| wt.id == tid) {
+            return Some(worktree_to_response(wt, &pk));
+        }
+        let archived = loader::load_archived_worktrees(&project_path);
+        archived
+            .iter()
+            .find(|wt| wt.id == tid)
+            .map(|wt| worktree_to_response(wt, &pk))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let task = active.iter().find(|wt| wt.id == task_id);
-
-    if let Some(wt) = task {
-        return Ok(Json(worktree_to_response(wt, &project_key)));
-    }
-
-    // Check archived
-    let archived = loader::load_archived_worktrees(&project.path);
-    let task = archived.iter().find(|wt| wt.id == task_id);
-
-    if let Some(wt) = task {
-        return Ok(Json(worktree_to_response(wt, &project_key)));
-    }
-
-    Err(StatusCode::NOT_FOUND)
+    result.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 /// POST /api/v1/projects/{id}/tasks
@@ -667,17 +671,34 @@ pub async fn recover_task(
         })?;
 
     // Load the recovered task to return
-    let (active, _) = loader::load_worktrees(&project.path);
-    let task = active.iter().find(|wt| wt.id == task_id).ok_or_else(|| {
+    let project_path = project.path.clone();
+    let pk = project_key.clone();
+    let tid = task_id.clone();
+    let result: Option<TaskResponse> = tokio::task::spawn_blocking(move || {
+        let active = loader::load_worktrees(&project_path);
+        active
+            .iter()
+            .find(|wt| wt.id == tid)
+            .map(|wt| worktree_to_response(wt, &pk))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    result.map(Json).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(ApiErrorResponse {
                 error: "Failed to find recovered task".to_string(),
             }),
         )
-    })?;
-
-    Ok(Json(worktree_to_response(task, &project_key)))
+    })
 }
 
 /// DELETE /api/v1/projects/{id}/tasks/{taskId}
@@ -768,6 +789,7 @@ pub async fn sync_task(
         Ok(target) => Ok(Json(GitOperationResponse {
             success: true,
             message: format!("Synced with {}", target),
+            warning: None,
         })),
         Err(e) => {
             let error_msg = e.to_string();
@@ -779,6 +801,7 @@ pub async fn sync_task(
             Ok(Json(GitOperationResponse {
                 success: false,
                 message,
+                warning: None,
             }))
         }
     }
@@ -802,6 +825,7 @@ pub async fn commit_task(
         return Ok(Json(GitOperationResponse {
             success: false,
             message: e.to_string(),
+            warning: None,
         }));
     }
 
@@ -811,6 +835,7 @@ pub async fn commit_task(
     Ok(Json(GitOperationResponse {
         success: true,
         message: "Committed successfully".to_string(),
+        warning: None,
     }))
 }
 
@@ -847,10 +872,12 @@ pub async fn merge_task(
         Ok(result) => Ok(Json(GitOperationResponse {
             success: true,
             message: format!("Merged into {}", result.target_branch),
+            warning: result.warning,
         })),
         Err(e) => Ok(Json(GitOperationResponse {
             success: false,
             message: e.to_string(),
+            warning: None,
         })),
     }
 }
@@ -1166,10 +1193,12 @@ pub async fn reset_task(
         Ok(_) => Ok(Json(GitOperationResponse {
             success: true,
             message: "Task reset successfully".to_string(),
+            warning: None,
         })),
         Err(e) => Ok(Json(GitOperationResponse {
             success: false,
             message: format!("Failed to reset task: {}", e),
+            warning: None,
         })),
     }
 }
@@ -1242,6 +1271,7 @@ pub async fn rebase_to_task(
     Ok(Json(GitOperationResponse {
         success: true,
         message: format!("Target branch changed to '{}'", req.target),
+        warning: None,
     }))
 }
 

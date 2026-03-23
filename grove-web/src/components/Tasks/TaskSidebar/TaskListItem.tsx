@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Circle, CheckCircle, AlertTriangle, XCircle, Archive, MoreVertical, Laptop, Bot, Code } from "lucide-react";
+import { Circle, CheckCircle, AlertTriangle, XCircle, Archive, MoreVertical, Laptop, Zap, Code } from "lucide-react";
 import { useIsMobile } from "../../../hooks";
 import type { Task, TaskStatus } from "../../../data/types";
 
@@ -115,7 +115,7 @@ export function TaskListItem({ task, isSelected, onClick, onDoubleClick, onConte
               style={{ color: "var(--color-accent)" }}
             />
           ) : task.createdBy === "agent" ? (
-            <Bot
+            <Zap
               className="w-3.5 h-3.5"
               style={{ color: "var(--color-info)" }}
             />

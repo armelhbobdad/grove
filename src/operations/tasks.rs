@@ -36,6 +36,8 @@ pub struct MergeResult {
     pub task_id: String,
     pub task_name: String,
     pub target_branch: String,
+    /// Warning message (e.g., failed to checkout back to original branch)
+    pub warning: Option<String>,
 }
 
 /// Merge a task branch into target
@@ -141,7 +143,16 @@ pub fn merge_task(
     }
 
     // Checkout back to original branch after successful merge
-    let _ = git::checkout(repo_path, &original_branch);
+    let warning = if let Err(e) = git::checkout(repo_path, &original_branch) {
+        let msg = format!(
+            "Merge succeeded, but failed to switch back to '{}': {}",
+            original_branch, e
+        );
+        eprintln!("Warning: {}", msg);
+        Some(msg)
+    } else {
+        None
+    };
 
     // 7. Update task timestamp
     tasks::touch_task(project_key, task_id)?;
@@ -150,6 +161,7 @@ pub fn merge_task(
         task_id: task.id.clone(),
         task_name: task.name.clone(),
         target_branch: task.target.clone(),
+        warning,
     })
 }
 

@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Circle, ArrowRight, GitBranch, Laptop, Bot, Code } from "lucide-react";
+import { Circle, ArrowRight, GitBranch, Laptop, Zap, Code } from "lucide-react";
 import type { Task } from "../../data/types";
 
 interface ActiveTasksListProps {
@@ -61,7 +61,7 @@ export function ActiveTasksList({ tasks, onTaskClick }: ActiveTasksListProps) {
               {task.isLocal ? (
                 <Laptop className="w-3.5 h-3.5 text-[var(--color-accent)]" />
               ) : task.createdBy === "agent" ? (
-                <Bot className="w-3.5 h-3.5 text-[var(--color-info)]" />
+                <Zap className="w-3.5 h-3.5 text-[var(--color-info)]" />
               ) : (
                 <Code className="w-3.5 h-3.5 text-[var(--color-highlight)]" />
               )}
@@ -82,9 +82,6 @@ export function ActiveTasksList({ tasks, onTaskClick }: ActiveTasksListProps) {
               <div className="flex items-center gap-1.5 mt-0.5 text-xs text-[var(--color-text-muted)]">
                 <GitBranch className="w-3 h-3" />
                 <span className="truncate max-w-[240px]">{task.branch}</span>
-                <span>•</span>
-                <span className="text-[var(--color-success)]">+{task.additions}</span>
-                <span className="text-[var(--color-error)]">-{task.deletions}</span>
               </div>
             </div>
 

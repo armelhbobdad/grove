@@ -32,7 +32,6 @@ pub fn render(
         Cell::from("STATUS"),
         Cell::from("TARGET"),
         Cell::from("↓"), // commits behind
-        Cell::from("FILES"),
         Cell::from("UPDATED"),
     ])
     .style(Style::default().fg(colors.muted))
@@ -106,17 +105,6 @@ pub fn render(
                     ratatui::text::Span::styled(&wt.target, Style::default().fg(colors.text)),
                 ])),
                 Cell::from(commits),
-                Cell::from(ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled(
-                        format!("+{}", wt.file_changes.additions),
-                        Style::default().fg(colors.status_live),
-                    ),
-                    ratatui::text::Span::raw(" "),
-                    ratatui::text::Span::styled(
-                        format!("-{}", wt.file_changes.deletions),
-                        Style::default().fg(colors.status_error),
-                    ),
-                ])),
                 Cell::from(updated).style(Style::default().fg(colors.muted)),
             ])
             .style(row_style)
@@ -129,9 +117,8 @@ pub fn render(
         Constraint::Length(4),  // 通知标记
         Constraint::Fill(2),    // TASK (flex)
         Constraint::Length(8),  // STATUS
-        Constraint::Fill(2),    // BRANCH (flex)
+        Constraint::Fill(2),    // TARGET (flex)
         Constraint::Length(4),  // commits behind
-        Constraint::Length(10), // FILES
         Constraint::Length(14), // UPDATED
     ];
 

@@ -74,7 +74,6 @@ function convertProjectListItem(item: ProjectListItem): Project {
     tasks: [], // Will be loaded when selected
     addedAt: new Date(item.added_at),
     taskCount: item.task_count,
-    liveCount: item.live_count,
   };
 }
 

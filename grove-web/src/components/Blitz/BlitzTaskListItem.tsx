@@ -1,4 +1,4 @@
-import { Circle, CheckCircle, AlertTriangle, XCircle, ChevronUp, ChevronDown, Laptop, Bot, Code } from "lucide-react";
+import { Circle, CheckCircle, AlertTriangle, XCircle, ChevronUp, ChevronDown, Laptop, Zap, Code } from "lucide-react";
 import type { BlitzTask } from "../../data/types";
 import type { TaskStatus } from "../../data/types";
 import { useIsMobile } from "../../hooks";
@@ -151,7 +151,7 @@ export function BlitzTaskListItem({
               style={{ color: "var(--color-accent)" }}
             />
           ) : task.createdBy === "agent" ? (
-            <Bot
+            <Zap
               className="w-3.5 h-3.5"
               style={{ color: "var(--color-info)" }}
             />

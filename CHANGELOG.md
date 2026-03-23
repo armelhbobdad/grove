@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.9] - 2026-03-23
+
+### Changed
+
+- **Unified task display** — merged "Current Branch" and "Other Branch" tabs into a single "Active Tasks" tab; tasks from all branches are now shown together with target branch labels
+- **Cross-branch merge** — merge now works regardless of which branch you're on; automatically checks out the target branch, merges, and returns to the original branch
+- **Local Task Review** — Local Task now compares against the default branch (main/master) instead of HEAD, enabling meaningful code review diffs
+- **Task type icons** — replaced status-based icons with type-based icons: Laptop (local), ⚡ (agent), Code (regular); consistent across TUI and Web
+- **New Task dialog** — target branch is now selectable via dropdown with loading indicator and click-outside-to-close
+
+### Improved
+
+- **Performance: lazy file changes** — removed `file_changes` (additions/deletions) computation from task loading; data is now fetched on-demand via the diff API when viewing task details, dramatically improving load times for large projects
+- **Performance: non-blocking API** — heavy git I/O handlers (`get_project`, `list_tasks`, `get_task`, `get_stats`) now run on tokio's blocking thread pool via `spawn_blocking`, preventing one slow project from blocking all other API requests
+- **Performance: removed live_count computation** — project listing no longer checks session existence for every task, reducing unnecessary subprocess calls
+
+### Fixed
+
+- **Merge checkout warning** — if checkout back to the original branch fails after a successful merge, the warning is now displayed to the user instead of being silently ignored
+- **DirtyBranchDialog** — improved error messages for main repository uncommitted changes vs worktree uncommitted changes
+
+### Removed
+
+- **"X live" display** — removed live task count from project selector and project cards (preparing for status model simplification)
+- **File changes in task list** — removed +additions/-deletions display from task list items and TUI worktree table (data available on-demand in task detail view)
+
 ## [0.7.8] - 2026-03-19
 
 ### Added

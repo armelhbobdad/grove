@@ -304,9 +304,8 @@ interface ProjectItemProps {
 }
 
 function ProjectItem({ project, isSelected, onClick, accentPalette }: ProjectItemProps) {
-  // Use taskCount/liveCount from list API, or calculate from tasks array if full project loaded
+  // Use taskCount from list API, or calculate from tasks array if full project loaded
   const totalCount = project.taskCount ?? project.tasks.length;
-  const liveCount = project.liveCount ?? project.tasks.filter((t) => t.status === "live").length;
   const { color, Icon } = getProjectStyle(project.id, accentPalette);
 
   return (
@@ -337,12 +336,6 @@ function ProjectItem({ project, isSelected, onClick, accentPalette }: ProjectIte
           <span className="text-xs text-[var(--color-text-muted)]">
             {totalCount} task{totalCount !== 1 ? "s" : ""}
           </span>
-          {liveCount > 0 && (
-            <span className="flex items-center gap-1 text-xs text-[var(--color-success)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" />
-              {liveCount} live
-            </span>
-          )}
         </div>
       </div>
     </button>

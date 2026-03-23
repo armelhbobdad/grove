@@ -238,9 +238,7 @@ fn render_card(
     let content_w = (area.width as usize).saturating_sub(10);
 
     // 状态指示器
-    let (status_str, status_color) = if project.live_count > 0 {
-        ("●", colors.status_live)
-    } else if project.task_count > 0 {
+    let (status_str, status_color) = if project.task_count > 0 {
         ("○", colors.muted)
     } else {
         (" ", colors.muted)

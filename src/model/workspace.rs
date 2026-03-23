@@ -3,7 +3,6 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::session;
 use crate::storage::tasks;
 use crate::storage::workspace::{self as storage, project_hash};
 
@@ -59,14 +58,14 @@ impl WorkspaceState {
             .map(|p| {
                 // 计算任务数（使用项目路径的 hash 作为存储 key）
                 let hash = project_hash(&p.path);
-                let (task_count, live_count) = count_tasks(&hash);
+                let task_count = count_tasks(&hash);
 
                 ProjectInfo {
                     name: p.name,
                     path: p.path,
                     added_at: p.added_at,
                     task_count,
-                    live_count,
+                    live_count: 0,
                 }
             })
             .collect();
@@ -250,19 +249,7 @@ impl WorkspaceState {
 
 /// 计算任务数量
 /// project_key: 项目路径的 hash，用于加载任务数据
-fn count_tasks(project_key: &str) -> (usize, usize) {
+fn count_tasks(project_key: &str) -> usize {
     let active_tasks = tasks::load_tasks(project_key).unwrap_or_default();
-    let task_count = active_tasks.len();
-
-    // 计算 live 数量（检查 session 是否运行）
-    let live_count = active_tasks
-        .iter()
-        .filter(|t| {
-            let task_mux = session::resolve_session_type(&t.multiplexer);
-            let sname = session::resolve_session_name(&t.session_name, project_key, &t.id);
-            session::session_exists(&task_mux, &sname)
-        })
-        .count();
-
-    (task_count, live_count)
+    active_tasks.len()
 }

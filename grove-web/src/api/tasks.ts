@@ -59,6 +59,7 @@ export interface CommitRequest {
 export interface GitOperationResponse {
   success: boolean;
   message: string;
+  warning?: string;
 }
 
 export interface DiffFileEntry {

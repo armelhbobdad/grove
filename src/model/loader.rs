@@ -9,9 +9,8 @@ use crate::storage::workspace::{self, project_hash};
 
 use super::{FileChanges, Worktree, WorktreeStatus};
 
-/// 从 Task 元数据加载 worktree 列表
-/// 返回: (active, archived_placeholder)
-pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>) {
+/// 从 Task 元数据加载活跃 worktree 列表
+pub fn load_worktrees(project_path: &str) -> Vec<Worktree> {
     // 1. 获取项目 key（路径的 hash）
     let project_key = project_hash(project_path);
 
@@ -27,8 +26,9 @@ pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>) {
         }
     };
 
-    // 3. 获取当前分支
+    // 3. 获取当前分支和 default branch
     let current_branch = git::current_branch(project_path).unwrap_or_else(|_| "main".to_string());
+    let default_branch = git::default_branch(project_path);
 
     // 3.5 确保 Local Task 存在并同步分支信息
     // 获取项目名称（用作 Local Task 的显示名）
@@ -46,14 +46,14 @@ pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>) {
         });
 
     if let Some(local_task) = active_tasks.iter_mut().find(|t| t.id == LOCAL_TASK_ID) {
-        // 同步 branch/target 为当前分支，worktree_path 为主仓库路径，name 为项目名
+        // 同步 branch 为当前分支，target 为 default branch（用于 Review 比较）
         let mut needs_save = false;
         if local_task.branch != current_branch {
             local_task.branch = current_branch.clone();
             needs_save = true;
         }
-        if local_task.target != current_branch {
-            local_task.target = current_branch.clone();
+        if local_task.target != default_branch {
+            local_task.target = default_branch.clone();
             needs_save = true;
         }
         if local_task.worktree_path != project_path {
@@ -69,7 +69,12 @@ pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>) {
         }
     } else {
         // 自动创建 Local Task
-        let local_task = tasks::create_local_task(project_path, &current_branch, &project_name);
+        let local_task = tasks::create_local_task(
+            project_path,
+            &current_branch,
+            &default_branch,
+            &project_name,
+        );
         if tasks::add_task(&project_key, local_task.clone()).is_ok() {
             active_tasks.push(local_task);
         }
@@ -94,10 +99,7 @@ pub fn load_worktrees(project_path: &str) -> (Vec<Worktree>, Vec<Worktree>) {
         _ => b.updated_at.cmp(&a.updated_at),
     });
 
-    // 懒加载归档任务（仅当需要时）
-    let archived = Vec::new(); // 初始为空，切换到 Archived Tab 时再加载
-
-    (active, archived)
+    active
 }
 
 /// 加载归档任务（懒加载）
@@ -200,15 +202,6 @@ fn task_to_worktree(
             }
         };
 
-        // Local Task: 只显示未提交变更（diff against HEAD），不计算 commits_behind
-        let file_changes = if exists {
-            git::file_changes(path, "HEAD")
-                .map(|(a, d, f)| FileChanges::new(a, d, f))
-                .unwrap_or_default()
-        } else {
-            FileChanges::default()
-        };
-
         let mux_str = match resolved_session_type {
             SessionType::Tmux => "tmux",
             SessionType::Zellij => "zellij",
@@ -222,7 +215,7 @@ fn task_to_worktree(
             target: task.target.clone(),
             status,
             commits_behind: None,
-            file_changes,
+            file_changes: FileChanges::default(),
             archived: false,
             path: path.clone(),
             multiplexer: mux_str.to_string(),
@@ -241,32 +234,25 @@ fn task_to_worktree(
         .map(|commit| git::branch_head_equals(project_path, &task.branch, commit))
         .unwrap_or(false);
 
-    // 确定状态
-    let status = if !exists {
-        WorktreeStatus::Broken // worktree 被删除
-    } else if is_merging_this_task {
-        // 主仓库正在 merge 这个 task 的分支，且有冲突
-        WorktreeStatus::Conflict
-    } else if git::has_conflicts(path) {
-        // worktree 内部有冲突（如 rebase 冲突）
-        WorktreeStatus::Conflict
+    // 确定状态和 commits_behind（一次性计算，避免重复 git 调用）
+    let (status, commits_behind) = if !exists {
+        (WorktreeStatus::Broken, None)
+    } else if is_merging_this_task || git::has_conflicts(path) {
+        (WorktreeStatus::Conflict, None)
     } else {
-        // 🚀 优化: 只计算一次 commits_behind,后面复用结果
-        let commits_behind_result = git::commits_behind(path, &task.branch, &task.target);
-        let commits_behind_count = commits_behind_result.as_ref().ok().copied().unwrap_or(0);
+        let commits_behind = git::commits_behind(path, &task.branch, &task.target).ok();
+        let commits_behind_count = commits_behind.unwrap_or(0);
 
         // 只有当有新 commit 且已合并时才算 Merged
-        // 避免刚创建的任务（branch 和 target 同一个 commit）被误判为 Merged
         let is_merged = commits_behind_count > 0
             && (git::is_merged(project_path, &task.branch, &task.target).unwrap_or(false)
                 || git::is_diff_empty(project_path, &task.branch, &task.target).unwrap_or(false));
 
         if is_merged {
-            WorktreeStatus::Merged
+            (WorktreeStatus::Merged, commits_behind)
         } else {
             // 检查 session 是否运行
-            if matches!(resolved_session_type, SessionType::Acp) {
-                // Multi-chat: 检查每个 chat 的 session，或旧的 task 级 key
+            let session_status = if matches!(resolved_session_type, SessionType::Acp) {
                 let chats = tasks::load_chat_sessions(project, &task.id).unwrap_or_default();
                 let has_live = if chats.is_empty() {
                     let key = format!("{}:{}", project, &task.id);
@@ -290,27 +276,9 @@ fn task_to_worktree(
                 } else {
                     WorktreeStatus::Idle
                 }
-            }
+            };
+            (session_status, commits_behind)
         }
-    };
-
-    // 获取 commits_behind 和 file_changes (仅当 worktree 存在时)
-    // 🚀 优化: commits_behind 已在上面计算,直接复用,不再重复调用 git
-    let (commits_behind, file_changes) = if exists {
-        // 复用上面计算的 commits_behind_result(如果存在的话)
-        let behind = if status != WorktreeStatus::Broken && status != WorktreeStatus::Conflict {
-            // commits_behind 已在上面计算过,这里需要再次获取是因为作用域问题
-            // TODO: 进一步优化可以重构为返回 (status, commits_behind) 元组
-            git::commits_behind(path, &task.branch, &task.target).ok()
-        } else {
-            None
-        };
-        let changes = git::file_changes(path, &task.target)
-            .map(|(a, d, f)| FileChanges::new(a, d, f))
-            .unwrap_or_default();
-        (behind, changes)
-    } else {
-        (None, FileChanges::default())
     };
 
     let mux_str = match resolved_session_type {
@@ -326,7 +294,7 @@ fn task_to_worktree(
         target: task.target.clone(),
         status,
         commits_behind,
-        file_changes,
+        file_changes: FileChanges::default(),
         archived: task.status == TaskStatus::Archived,
         path: path.clone(),
         multiplexer: mux_str.to_string(),

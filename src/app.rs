@@ -121,11 +121,11 @@ impl ProjectState {
         let project_key = project_hash(project_path);
 
         // 从 Task 元数据加载真实数据
-        let (active, archived) = loader::load_worktrees(project_path);
+        let active = loader::load_worktrees(project_path);
 
         // TUI 过滤：移除只有 Chat 模式的任务（TUI 不支持）
         let active = Self::filter_tui_tasks(active);
-        let archived = Self::filter_tui_tasks(archived);
+        let archived = Vec::new();
 
         let mut active_state = ListState::default();
         if !active.is_empty() {
@@ -170,7 +170,7 @@ impl ProjectState {
     /// 刷新数据
     pub fn refresh(&mut self) {
         git::cache::clear_all();
-        let (active, _) = loader::load_worktrees(&self.project_path);
+        let active = loader::load_worktrees(&self.project_path);
 
         // TUI 过滤：移除只有 Chat 模式的任务
         let active = Self::filter_tui_tasks(active);
@@ -218,8 +218,8 @@ impl ProjectState {
 
     /// 切换到上一个 Tab
     pub fn prev_tab(&mut self) {
-        self.current_tab = self.current_tab.next(); // 只有 2 个 Tab，next 即 prev
-                                                    // 懒加载 Archived tab
+        self.current_tab = self.current_tab.prev();
+        // 懒加载 Archived tab
         if self.current_tab == ProjectTab::Archived && self.worktrees[1].is_empty() {
             self.load_archived();
         }
