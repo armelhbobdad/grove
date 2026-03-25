@@ -27,10 +27,20 @@ import { useIsMobile } from '../../hooks';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import './diffTheme.css';
 
+/** External navigation request — navigate to a file (optionally at a line) */
+export interface FileNavRequest {
+  file: string;
+  line?: number;
+  /** Monotonic counter so repeated clicks on the same file still trigger */
+  seq: number;
+}
+
 interface DiffReviewPageProps {
   projectId: string;
   taskId: string;
   embedded?: boolean;
+  /** When set, switch to All Files mode and scroll to the given file/line */
+  navigateToFile?: FileNavRequest | null;
 }
 
 function isMarkdownPath(path: string | null | undefined): boolean {
@@ -39,7 +49,7 @@ function isMarkdownPath(path: string | null | undefined): boolean {
   return lower.endsWith('.md') || lower.endsWith('.markdown');
 }
 
-export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPageProps) {
+export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: DiffReviewPageProps) {
   const { isMobile } = useIsMobile();
   const [diffData, setDiffData] = useState<FullDiffResult | null>(null);
   const [allFiles, setAllFiles] = useState<string[]>([]); // All git-tracked files for File Mode
@@ -109,7 +119,24 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
   const [temporaryVirtualPaths, setTemporaryVirtualPaths] = useState<Set<string>>(new Set());
 
   // Scroll to line state for auto-expanding collapsed gaps
-  const [scrollToLine, setScrollToLine] = useState<{file: string; line: number} | null>(null);
+  // seq forces re-trigger even when file+line are the same as before
+  const [scrollToLine, setScrollToLine] = useState<{file: string; line: number; seq?: number} | null>(null);
+  const scrollSeqRef = useRef(0);
+
+  // Track last handled navigateToFile seq to avoid re-processing
+  const lastNavSeqRef = useRef(-1);
+  // Pending navigation — resolved once displayFiles is available after mode switch
+  const pendingNavRef = useRef<{ file: string; line?: number } | null>(null);
+
+  // Handle external navigateToFile requests — stage the request and switch mode
+  useEffect(() => {
+    if (!navigateToFile || navigateToFile.seq === lastNavSeqRef.current) return;
+    lastNavSeqRef.current = navigateToFile.seq;
+    // Store the pending navigation target
+    pendingNavRef.current = { file: navigateToFile.file, line: navigateToFile.line };
+    // Switch to All Files mode so the target file becomes available in displayFiles
+    setViewMode('full');
+  }, [navigateToFile]);
 
   // Build mention items from allFiles for @ mention in comment textareas
   const mentionItems = useMemo(() => buildMentionItems(allFiles), [allFiles]);
@@ -204,13 +231,63 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
   const isEmbedded = embedded ?? (typeof window !== 'undefined' && window !== window.parent);
 
   // When switching modes or on initial load, ensure selectedFile is valid
+  // Skip if there is a pending file navigation (it will set selectedFile itself)
   useEffect(() => {
     if (displayFiles.length === 0) return;
+    if (pendingNavRef.current) return; // navigation effect will handle selection
     if (!selectedFile || !displayFiles.some((f) => f.new_path === selectedFile)) {
       setSelectedFile(displayFiles[0].new_path);
       setCurrentFileIndex(0);
     }
   }, [displayFiles, selectedFile]);
+
+  // Resolve pending navigation once displayFiles updates (after mode switch)
+  // Also re-run when navigateToFile changes (for when Review tab already exists)
+  useEffect(() => {
+    const pending = pendingNavRef.current;
+    if (!pending || displayFiles.length === 0) return;
+
+    // Find matching file — try exact match first, then suffix match in both directions
+    const target = pending.file;
+    let match = displayFiles.find((f) => f.new_path === target);
+    if (!match) {
+      // Target is absolute, file is relative: check if target ends with /file
+      match = displayFiles.find((f) => target.endsWith('/' + f.new_path));
+    }
+    if (!match) {
+      // File is absolute, target is relative: check if file ends with /target
+      match = displayFiles.find((f) => f.new_path.endsWith('/' + target));
+    }
+    if (!match) {
+      // Loose suffix match (either direction)
+      match = displayFiles.find((f) => f.new_path.endsWith(target) || target.endsWith(f.new_path));
+    }
+
+    if (match) {
+      pendingNavRef.current = null;
+      const resolvedPath = match.new_path;
+      setSelectedFile(resolvedPath);
+      setCurrentFileIndex(displayFiles.indexOf(match));
+      // Uncollapse it if collapsed
+      setCollapsedFiles((prev) => {
+        if (!prev.has(resolvedPath)) return prev;
+        const next = new Set(prev);
+        next.delete(resolvedPath);
+        return next;
+      });
+      if (pending.line) {
+        // Set scrollToLine — DiffFileView will handle expanding gaps + scrolling to the line
+        // Use seq to force re-trigger even for repeated clicks on the same file:line
+        setScrollToLine({ file: resolvedPath, line: pending.line, seq: ++scrollSeqRef.current });
+      } else {
+        // No line number — just scroll the file header into view
+        requestAnimationFrame(() => {
+          const el = document.getElementById(`diff-file-${encodeURIComponent(resolvedPath)}`);
+          el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+    }
+  }, [displayFiles, navigateToFile]);
 
   // Load full file content with concurrency control
   const loadFullFileContent = useCallback(async (filePath: string) => {
@@ -1161,7 +1238,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
                       onDeleteReply={handleDeleteReply}
                       codeSearchQuery={codeSearchQuery}
                       codeSearchCaseSensitive={codeSearchCaseSensitive}
-                      scrollToLine={scrollToLine?.file === file.new_path ? scrollToLine.line : undefined}
+                      scrollToLine={scrollToLine?.file === file.new_path ? { line: scrollToLine.line, seq: scrollToLine.seq } : undefined}
                       mentionItems={mentionItems}
                     />
                   );

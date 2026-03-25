@@ -1,11 +1,40 @@
+import { Children, isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+// Match file paths like `path/to/file.ext` or `path/to/file.ext:123`
+// Must contain at least one `/` and end with a known extension (optionally followed by `:line`)
+const FILE_PATH_RE = /^([\w./-]+\/[\w./-]+\.[\w]+)(?::(\d+))?[,.]?$/;
+
+// Match href that looks like a file path (possibly with #L<line> anchor)
+// e.g. "service/foo.go", "service/foo.go:505", or ends with "#L505"
+const FILE_HREF_RE = /^(?!https?:\/\/|mailto:)([\w./@-]+\/[\w./@-]+\.[\w]+)(?:[:#]L?(\d+))?$/;
+
 interface MarkdownRendererProps {
   content: string;
+  /** When provided, inline code matching file path patterns become clickable */
+  onFileClick?: (filePath: string, line?: number) => void;
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+/** Extract plain text from React children recursively */
+function extractText(children: React.ReactNode): string {
+  let text = "";
+  Children.forEach(children, (child) => {
+    if (typeof child === "string") {
+      text += child;
+    } else if (typeof child === "number") {
+      text += String(child);
+    } else if (isValidElement(child)) {
+      const props = child.props as Record<string, unknown>;
+      if (props.children) {
+        text += extractText(props.children as React.ReactNode);
+      }
+    }
+  });
+  return text;
+}
+
+export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -40,16 +69,40 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
         li: ({ children }) => (
           <li className="text-sm text-[var(--color-text)]">{children}</li>
         ),
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[var(--color-highlight)] hover:underline"
-          >
-            {children}
-          </a>
-        ),
+        a: ({ href, children }) => {
+          // Check if the link href looks like a file path (not an external URL)
+          if (onFileClick && href) {
+            const hrefMatch = href.match(FILE_HREF_RE);
+            if (hrefMatch) {
+              const filePath = hrefMatch[1];
+              const line = hrefMatch[2] ? parseInt(hrefMatch[2], 10) : undefined;
+              // Also check the link text for "file:line" pattern
+              const text = extractText(children);
+              const textMatch = text.match(FILE_PATH_RE);
+              const finalLine = line ?? (textMatch?.[2] ? parseInt(textMatch[2], 10) : undefined);
+              return (
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onFileClick(filePath, finalLine); }}
+                  className="text-[var(--color-highlight)] hover:underline cursor-pointer"
+                  title={`Open ${filePath}${finalLine ? ` at line ${finalLine}` : ''}`}
+                >
+                  {children}
+                </a>
+              );
+            }
+          }
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[var(--color-highlight)] hover:underline"
+            >
+              {children}
+            </a>
+          );
+        },
         strong: ({ children }) => (
           <strong className="font-semibold text-[var(--color-text)]">{children}</strong>
         ),
@@ -67,6 +120,24 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
             return (
               <code className="block text-xs font-mono">{children}</code>
             );
+          }
+          // Check if inline code looks like a file path
+          if (onFileClick) {
+            const text = extractText(children);
+            const match = text.match(FILE_PATH_RE);
+            if (match) {
+              const filePath = match[1];
+              const line = match[2] ? parseInt(match[2], 10) : undefined;
+              return (
+                <code
+                  className="px-1 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-highlight)] text-xs font-mono cursor-pointer hover:underline hover:brightness-125 transition-all"
+                  onClick={(e) => { e.stopPropagation(); onFileClick(filePath, line); }}
+                  title={`Open ${filePath}${line ? ` at line ${line}` : ''}`}
+                >
+                  {children}
+                </code>
+              );
+            }
           }
           return (
             <code className="px-1 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-highlight)] text-xs font-mono">

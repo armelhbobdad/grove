@@ -2429,3 +2429,14 @@ td.diff-code.diff-line-highlighted::before {
     min-width: 32px;
   }
 }
+
+/* ─── Navigation highlight (flash when jumping from Chat) ─── */
+@keyframes nav-highlight-flash {
+  0%   { background-color: color-mix(in srgb, var(--color-highlight) 35%, transparent); }
+  100% { background-color: transparent; }
+}
+
+tr.diff-line-nav-highlight,
+tr.diff-line-nav-highlight td {
+  animation: nav-highlight-flash 2.5s ease-out forwards;
+}

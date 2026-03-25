@@ -207,7 +207,7 @@ interface DiffFileViewProps {
   onDeleteReply?: (commentId: number, replyId: number) => void;
   codeSearchQuery?: string;
   codeSearchCaseSensitive?: boolean;
-  scrollToLine?: number; // Line number to scroll to and expand if in collapsed gap
+  scrollToLine?: { line: number; seq?: number }; // Line number to scroll to and expand if in collapsed gap
   mentionItems?: import('../../utils/fileMention').MentionItem[] | null;
 }
 
@@ -774,12 +774,13 @@ export function DiffFileView({
     onExpandAll: handleExpandAll,
   };
 
-  // Auto-expand gap when scrolling to a line in collapsed area
+  // Auto-expand gap when scrolling to a line in collapsed area, then scroll & highlight
   useEffect(() => {
-    if (scrollToLine === undefined || !isActive) return;
+    if (!scrollToLine || !isActive) return;
+    const targetLine = scrollToLine.line;
 
     // Find gap containing this line
-    const gap = gaps.find(g => scrollToLine >= g.startLine && scrollToLine <= g.endLine);
+    const gap = gaps.find(g => targetLine >= g.startLine && targetLine <= g.endLine);
     if (gap) {
       // Check if gap is not fully expanded
       const expansion = expansions.get(gap.gapIndex);
@@ -793,6 +794,20 @@ export function DiffFileView({
         });
       }
     }
+
+    // Scroll to the target line and highlight it after DOM updates
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        if (!ref.current) return;
+        const row = ref.current.querySelector(`tr[data-line="${targetLine}"]`) as HTMLElement;
+        if (row) {
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Flash highlight
+          row.classList.add('diff-line-nav-highlight');
+          setTimeout(() => row.classList.remove('diff-line-nav-highlight'), 2500);
+        }
+      }, 100);
+    });
   }, [scrollToLine, gaps, expansions, isActive, ensureFileLines]);
 
   const handleCopyPath = () => {

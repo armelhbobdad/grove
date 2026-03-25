@@ -11,6 +11,7 @@ import 'flexlayout-react/style/light.css';
 import './flexlayout-theme.css';
 import type { Task } from '../../../data/types';
 import type { PanelType, TabNodeConfig } from './types';
+import type { FileNavRequest } from '../../Review';
 import { TaskTerminal } from '../TaskView/TaskTerminal';
 import { TaskChat } from '../TaskView/TaskChat';
 import { TaskCodeReview } from '../TaskView/TaskCodeReview';
@@ -191,6 +192,8 @@ export interface FlexLayoutContainerHandle {
   getModel: () => Model;
   selectTabByIndex: (index: number) => void;
   closeActiveTab: () => void;
+  /** Navigate to a file (optionally at a line) in the Review panel */
+  navigateToFile: (filePath: string, line?: number) => void;
 }
 
 export const FlexLayoutContainer = forwardRef<
@@ -400,13 +403,34 @@ export const FlexLayoutContainer = forwardRef<
     }
   }, [model]);
 
+  // --- File navigation for Review panel ---
+  const navSeqRef = useRef(0);
+  const [fileNavRequest, setFileNavRequest] = useState<FileNavRequest | null>(null);
+
+  const navigateToFile = useCallback((filePath: string, line?: number) => {
+    const seq = ++navSeqRef.current;
+    setFileNavRequest({ file: filePath, line, seq });
+
+    // Ensure a review tab exists and is selected
+    const allTabs = getAllTabs();
+    const reviewTab = allTabs.find((t) => t.getComponent() === 'review');
+    if (reviewTab) {
+      // Select the existing review tab
+      model.doAction(Actions.selectTab(reviewTab.getId()));
+    } else {
+      // Create a new review tab
+      addPanel('review');
+    }
+  }, [model, getAllTabs, addPanel]);
+
   // Expose API via ref
   useImperativeHandle(ref, () => ({
     addPanel,
     getModel: () => model,
     selectTabByIndex,
     closeActiveTab,
-  }), [addPanel, model, selectTabByIndex, closeActiveTab]);
+    navigateToFile,
+  }), [addPanel, model, selectTabByIndex, closeActiveTab, navigateToFile]);
 
   // Context menu handlers
   const handleCloseTab = useCallback((tabId: string) => {
@@ -664,6 +688,7 @@ export const FlexLayoutContainer = forwardRef<
               projectId={projectId}
               task={task}
               fullscreen={true}
+              onNavigateToFile={navigateToFile}
             />
           </div>
         );
@@ -677,6 +702,7 @@ export const FlexLayoutContainer = forwardRef<
               onClose={() => {
                 model.doAction(Actions.deleteTab(node.getId()));
               }}
+              navigateToFile={fileNavRequest}
               hideHeader={true}
               fullscreen={true}
             />
@@ -729,7 +755,7 @@ export const FlexLayoutContainer = forwardRef<
       default:
         return <div className="p-4 text-[var(--color-text-muted)]">Unknown panel type: {component}</div>;
     }
-  }, [projectId, task, model, closeTabById]);
+  }, [projectId, task, model, closeTabById, navigateToFile, fileNavRequest]);
 
   // Track empty state
   const [isEmpty, setIsEmpty] = useState(() => getAllTabs().length === 0);

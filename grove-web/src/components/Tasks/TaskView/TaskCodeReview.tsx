@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "../../ui";
 import { DiffReviewPage } from "../../Review";
+import type { FileNavRequest } from "../../Review";
 
 interface TaskCodeReviewProps {
   /** Project ID */
@@ -21,6 +22,8 @@ interface TaskCodeReviewProps {
   onToggleFullscreen?: () => void;
   /** Hide the review header (for FlexLayout tabs) */
   hideHeader?: boolean;
+  /** External navigation request — open a file (optionally at a line) in Review */
+  navigateToFile?: FileNavRequest | null;
 }
 
 export function TaskCodeReview({
@@ -30,6 +33,7 @@ export function TaskCodeReview({
   fullscreen = false,
   onToggleFullscreen,
   hideHeader = false,
+  navigateToFile,
 }: TaskCodeReviewProps) {
   const containerClass = `flex-1 flex flex-col bg-[var(--color-bg-secondary)] overflow-hidden ${fullscreen ? '' : 'rounded-lg border border-[var(--color-border)]'}`;
 
@@ -72,6 +76,7 @@ export function TaskCodeReview({
           projectId={projectId}
           taskId={taskId}
           embedded
+          navigateToFile={navigateToFile}
         />
       </div>
     </motion.div>
