@@ -379,6 +379,17 @@ export function TaskChat({
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeChat = chats.find((c) => c.id === activeChatId);
+  const hasTodoPanel = planEntries.length > 0;
+  const hasPlanPanel = !!planFileContent;
+  const hasPendingPanel = pendingMessages.length > 0;
+  const activeComposerPanel = showPlan && hasTodoPanel
+    ? "todo"
+    : showPlanFile && hasPlanPanel
+      ? "plan"
+      : showPendingQueue && hasPendingPanel
+        ? "pending"
+        : null;
+  const composerPanelOpen = activeComposerPanel !== null;
 
   // Filtered slash commands based on current input
   const filteredSlashCommands = useMemo(() => {
@@ -1956,7 +1967,7 @@ export function TaskChat({
       <div
         ref={messagesViewportRef}
         onScroll={updateScrollState}
-        className="relative flex-1 overflow-y-auto px-4 pt-4 pb-44 min-h-0"
+        className={`relative flex-1 overflow-y-auto px-4 pt-4 min-h-0 ${composerPanelOpen ? "pb-[28rem]" : "pb-44"}`}
       >
         <div className="flex w-full flex-col gap-3">
         {renderItems.map((item) =>
@@ -1990,181 +2001,6 @@ export function TaskChat({
       </div>
       </div>
 
-      {/* Todo Section (from ACP Plan notifications) */}
-      {planEntries.length > 0 && (
-        <div className="border-t border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]">
-          <div className="w-full">
-          <button onClick={() => { const next = !showPlan; setShowPlan(next); if (next) { setShowPlanFile(false); setShowPendingQueue(false); } }}
-            className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
-            <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-              <motion.div animate={{ rotate: showPlan ? 90 : 0 }} transition={{ duration: 0.15 }}>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </motion.div>
-              <ListTodo className="w-3.5 h-3.5" /><span>Todo</span>
-              <span className="text-xs text-[var(--color-text-muted)] opacity-60">
-                {planEntries.filter((e) => e.status === "completed").length}/{planEntries.length}
-              </span>
-            </div>
-            {planEntries.filter((e) => e.status === "completed").length === planEntries.length && (
-              <span className="text-xs text-[var(--color-success)]">All Done</span>
-            )}
-          </button>
-          <AnimatePresence initial={false}>
-            {showPlan && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: "easeInOut" }}
-                className="overflow-hidden"
-              >
-                <div className="px-4 pb-2 space-y-1 max-h-96 overflow-y-auto">
-                  {planEntries.map((entry, i) => (
-                    <div key={i} className="flex items-center gap-2 py-0.5 text-sm">
-                      {entry.status === "completed" ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />
-                      ) : entry.status === "in_progress" ? (
-                        <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
-                      ) : (
-                        <Circle className="w-3.5 h-3.5 text-[var(--color-text-muted)] shrink-0" />
-                      )}
-                      <span className={entry.status === "completed"
-                        ? "text-[var(--color-text-muted)] line-through" : "text-[var(--color-text)]"}>
-                        {entry.content}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          </div>
-        </div>
-      )}
-
-      {/* Plan Section (markdown plan file) */}
-      {planFileContent && (
-        <div className="border-t border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]">
-          <div className="w-full">
-          <button onClick={() => { const next = !showPlanFile; setShowPlanFile(next); if (next) { setShowPlan(false); setShowPendingQueue(false); } }}
-            className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
-            <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-              <motion.div animate={{ rotate: showPlanFile ? 90 : 0 }} transition={{ duration: 0.15 }}>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </motion.div>
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Plan</span>
-              <span className="text-xs opacity-60">{planFilePath.split("/").pop()}</span>
-            </div>
-          </button>
-          <AnimatePresence initial={false}>
-            {showPlanFile && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: "easeInOut" }}
-                className="overflow-hidden"
-              >
-                <div className="px-4 pb-3 max-h-96 overflow-y-auto">
-                  <MarkdownRenderer content={planFileContent} />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          </div>
-        </div>
-      )}
-
-      {/* Pending Queue */}
-      {pendingMessages.length > 0 && (
-        <div className="border-t border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]">
-          <div className="w-full">
-          <button onClick={() => { const next = !showPendingQueue; setShowPendingQueue(next); if (next) { setShowPlan(false); setShowPlanFile(false); } }}
-            className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
-            <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-              <motion.div animate={{ rotate: showPendingQueue ? 90 : 0 }} transition={{ duration: 0.15 }}>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </motion.div>
-              <span>{pendingMessages.length} Queued Message{pendingMessages.length > 1 ? "s" : ""}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-[var(--color-text-muted)] opacity-50 font-mono">{"\u2318\u2325\u232B"}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleClearPending(); }}
-                className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-error)] transition-colors"
-              >
-                Clear All
-              </button>
-            </div>
-          </button>
-          <AnimatePresence initial={false}>
-            {showPendingQueue && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: "easeInOut" }}
-                className="overflow-hidden"
-              >
-                <div className="px-4 pb-2 space-y-1 max-h-96 overflow-y-auto">
-                  {pendingMessages.map((msg, i) => (
-                    <div key={i} className="flex items-center gap-2 py-1 text-sm">
-                      <span className="text-xs text-[var(--color-text-muted)] w-4 shrink-0 text-right">{i + 1}</span>
-                      {editingPendingIdx === i ? (
-                        <input
-                          autoFocus
-                          value={editingPendingValue}
-                          onChange={(e) => setEditingPendingValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                            if (e.key === "Enter") { e.preventDefault(); handleSavePendingEdit(); }
-                            if (e.key === "Escape") handleCancelPendingEdit();
-                          }}
-                          onBlur={handleSavePendingEdit}
-                          className="flex-1 min-w-0 text-sm text-[var(--color-text)] bg-[var(--color-bg-secondary)] border border-[var(--color-highlight)] rounded px-2 py-0.5 outline-none"
-                        />
-                      ) : (
-                        <>
-                          <span className="flex-1 min-w-0 truncate text-[var(--color-text)]">{msg}</span>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {i === 0 && (
-                              <button
-                                onClick={() => handleSendNow()}
-                                className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-[var(--color-highlight)] hover:bg-[var(--color-bg-tertiary)] rounded transition-colors"
-                                title="Send Now (cancels current, sends this)"
-                              >
-                                <Send className="w-3 h-3" />
-                                <span>Now</span>
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handleEditPending(i)}
-                              className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] rounded transition-colors"
-                              title="Edit"
-                            >
-                              <Pencil className="w-3 h-3" />
-                            </button>
-                            <button
-                              onClick={() => handleDeletePending(i)}
-                              className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-error)] rounded transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          </div>
-        </div>
-      )}
-
       {/* Read-only observation mode banner */}
       {isRemoteSession && (
         <div className="border-t border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,var(--color-bg))]">
@@ -2191,6 +2027,102 @@ export function TaskChat({
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pt-2 pb-4">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-bg)_96%,transparent),transparent)]" />
         <div className="pointer-events-auto relative mx-auto w-full max-w-[920px]">
+        <AnimatePresence initial={false}>
+          {composerPanelOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: 10, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={{ opacity: 0, y: 8, height: 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="mb-3 overflow-hidden rounded-[26px] border border-[color-mix(in_srgb,var(--color-border)_62%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_82%,transparent)] shadow-[0_16px_40px_rgba(0,0,0,0.14)] backdrop-blur-md"
+            >
+              <div className="max-h-72 overflow-y-auto px-3 py-3">
+                {activeComposerPanel === "todo" && (
+                  <div className="space-y-1">
+                    {planEntries.map((entry, i) => (
+                      <div key={i} className="flex items-center gap-2 py-0.5 text-sm">
+                        {entry.status === "completed" ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
+                        ) : entry.status === "in_progress" ? (
+                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-highlight)]" />
+                        ) : (
+                          <Circle className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                        )}
+                        <span className={entry.status === "completed" ? "text-[var(--color-text-muted)] line-through" : "text-[var(--color-text)]"}>
+                          {entry.content}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeComposerPanel === "plan" && (
+                  <div className="space-y-2">
+                    <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                      {planFilePath.split("/").pop()}
+                    </div>
+                    <MarkdownRenderer content={planFileContent} />
+                  </div>
+                )}
+
+                {activeComposerPanel === "pending" && (
+                  <div className="space-y-1">
+                    {pendingMessages.map((msg, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1 text-sm">
+                        <span className="w-4 shrink-0 text-right text-xs text-[var(--color-text-muted)]">{i + 1}</span>
+                        {editingPendingIdx === i ? (
+                          <input
+                            autoFocus
+                            value={editingPendingValue}
+                            onChange={(e) => setEditingPendingValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                              if (e.key === "Enter") { e.preventDefault(); handleSavePendingEdit(); }
+                              if (e.key === "Escape") handleCancelPendingEdit();
+                            }}
+                            onBlur={handleSavePendingEdit}
+                            className="flex-1 min-w-0 rounded border border-[var(--color-highlight)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-sm text-[var(--color-text)] outline-none"
+                          />
+                        ) : (
+                          <>
+                            <span className="flex-1 min-w-0 truncate text-[var(--color-text)]">{msg}</span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {i === 0 && (
+                                <button
+                                  onClick={() => handleSendNow()}
+                                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--color-highlight)] transition-colors hover:bg-[var(--color-bg-tertiary)]"
+                                  title="Send Now"
+                                >
+                                  <Send className="h-3 w-3" />
+                                  <span>Now</span>
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleEditPending(i)}
+                                className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)]"
+                                title="Edit"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                              <button
+                                onClick={() => handleDeletePending(i)}
+                                className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-error)]"
+                                title="Delete"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence>
           {showScrollToBottom && (
             <motion.div
@@ -2342,7 +2274,7 @@ export function TaskChat({
             </svg>
           )}
           <div className="mb-2 flex items-center justify-between gap-2 pr-10">
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-bg)] px-2.5 py-1 text-[11px] text-[var(--color-text)] min-w-0 max-w-full">
                 {AgentIcon ? <AgentIcon size={12} className="shrink-0 text-[var(--color-highlight)]" /> : <Bot className="w-3 h-3 shrink-0 text-[var(--color-highlight)]" />}
                 <span className="text-[var(--color-text-muted)] shrink-0">Agent</span>
@@ -2355,20 +2287,60 @@ export function TaskChat({
                 </div>
               )}
             </div>
-            {(modelOptions.length > 0 || modeOptions.length > 0) && (
-              <div className="flex items-center gap-1.5 shrink-0">
-                {modelOptions.length > 0 && (
-                  <DropdownSelect ref={modelMenuRef} label="Model" options={modelOptions} value={selectedModel}
-                    open={showModelMenu} onToggle={() => { setShowModelMenu(!showModelMenu); setShowPermMenu(false); }}
-                    onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); }} />
-                )}
-                {modeOptions.length > 0 && (
-                  <DropdownSelect ref={permMenuRef} label="Mode" options={modeOptions} value={permissionLevel}
-                    open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
-                    onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); }} />
-                )}
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {hasTodoPanel && (
+                <button
+                  onClick={() => {
+                    const next = !showPlan;
+                    setShowPlan(next);
+                    if (next) { setShowPlanFile(false); setShowPendingQueue(false); }
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                    activeComposerPanel === "todo"
+                      ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                      : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  <ListTodo className="h-3 w-3" />
+                  <span>Todo</span>
+                  <span className="opacity-70">{planEntries.filter((e) => e.status === "completed").length}/{planEntries.length}</span>
+                </button>
+              )}
+              {hasPlanPanel && (
+                <button
+                  onClick={() => {
+                    const next = !showPlanFile;
+                    setShowPlanFile(next);
+                    if (next) { setShowPlan(false); setShowPendingQueue(false); }
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                    activeComposerPanel === "plan"
+                      ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                      : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  <BookOpen className="h-3 w-3" />
+                  <span>Plan</span>
+                </button>
+              )}
+              {hasPendingPanel && (
+                <button
+                  onClick={() => {
+                    const next = !showPendingQueue;
+                    setShowPendingQueue(next);
+                    if (next) { setShowPlan(false); setShowPlanFile(false); }
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                    activeComposerPanel === "pending"
+                      ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                      : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  <ListPlus className="h-3 w-3" />
+                  <span>Pending</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {attachments.length > 0 && (
@@ -2460,29 +2432,41 @@ export function TaskChat({
                       : "Enter send"}
               </span>
             </div>
-            {!isBusy && hasContent ? (
-              <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend} disabled={!isConnected}>
-                <Send className="w-4 h-4" />
-              </Button>
-            ) : isBusy && hasContent ? (
-              <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend}>
-                <ListPlus className="w-4 h-4" />
-              </Button>
-            ) : isBusy && !hasContent ? (
-              pendingMessages.length > 0 ? (
-                <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleSendNow}>
+            <div className="flex items-center gap-2 shrink-0">
+              {modelOptions.length > 0 && (
+                <DropdownSelect ref={modelMenuRef} label="Model" options={modelOptions} value={selectedModel}
+                  open={showModelMenu} onToggle={() => { setShowModelMenu(!showModelMenu); setShowPermMenu(false); }}
+                  onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); }} />
+              )}
+              {modeOptions.length > 0 && (
+                <DropdownSelect ref={permMenuRef} label="Mode" options={modeOptions} value={permissionLevel}
+                  open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
+                  onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); }} />
+              )}
+              {!isBusy && hasContent ? (
+                <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend} disabled={!isConnected}>
                   <Send className="w-4 h-4" />
                 </Button>
-              ) : (
-                <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleStopAgent}>
-                  <Square className="w-3.5 h-3.5" />
+              ) : isBusy && hasContent ? (
+                <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend}>
+                  <ListPlus className="w-4 h-4" />
                 </Button>
-              )
-            ) : (
-              <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" disabled>
-                <Send className="w-4 h-4" />
-              </Button>
-            )}
+              ) : isBusy && !hasContent ? (
+                pendingMessages.length > 0 ? (
+                  <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleSendNow}>
+                    <Send className="w-4 h-4" />
+                  </Button>
+                ) : (
+                  <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleStopAgent}>
+                    <Square className="w-3.5 h-3.5" />
+                  </Button>
+                )
+              ) : (
+                <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" disabled>
+                  <Send className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
         </div>
