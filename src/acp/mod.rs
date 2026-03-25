@@ -276,6 +276,27 @@ pub struct AcpStartConfig {
     pub remote_auth: Option<String>,
 }
 
+/// Build Grove's own MCP server config for ACP session setup.
+fn grove_mcp_server(env_vars: &HashMap<String, String>) -> crate::error::Result<acp::McpServer> {
+    let exe = std::env::current_exe().map_err(|e| {
+        crate::error::GroveError::Session(format!(
+            "Failed to resolve current executable for Grove MCP injection: {}",
+            e
+        ))
+    })?;
+    let command = exe.canonicalize().unwrap_or(exe);
+    let env = env_vars
+        .iter()
+        .map(|(name, value)| acp::EnvVariable::new(name.clone(), value.clone()))
+        .collect();
+
+    Ok(acp::McpServer::Stdio(
+        acp::McpServerStdio::new("grove", command)
+            .args(vec!["mcp".to_string()])
+            .env(env),
+    ))
+}
+
 /// 单个 terminal 实例的状态
 struct TerminalState {
     /// Send to this channel to request process kill
@@ -1102,7 +1123,10 @@ async fn run_acp_session(
                 );
             }
             let resp = conn
-                .new_session(acp::NewSessionRequest::new(&config.working_dir))
+                .new_session(
+                    acp::NewSessionRequest::new(&config.working_dir)
+                        .mcp_servers(vec![grove_mcp_server(&config.env_vars)?]),
+                )
                 .await
                 .map_err(|e| {
                     crate::error::GroveError::Session(format!("ACP new_session failed: {}", e))
@@ -1121,10 +1145,10 @@ async fn run_acp_session(
             .suppress_emit
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let load_result = conn
-            .load_session(acp::LoadSessionRequest::new(
-                acp::SessionId::new(&*saved_id),
-                &config.working_dir,
-            ))
+            .load_session(
+                acp::LoadSessionRequest::new(acp::SessionId::new(&*saved_id), &config.working_dir)
+                    .mcp_servers(vec![grove_mcp_server(&config.env_vars)?]),
+            )
             .await;
         handle
             .suppress_emit
