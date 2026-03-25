@@ -385,6 +385,7 @@ export function useTaskOperations(
   );
 
   const handleArchiveCancel = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     (_pendingConfirm: PendingArchiveConfirm | null) => {
       if (!setPendingArchiveConfirm) return;
       setPendingArchiveConfirm(null);

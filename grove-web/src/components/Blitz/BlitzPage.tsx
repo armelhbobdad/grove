@@ -486,7 +486,7 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
   // Cmd+1-9: switch panel tabs, Cmd+W / Alt+W: close active tab
   useEffect(() => {
     if (!pageState.inWorkspace) return;
-    const isTauri = !!(window as any).__TAURI__;
+    const isTauri = !!((window as Window & { __TAURI__?: unknown }).__TAURI__);
     const handler = (e: KeyboardEvent) => {
       if (e.metaKey && !e.altKey && !e.ctrlKey && e.key >= "1" && e.key <= "9") {
         e.preventDefault();
@@ -572,6 +572,7 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     };
   }, [pageState.inWorkspace, setContextInWorkspace, setPageContext]);
   const pageOptionsRef = useRef<Parameters<typeof buildCommands>[0]>(null!);
+  // eslint-disable-next-line react-hooks/refs
   pageOptionsRef.current = {
     taskActions: {
       selectedTask: selectedTask ?? null,

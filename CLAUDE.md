@@ -305,7 +305,8 @@ A pre-commit hook is provided in `.githooks/pre-commit`. It runs the following c
 1. **`cargo fmt --all -- --check`** — code must be formatted
 2. **`cargo clippy -- -D warnings`** — no clippy warnings allowed
 3. **`cargo test`** — all tests must pass
-4. **Version bump** — `Cargo.toml` version must differ from `master` (skipped when committing on master itself)
+4. **`npx eslint src/ --max-warnings 0`** — no ESLint errors or warnings in `grove-web/`
+5. **Version bump** — `Cargo.toml` version must differ from `master` (skipped when committing on master itself)
 
 Activate the hook with:
 

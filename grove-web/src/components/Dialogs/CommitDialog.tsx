@@ -23,6 +23,7 @@ export function CommitDialog({
   // Reset message when dialog opens
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setMessage("");
     }
   }, [isOpen]);

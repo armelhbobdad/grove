@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { X, GitBranchPlus, Check, Search } from "lucide-react";
 import { Button } from "../../ui";
 import { DialogShell } from "../../ui/DialogShell";
@@ -23,6 +23,12 @@ export function RebaseDialog({
   const [selectedBranch, setSelectedBranch] = useState(currentTarget);
   const [searchQuery, setSearchQuery] = useState("");
 
+  const handleClose = useCallback(() => {
+    setSelectedBranch(currentTarget);
+    setSearchQuery("");
+    onClose();
+  }, [currentTarget, onClose]);
+
   // Escape to close
   useEffect(() => {
     if (!isOpen) return;
@@ -31,12 +37,14 @@ export function RebaseDialog({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen]);
+  }, [isOpen, handleClose]);
 
   // Reset state when dialog opens
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedBranch(currentTarget);
+       
       setSearchQuery("");
     }
   }, [isOpen, currentTarget]);
@@ -56,12 +64,6 @@ export function RebaseDialog({
       onRebase(selectedBranch);
       onClose();
     }
-  };
-
-  const handleClose = () => {
-    setSelectedBranch(currentTarget);
-    setSearchQuery("");
-    onClose();
   };
 
   return (

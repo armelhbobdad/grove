@@ -688,9 +688,10 @@ export function TaskChat({
 
   // Cleanup all WebSockets on unmount
   useEffect(() => {
+    const wsMap = wsMapRef.current;
     return () => {
-      wsMapRef.current.forEach((ws) => ws.close());
-      wsMapRef.current.clear();
+      wsMap.forEach((ws) => ws.close());
+      wsMap.clear();
     };
   }, []);
 
@@ -2376,12 +2377,12 @@ export function TaskChat({
               {modelOptions.length > 0 && (
                 <DropdownSelect ref={modelMenuRef} label="Model" options={modelOptions} value={selectedModel}
                   open={showModelMenu} onToggle={() => { setShowModelMenu(!showModelMenu); setShowPermMenu(false); }}
-                  onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); }} />
+                  onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); } }} />
               )}
               {modeOptions.length > 0 && (
                 <DropdownSelect ref={permMenuRef} label="Mode" options={modeOptions} value={permissionLevel}
                   open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
-                  onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); }} />
+                  onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); } }} />
               )}
               {!isBusy && hasContent ? (
                 <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend} disabled={!isConnected}>
@@ -2727,11 +2728,11 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
   }
 
   // Icon
-  const SummaryIcon = running > 0
-    ? () => <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
+  const summaryIcon = running > 0
+    ? <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
     : failed > 0
-      ? () => <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
-      : () => <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />;
+      ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
+      : <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />;
 
   if (!expanded) {
     // Collapsed: single summary row
@@ -2741,7 +2742,7 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
         onClick={() => onToggleSection(sectionId, toolIds)}
         className="flex items-center gap-1.5 py-1.5 px-2 rounded-md text-xs hover:bg-[var(--color-bg-tertiary)] cursor-pointer transition-colors"
       >
-        <SummaryIcon />
+        {summaryIcon}
         <ChevronRight className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
         <span className="text-[var(--color-text-muted)]">{summaryText}</span>
       </div>
@@ -2759,7 +2760,7 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
           forceExpanded ? "" : "hover:bg-[var(--color-bg-tertiary)] cursor-pointer"
         } transition-colors`}
       >
-        <SummaryIcon />
+        {summaryIcon}
         <ChevronDown className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
         <span className="text-[var(--color-text-muted)]">Tools ({total})</span>
       </div>

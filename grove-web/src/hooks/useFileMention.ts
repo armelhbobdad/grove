@@ -1,13 +1,14 @@
-import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { filterMentionItems } from "../utils/fileMention";
 import type { MentionItem, FilteredMentionItem } from "../utils/fileMention";
 
 interface UseFileMentionConfig {
   mentionItems: MentionItem[] | null; // null = disabled
+  /** DOM ref for the textarea — must be created with useRef in the caller component */
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 interface UseFileMentionReturn {
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   showDropdown: boolean;
   filteredItems: FilteredMentionItem[];
   selectedIdx: number;
@@ -49,8 +50,7 @@ function buildInsertedText(textarea: HTMLTextAreaElement, atIdx: number, filePat
   };
 }
 
-export function useFileMention({ mentionItems }: UseFileMentionConfig): UseFileMentionReturn {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+export function useFileMention({ mentionItems, textareaRef }: UseFileMentionConfig): UseFileMentionReturn {
   const [showDropdown, setShowDropdown] = useState(false);
   const [fileFilter, setFileFilter] = useState("");
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -68,9 +68,10 @@ export function useFileMention({ mentionItems }: UseFileMentionConfig): UseFileM
     const handleBlur = () => setTimeout(() => setShowDropdown(false), 150);
     textarea.addEventListener("blur", handleBlur);
     return () => textarea.removeEventListener("blur", handleBlur);
-  }, [showDropdown]);
+  }, [textareaRef, showDropdown]);
 
   const handleChange = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     (_value: string) => {
       if (!mentionItems || mentionItems.length === 0) return;
       const textarea = textareaRef.current;
@@ -89,7 +90,7 @@ export function useFileMention({ mentionItems }: UseFileMentionConfig): UseFileM
         }
       });
     },
-    [mentionItems],
+    [mentionItems, textareaRef],
   );
 
   const handleKeyDown = useCallback(
@@ -131,7 +132,7 @@ export function useFileMention({ mentionItems }: UseFileMentionConfig): UseFileM
       }
       return false;
     },
-    [showDropdown, filteredItems, selectedIdx],
+    [textareaRef, showDropdown, filteredItems, selectedIdx],
   );
 
   const handleSelect = useCallback(
@@ -151,13 +152,12 @@ export function useFileMention({ mentionItems }: UseFileMentionConfig): UseFileM
 
       return newValue;
     },
-    [],
+    [textareaRef],
   );
 
   const dismiss = useCallback(() => setShowDropdown(false), []);
 
   return {
-    textareaRef,
     showDropdown,
     filteredItems,
     selectedIdx,

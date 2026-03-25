@@ -225,7 +225,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
     try {
       const result = await openIDE(selectedProject.id);
       showMessage(result.message);
-    } catch (err) {
+    } catch {
       showMessage("Failed to open IDE");
     }
   };
@@ -235,7 +235,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
     try {
       const result = await openTerminal(selectedProject.id);
       showMessage(result.message);
-    } catch (err) {
+    } catch {
       showMessage("Failed to open terminal");
     }
   };
@@ -249,7 +249,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       if (result.success) {
         await loadGitData();
       }
-    } catch (err) {
+    } catch {
       showMessage("Pull failed");
     } finally {
       setIsOperating(false);
@@ -265,7 +265,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       if (result.success) {
         await loadGitData();
       }
-    } catch (err) {
+    } catch {
       showMessage("Push failed");
     } finally {
       setIsOperating(false);
@@ -287,7 +287,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         setShowCommitDialog(false);
         await loadGitData();
       }
-    } catch (err) {
+    } catch {
       showMessage("Commit failed");
     } finally {
       setIsOperating(false);
@@ -303,7 +303,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       if (result.success) {
         await loadGitData();
       }
-    } catch (err) {
+    } catch {
       showMessage("Fetch failed");
     } finally {
       setIsOperating(false);
@@ -320,7 +320,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         await loadGitData();
         await refreshSelectedProject();
       }
-    } catch (err) {
+    } catch {
       showMessage("Checkout failed");
     } finally {
       setIsOperating(false);
@@ -343,7 +343,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
           await refreshSelectedProject();
         }
       }
-    } catch (err) {
+    } catch {
       showMessage("Create branch failed");
     } finally {
       setIsOperating(false);
@@ -365,7 +365,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       if (result.success) {
         await loadGitData();
       }
-    } catch (err) {
+    } catch {
       showMessage("Rename failed");
     } finally {
       setIsOperating(false);
@@ -388,7 +388,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       if (result.success) {
         await loadGitData();
       }
-    } catch (err) {
+    } catch {
       showMessage("Delete failed");
     } finally {
       setIsOperating(false);
@@ -418,7 +418,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       const branchesRes = await getGitBranches(selectedProject.id);
       setRebaseAvailableBranches(branchesRes.branches.map(b => b.name));
       setShowTaskRebaseDialog(true);
-    } catch (err) {
+    } catch {
       showMessage("Failed to load branches");
     }
   };
@@ -434,7 +434,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         setTaskOpTask(null);
         await refreshSelectedProject();
       }
-    } catch (err) {
+    } catch {
       showMessage("Rebase failed");
     } finally {
       setIsRebasing(false);
@@ -453,7 +453,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       await archiveTask(selectedProject.id, taskOpTask.id);
       showMessage(`Archived "${taskOpTask.name}"`);
       await refreshSelectedProject();
-    } catch (err) {
+    } catch {
       showMessage("Archive failed");
     } finally {
       setIsOperating(false);
@@ -474,7 +474,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       await recoverTask(selectedProject.id, task.id);
       showMessage(`Recovered "${task.name}"`);
       await refreshSelectedProject();
-    } catch (err) {
+    } catch {
       showMessage("Recover failed");
     } finally {
       setIsOperating(false);
@@ -488,7 +488,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       await deleteTask(selectedProject.id, taskOpTask.id);
       showMessage(`Cleaned "${taskOpTask.name}"`);
       await refreshSelectedProject();
-    } catch (err) {
+    } catch {
       showMessage("Clean failed");
     } finally {
       setIsOperating(false);

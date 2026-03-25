@@ -53,6 +53,7 @@ export function Combobox({
       setCustomValue(value);
       setIsCustomMode(true);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Calculate dropdown position (fixed positioning, viewport-relative)

@@ -18,7 +18,14 @@ echo ">> cargo test"
 cargo test
 echo "   ✔ tests passed"
 
-# 4. Version bump check (skip on master branch)
+# 4. ESLint check (grove-web)
+if [ -d "grove-web" ]; then
+    echo ">> eslint (grove-web)"
+    (cd grove-web && npx eslint src/ --max-warnings 0)
+    echo "   ✔ eslint passed"
+fi
+
+# 5. Version bump check (skip on master branch)
 current_branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$current_branch" != "master" ]; then
     echo ">> version bump check"

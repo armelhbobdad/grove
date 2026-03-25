@@ -232,6 +232,7 @@ export function FileMentionDropdown({
 
   useEffect(() => {
     if (!visible || !anchorRef) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     updatePosition();
     window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);

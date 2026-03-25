@@ -734,7 +734,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Delete comment
   const handleDeleteComment = useCallback(async (id: number) => {
@@ -744,7 +744,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Cancel comment form
   const handleCancelComment = useCallback(() => {
@@ -768,7 +768,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Add project comment
   const handleAddProjectComment = useCallback(async (content: string) => {
@@ -778,7 +778,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Open reply form
   const handleOpenReplyForm = useCallback((commentId: number) => {
@@ -800,7 +800,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Resolve comment (mark as resolved + auto-collapse)
   const handleResolveComment = useCallback(async (id: number) => {
@@ -811,7 +811,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Reopen comment (mark resolved → open + auto-expand)
   const handleReopenComment = useCallback(async (id: number) => {
@@ -826,7 +826,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Edit comment content
   const handleEditComment = useCallback(async (id: number, content: string) => {
@@ -836,7 +836,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Edit reply content
   const handleEditReply = useCallback(async (commentId: number, replyId: number, content: string) => {
@@ -846,7 +846,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Delete reply
   const handleDeleteReply = useCallback(async (commentId: number, replyId: number) => {
@@ -856,7 +856,7 @@ export function DiffReviewPage({ projectId, taskId, embedded }: DiffReviewPagePr
     } catch {
       // Could add toast here
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, applyReviewResponse]);
 
   // Navigate to a comment (from conversation sidebar)
   const handleNavigateToComment = useCallback((filePath: string, line: number, commentId?: number) => {

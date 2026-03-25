@@ -15,6 +15,7 @@ interface AppPickerOption {
 }
 
 // IDE options - will be filtered by installed applications
+// eslint-disable-next-line react-refresh/only-export-components
 export const ideAppOptions: AppPickerOption[] = [
   { id: "vscode", label: "VS Code", appName: "Visual Studio Code", command: "code" },
   { id: "cursor", label: "Cursor", appName: "Cursor", command: "cursor" },
@@ -33,6 +34,7 @@ export const ideAppOptions: AppPickerOption[] = [
 ];
 
 // Terminal options - will be filtered by installed applications
+// eslint-disable-next-line react-refresh/only-export-components
 export const terminalAppOptions: AppPickerOption[] = [
   { id: "system", label: "System Default", appName: "Terminal" },
   { id: "iterm", label: "iTerm2", appName: "iTerm", command: "iterm" },

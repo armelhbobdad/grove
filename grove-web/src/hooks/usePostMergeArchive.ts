@@ -99,6 +99,15 @@ export function usePostMergeArchive(
     [projectId]
   );
 
+  // Cleanup after merge
+  const cleanupAfterMerge = useCallback(() => {
+    setShowArchiveAfterMerge(false);
+    setMergedTaskId(null);
+    setMergedTaskName("");
+    setMergedProjectId(null);
+    onCleanup();
+  }, [onCleanup]);
+
   // Handle archive after merge
   const handleArchiveAfterMerge = useCallback(async () => {
     const targetProjectId = mergedProjectId || projectId;
@@ -137,16 +146,8 @@ export function usePostMergeArchive(
     onRefresh,
     onShowMessage,
     setPendingArchiveConfirm,
+    cleanupAfterMerge,
   ]);
-
-  // Cleanup after merge
-  const cleanupAfterMerge = useCallback(() => {
-    setShowArchiveAfterMerge(false);
-    setMergedTaskId(null);
-    setMergedTaskName("");
-    setMergedProjectId(null);
-    onCleanup();
-  }, [onCleanup]);
 
   // Skip archive
   const handleSkipArchive = useCallback(() => {

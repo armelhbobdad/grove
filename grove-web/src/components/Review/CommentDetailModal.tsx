@@ -52,13 +52,19 @@ export function CommentDetailModal({
   const showReplyFormRef = useRef(showReplyForm);
   const editingCommentRef = useRef(editingComment);
   const editingReplyIdRef = useRef(editingReplyId);
+  // eslint-disable-next-line react-hooks/refs
   showReplyFormRef.current = showReplyForm;
+  // eslint-disable-next-line react-hooks/refs
   editingCommentRef.current = editingComment;
+  // eslint-disable-next-line react-hooks/refs
   editingReplyIdRef.current = editingReplyId;
 
-  const replyMention = useFileMention({ mentionItems: mentionItems ?? null });
-  const editCommentMention = useFileMention({ mentionItems: mentionItems ?? null });
-  const editReplyMention = useFileMention({ mentionItems: mentionItems ?? null });
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const editCommentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const editReplyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const replyMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: replyTextareaRef });
+  const editCommentMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: editCommentTextareaRef });
+  const editReplyMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: editReplyTextareaRef });
 
   // Layered Escape: edit forms → reply form → modal, and always stop propagation
   useEffect(() => {
@@ -241,7 +247,7 @@ export function CommentDetailModal({
           {editingComment ? (
             <div>
               <textarea
-                ref={editCommentMention.textareaRef}
+                ref={editCommentTextareaRef}
                 value={editCommentText}
                 onChange={(e) => { setEditCommentText(e.target.value); editCommentMention.handleChange(e.target.value); }}
                 autoFocus
@@ -268,7 +274,7 @@ export function CommentDetailModal({
                 onSelect={(path) => { const v = editCommentMention.handleSelect(path); if (v !== null) setEditCommentText(v); }}
                 onMouseEnter={editCommentMention.setSelectedIdx}
                 visible={editCommentMention.showDropdown}
-                anchorRef={editCommentMention.textareaRef}
+                anchorRef={editCommentTextareaRef}
                 cursorIdx={editCommentMention.atCharIdx}
               />
               <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
@@ -389,7 +395,7 @@ export function CommentDetailModal({
                   {editingReplyId === reply.id ? (
                     <div>
                       <textarea
-                        ref={editReplyMention.textareaRef}
+                        ref={editReplyTextareaRef}
                         value={editReplyText}
                         onChange={(e) => { setEditReplyText(e.target.value); editReplyMention.handleChange(e.target.value); }}
                         autoFocus
@@ -416,7 +422,7 @@ export function CommentDetailModal({
                         onSelect={(path) => { const v = editReplyMention.handleSelect(path); if (v !== null) setEditReplyText(v); }}
                         onMouseEnter={editReplyMention.setSelectedIdx}
                         visible={editReplyMention.showDropdown}
-                        anchorRef={editReplyMention.textareaRef}
+                        anchorRef={editReplyTextareaRef}
                         cursorIdx={editReplyMention.atCharIdx}
                       />
                       <div style={{ display: 'flex', gap: 8, marginTop: 6, justifyContent: 'flex-end' }}>
@@ -596,7 +602,7 @@ export function CommentDetailModal({
             }}
           >
             <textarea
-              ref={replyMention.textareaRef}
+              ref={replyTextareaRef}
               value={replyText}
               onChange={(e) => { setReplyText(e.target.value); replyMention.handleChange(e.target.value); }}
               placeholder="Write a reply... (Markdown supported, type @ to mention files)"
@@ -624,7 +630,7 @@ export function CommentDetailModal({
               onSelect={(path) => { const v = replyMention.handleSelect(path); if (v !== null) setReplyText(v); }}
               onMouseEnter={replyMention.setSelectedIdx}
               visible={replyMention.showDropdown}
-              anchorRef={replyMention.textareaRef}
+              anchorRef={replyTextareaRef}
               cursorIdx={replyMention.atCharIdx}
             />
             <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>

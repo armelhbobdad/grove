@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { MessageSquare, CheckCircle, RotateCcw, Reply, Send, FileCode, ChevronDown, ChevronRight, Trash2, Maximize2 } from 'lucide-react';
 import type { ReviewCommentEntry } from '../../api/tasks';
 import { AgentAvatar } from './AgentAvatar';
@@ -43,7 +43,8 @@ export function ConversationSidebar({
   const [projectCommentContent, setProjectCommentContent] = useState('');
   const [expandedCommentId, setExpandedCommentId] = useState<number | null>(null);
 
-  const projectMention = useFileMention({ mentionItems: mentionItems ?? null });
+  const projectTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const projectMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: projectTextareaRef });
 
   // Derive expanded comment from latest comments array so it stays in sync after reply/resolve
   const expandedComment = expandedCommentId !== null
@@ -280,7 +281,7 @@ export function ConversationSidebar({
         <div className="conv-sidebar-footer">
           <div className="project-comment-form">
             <textarea
-              ref={projectMention.textareaRef}
+              ref={projectTextareaRef}
               value={projectCommentContent}
               onChange={(e) => { setProjectCommentContent(e.target.value); projectMention.handleChange(e.target.value); }}
               placeholder="Add a project-level comment... (type @ to mention files)"
@@ -298,7 +299,7 @@ export function ConversationSidebar({
               onSelect={(path) => { const v = projectMention.handleSelect(path); if (v !== null) setProjectCommentContent(v); }}
               onMouseEnter={projectMention.setSelectedIdx}
               visible={projectMention.showDropdown}
-              anchorRef={projectMention.textareaRef}
+              anchorRef={projectTextareaRef}
               cursorIdx={projectMention.atCharIdx}
             />
             <button
@@ -353,7 +354,8 @@ function ConversationItem({
 }) {
   const [showReplyForm, setShowReplyForm] = useState(false);
   const [replyText, setReplyText] = useState('');
-  const replyMention = useFileMention({ mentionItems: mentionItems ?? null });
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const replyMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: replyTextareaRef });
 
   // Truncate content for preview (show first 3 lines or 120 chars)
   const isLongContent = comment.content.length > 120 || comment.content.split('\n').length > 3;
@@ -525,7 +527,7 @@ function ConversationItem({
       {showReplyForm && (
         <div className="conv-item-reply-form" onClick={(e) => e.stopPropagation()}>
           <textarea
-            ref={replyMention.textareaRef}
+            ref={replyTextareaRef}
             className="conv-reply-textarea"
             value={replyText}
             onChange={(e) => { setReplyText(e.target.value); replyMention.handleChange(e.target.value); }}
@@ -543,7 +545,7 @@ function ConversationItem({
             onSelect={(path) => { const v = replyMention.handleSelect(path); if (v !== null) setReplyText(v); }}
             onMouseEnter={replyMention.setSelectedIdx}
             visible={replyMention.showDropdown}
-            anchorRef={replyMention.textareaRef}
+            anchorRef={replyTextareaRef}
             cursorIdx={replyMention.atCharIdx}
           />
           <div className="conv-reply-actions">

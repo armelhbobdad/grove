@@ -125,7 +125,9 @@ export function StatsTab({ projectId, task }: StatsTabProps) {
 
   // Load task stats and diff data from API
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsLoading(true);
+     
     setError(null);
     Promise.all([
       getTaskStats(projectId, task.id),

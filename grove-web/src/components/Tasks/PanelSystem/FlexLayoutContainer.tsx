@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { createPortal } from 'react-dom';
-import { Layout, Model, TabNode, Actions, DockLocation, TabSetNode, BorderNode } from 'flexlayout-react';
-import type { IJsonModel, ITabRenderValues, ITabSetRenderValues } from 'flexlayout-react';
+import { Layout, Model, TabNode, Actions, DockLocation, TabSetNode, BorderNode, Node as FlexNode } from 'flexlayout-react';
+import type { IJsonModel, ITabRenderValues, ITabSetRenderValues, IJsonRowNode, IJsonTabSetNode, IJsonTabNode } from 'flexlayout-react';
 import {
   Terminal, MessageSquare, Code, FileCode, BarChart3, GitBranch, FileText,
   MessageCircle, X, XCircle, Trash2,
@@ -212,7 +212,7 @@ export const FlexLayoutContainer = forwardRef<
   });
 
   // Get panel label
-  const getPanelLabel = (type: PanelType): string => {
+  const getPanelLabel = useCallback((type: PanelType): string => {
     const labels: Record<PanelType, string> = {
       terminal: 'Terminal',
       chat: 'Chat',
@@ -224,7 +224,7 @@ export const FlexLayoutContainer = forwardRef<
       comments: 'Comments',
     };
     return labels[type];
-  };
+  }, []);
 
   // Create default layout — empty, user chooses what to open
   const createDefaultLayout = (): IJsonModel => ({
@@ -247,7 +247,7 @@ export const FlexLayoutContainer = forwardRef<
   });
 
   // Create tab node
-  const createTabNode = (type: PanelType, instanceNumber: number) => {
+  const createTabNode = useCallback((type: PanelType, instanceNumber: number) => {
     const id = `${type}-${instanceNumber}`;
     const name = `${getPanelLabel(type)} #${instanceNumber}`;
     return {
@@ -259,7 +259,7 @@ export const FlexLayoutContainer = forwardRef<
         panelType: type,
       } as TabNodeConfig,
     };
-  };
+  }, [getPanelLabel]);
 
   // Load saved layout from localStorage
   const loadSavedLayout = (): IJsonModel | null => {
@@ -268,7 +268,8 @@ export const FlexLayoutContainer = forwardRef<
       if (saved) {
         const json = JSON.parse(saved) as IJsonModel;
         // Restore instance counters from saved layout
-        const restoreCounters = (node: any) => {
+        type JsonNode = (IJsonRowNode | IJsonTabSetNode | IJsonTabNode) & { children?: JsonNode[] };
+        const restoreCounters = (node: JsonNode) => {
           if (node.type === 'tab' && node.id) {
             const match = node.id.match(/^(\w+)-(\d+)$/);
             if (match) {
@@ -293,6 +294,7 @@ export const FlexLayoutContainer = forwardRef<
   };
 
   // Initialize model
+  // eslint-disable-next-line react-hooks/refs
   const [model] = useState<Model>(() => {
     const layoutJson = initialLayout || loadSavedLayout() || createDefaultLayout();
     return Model.fromJson(layoutJson);
@@ -334,7 +336,7 @@ export const FlexLayoutContainer = forwardRef<
   // Get all tabs in the model
   const getAllTabs = useCallback(() => {
     const tabs: TabNode[] = [];
-    const visit = (node: any) => {
+    const visit = (node: FlexNode) => {
       if (node.getType() === 'tab') {
         tabs.push(node as TabNode);
       }
@@ -368,12 +370,12 @@ export const FlexLayoutContainer = forwardRef<
       Actions.addNode(newTab, targetTabsetId, DockLocation.CENTER, -1)
     );
     focusPanelContent();
-  }, [model, focusPanelContent, getAllTabs]);
+  }, [model, focusPanelContent, getAllTabs, createTabNode]);
 
   // Select a tab by its visual index (0-based) across all tabsets
   const selectTabByIndex = useCallback((index: number) => {
     const tabs: TabNode[] = [];
-    const visit = (node: any) => {
+    const visit = (node: FlexNode) => {
       if (node.getType() === 'tab') {
         tabs.push(node as TabNode);
       }

@@ -38,15 +38,18 @@ export function TaskCommandPalette({ isOpen, onClose, tasks, selectedTask, onTas
 
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSearchQuery("");
       // Pre-select the current task
       const currentIdx = activeTasks.findIndex((t) => t.id === selectedTask?.id);
+       
       setHighlightedIndex(currentIdx >= 0 ? currentIdx : 0);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [isOpen, activeTasks, selectedTask]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHighlightedIndex(0);
   }, [searchQuery]);
 

@@ -303,7 +303,7 @@ export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed
   // Cmd+1-9: switch panel tabs, Cmd+W / Alt+W: close active tab
   useEffect(() => {
     if (!pageState.inWorkspace) return;
-    const isTauri = !!(window as any).__TAURI__;
+    const isTauri = !!((window as Window & { __TAURI__?: unknown }).__TAURI__);
     const handler = (e: KeyboardEvent) => {
       // Cmd+1-9: switch panel tabs
       if (e.metaKey && !e.altKey && !e.ctrlKey && e.key >= "1" && e.key <= "9") {

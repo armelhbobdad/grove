@@ -54,6 +54,7 @@ export function FileContextMenu({
       newPos.y = Math.max(10, window.innerHeight - rect.height - 10);
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAdjustedPosition(newPos);
   }, [isOpen, position]);
 

@@ -46,6 +46,7 @@ interface ExpandProps {
 // Global counter for match indexing across all renders
 let globalMatchIndex = 0;
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function resetGlobalMatchIndex() {
   globalMatchIndex = 0;
 }
@@ -258,7 +259,8 @@ export function DiffFileView({
   const ref = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
   const [fileCommentText, setFileCommentText] = useState('');
-  const fileCommentMention = useFileMention({ mentionItems: mentionItems ?? null });
+  const fileCommentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileCommentMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: fileCommentTextareaRef });
 
   // Selection-based comment button
   const [selectionAnchor, setSelectionAnchor] = useState<{
@@ -960,7 +962,7 @@ export function DiffFileView({
                     <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>Comment on {file.new_path}</span>
                   </div>
                   <textarea
-                    ref={fileCommentMention.textareaRef}
+                    ref={fileCommentTextareaRef}
                     value={fileCommentText}
                     onChange={(e) => { setFileCommentText(e.target.value); fileCommentMention.handleChange(e.target.value); }}
                     placeholder="Leave a comment about this file... (type @ to mention files)"
@@ -985,7 +987,7 @@ export function DiffFileView({
                     onSelect={(path) => { const v = fileCommentMention.handleSelect(path); if (v !== null) setFileCommentText(v); }}
                     onMouseEnter={fileCommentMention.setSelectedIdx}
                     visible={fileCommentMention.showDropdown}
-                    anchorRef={fileCommentMention.textareaRef}
+                    anchorRef={fileCommentTextareaRef}
                     cursorIdx={fileCommentMention.atCharIdx}
                   />
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6 }}>
@@ -2556,12 +2558,8 @@ interface FullFileViewProps extends CommentProps {
   viewType: 'unified' | 'split';
 }
 
-function FullFileView({
-  file,
-  content,
-  language,
-  ...commentProps
-}: FullFileViewProps) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function FullFileView({ file: _file, content, language, ...commentProps }: FullFileViewProps) {
   const lines = useMemo(() => content.split('\n'), [content]);
   const htmlLines = useMemo(() => highlightLines(lines, language), [lines, language]);
 

@@ -156,7 +156,7 @@ export function InstallDialog({
         setWorkingAgentId(null);
       }
     },
-    [agentShareMap, installedAgentIds, repoKey, repoPath, commonInstallParams, onInstalled],
+    [agentShareMap, installedAgentIds, commonInstallParams, onInstalled],
   );
 
   // Install All

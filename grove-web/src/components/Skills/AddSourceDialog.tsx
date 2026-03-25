@@ -7,7 +7,7 @@ import { addSource, updateSource } from "../../api";
 import type { SkillSource } from "../../api";
 
 function extractNameFromUrl(url: string): string {
-  let cleaned = url.trim().replace(/\/+$/, "").replace(/\.git$/, "");
+  const cleaned = url.trim().replace(/\/+$/, "").replace(/\.git$/, "");
   const segments = cleaned.split(/[/:\\]/).filter(Boolean);
   return segments.length > 0 ? segments[segments.length - 1] : "";
 }

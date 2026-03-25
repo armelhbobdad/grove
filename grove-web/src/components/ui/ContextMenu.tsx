@@ -134,6 +134,7 @@ function DesktopContextMenu({ items, position, onClose }: ContextMenuProps) {
   // Reset focus when menu opens/closes
   useEffect(() => {
     if (position) {
+       
       setFocusedIndex(-1);
     }
   }, [position]);
@@ -141,14 +142,17 @@ function DesktopContextMenu({ items, position, onClose }: ContextMenuProps) {
   // Adjust position to keep menu within viewport
   useEffect(() => {
     if (!position) {
+       
       setAdjusted(null);
       return;
     }
     // Start with the mouse position, adjust after render
+     
     setAdjusted(position);
   }, [position]);
 
   // After render, check bounds and adjust
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!position || !menuRef.current) return;
     const rect = menuRef.current.getBoundingClientRect();
@@ -160,6 +164,7 @@ function DesktopContextMenu({ items, position, onClose }: ContextMenuProps) {
     if (x < 0) x = 8;
     if (y < 0) y = 8;
     if (x !== adjusted?.x || y !== adjusted?.y) {
+       
       setAdjusted({ x, y });
     }
   });

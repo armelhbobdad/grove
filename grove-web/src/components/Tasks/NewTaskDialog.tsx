@@ -28,7 +28,9 @@ export function NewTaskDialog({ isOpen, onClose, onCreate, isLoading, externalEr
   // Load branches and reset target when dialog opens
   useEffect(() => {
     if (isOpen && selectedProject) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTargetBranch(selectedProject.currentBranch || "main");
+       
       setIsLoadingBranches(true);
       getBranches(selectedProject.id, "local")
         .then((res) => {

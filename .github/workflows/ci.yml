@@ -38,6 +38,21 @@ jobs:
           components: clippy
       - run: cargo clippy -- -D warnings
 
+  eslint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: grove-web/package-lock.json
+      - run: npm ci
+        working-directory: grove-web
+      - run: npx eslint src/ --max-warnings 0
+        working-directory: grove-web
+
   build:
     name: Build (${{ matrix.cache-key }})
     runs-on: ${{ matrix.os }}

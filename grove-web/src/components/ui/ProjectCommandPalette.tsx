@@ -27,13 +27,16 @@ export function ProjectCommandPalette({ isOpen, onClose, onProjectSelect }: Proj
 
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSearchQuery("");
+       
       setHighlightedIndex(0);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [isOpen]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHighlightedIndex(0);
   }, [searchQuery]);
 

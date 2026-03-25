@@ -56,6 +56,7 @@ export function TerminalThemeProvider({ children }: { children: ReactNode }) {
     };
   }, [theme]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const setTerminalTheme = useCallback((_id: string) => {
     // Terminal theme now follows the app theme.
   }, []);
@@ -67,6 +68,7 @@ export function TerminalThemeProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTerminalTheme() {
   const ctx = useContext(TerminalThemeContext);
   if (!ctx) {

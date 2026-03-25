@@ -41,6 +41,7 @@ export function ProjectSelector({ collapsed, onManageProjects, onAddProject, onP
   // Reset search when dropdown closes, auto-focus when opens
   useEffect(() => {
     if (!isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSearchQuery("");
     } else {
       // Small delay to let the dropdown render before focusing

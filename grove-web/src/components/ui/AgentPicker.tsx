@@ -21,6 +21,7 @@ interface AgentOption {
 }
 
 // Agent options with icons
+// eslint-disable-next-line react-refresh/only-export-components
 export const agentOptions: AgentOption[] = [
   { id: "claude", label: "Claude Code", value: "claude", icon: Claude.Color, terminalCheck: "claude", acpCheck: "claude-code-acp" },
   { id: "codex", label: "CodeX", value: "codex", icon: OpenAI, terminalCheck: "codex", acpCheck: "codex-acp" },
@@ -87,6 +88,7 @@ export function AgentPicker({
       setCustomValue(value);
       setIsCustomMode(true);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Calculate dropdown position (fixed positioning, viewport-relative)

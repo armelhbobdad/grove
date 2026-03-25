@@ -32,6 +32,7 @@ export function UpdateBanner({ onClose }: UpdateBannerProps) {
   useEffect(() => {
     const dismissed = sessionStorage.getItem("update-banner-dismissed");
     if (dismissed === "true") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsDismissed(true);
       return;
     }

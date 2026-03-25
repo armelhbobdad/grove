@@ -52,8 +52,11 @@ export function CustomAgentModal({
   // Sync when opened
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLocalAgents(agents);
+       
       setViewMode("list");
+       
       setEditingIndex(null);
     }
   }, [isOpen, agents]);

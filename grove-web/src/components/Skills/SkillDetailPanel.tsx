@@ -23,10 +23,12 @@ export function SkillDetailPanel({ selectedSkill, agents, installed, projectPath
 
   useEffect(() => {
     if (!selectedSkill) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDetail(null);
       return;
     }
     let cancelled = false;
+     
     setIsLoading(true);
     getSkillDetail(selectedSkill.source, selectedSkill.name)
       .then((data) => { if (!cancelled) setDetail(data); })

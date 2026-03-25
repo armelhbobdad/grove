@@ -202,7 +202,8 @@ export function XTerminal({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [connectionKey]); // Re-run when connection parameters change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionKey]); // Re-run when connection parameters change (connectionKey encodes cwd/projectId/taskId)
 
   // Live theme switching without reconnecting WebSocket
   useEffect(() => {

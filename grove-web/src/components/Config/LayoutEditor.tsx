@@ -400,6 +400,7 @@ export function LayoutEditor({
   // Sync with external value when opening
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLocalLayouts(layouts.length > 0 ? layouts : [createDefaultLayout()]);
     }
   }, [isOpen, layouts]);
@@ -700,4 +701,5 @@ export function LayoutEditor({
 }
 
 // Export for use in SettingsPage
+// eslint-disable-next-line react-refresh/only-export-components
 export { createDefaultLayout, countPanes };

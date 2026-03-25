@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { X, Send, MessageSquare, Trash2, Reply, CheckCircle, RotateCcw, Minus, Pencil, Plus } from 'lucide-react';
 import type { ReviewCommentEntry } from '../../api/tasks';
 import type { CommentAnchor } from './DiffReviewPage';
@@ -44,8 +44,10 @@ export function CommentCard({ comment, onDelete, onReply, onResolve, onReopen, o
   const [editingReplyId, setEditingReplyId] = useState<number | null>(null);
   const [editReplyText, setEditReplyText] = useState('');
 
-  const editCommentMention = useFileMention({ mentionItems: mentionItems ?? null });
-  const editReplyMention = useFileMention({ mentionItems: mentionItems ?? null });
+  const editCommentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const editReplyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const editCommentMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: editCommentTextareaRef });
+  const editReplyMention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: editReplyTextareaRef });
 
   const statusColor =
     comment.status === 'resolved'
@@ -185,7 +187,7 @@ export function CommentCard({ comment, onDelete, onReply, onResolve, onReopen, o
           {editingComment ? (
             <div style={{ padding: '4px 0' }}>
               <textarea
-                ref={editCommentMention.textareaRef}
+                ref={editCommentTextareaRef}
                 className="diff-reply-textarea"
                 value={editCommentText}
                 onChange={(e) => { setEditCommentText(e.target.value); editCommentMention.handleChange(e.target.value); }}
@@ -202,7 +204,7 @@ export function CommentCard({ comment, onDelete, onReply, onResolve, onReopen, o
                 onSelect={(path) => { const v = editCommentMention.handleSelect(path); if (v !== null) setEditCommentText(v); }}
                 onMouseEnter={editCommentMention.setSelectedIdx}
                 visible={editCommentMention.showDropdown}
-                anchorRef={editCommentMention.textareaRef}
+                anchorRef={editCommentTextareaRef}
                 cursorIdx={editCommentMention.atCharIdx}
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
@@ -276,7 +278,7 @@ export function CommentCard({ comment, onDelete, onReply, onResolve, onReopen, o
               {editingReplyId === reply.id ? (
                 <div style={{ padding: '4px 0' }}>
                   <textarea
-                    ref={editReplyMention.textareaRef}
+                    ref={editReplyTextareaRef}
                     className="diff-reply-textarea"
                     value={editReplyText}
                     onChange={(e) => { setEditReplyText(e.target.value); editReplyMention.handleChange(e.target.value); }}
@@ -293,7 +295,7 @@ export function CommentCard({ comment, onDelete, onReply, onResolve, onReopen, o
                     onSelect={(path) => { const v = editReplyMention.handleSelect(path); if (v !== null) setEditReplyText(v); }}
                     onMouseEnter={editReplyMention.setSelectedIdx}
                     visible={editReplyMention.showDropdown}
-                    anchorRef={editReplyMention.textareaRef}
+                    anchorRef={editReplyTextareaRef}
                     cursorIdx={editReplyMention.atCharIdx}
                   />
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
@@ -347,12 +349,13 @@ interface ReplyFormProps {
 
 export function ReplyForm({ commentId, onSubmit, onCancel, mentionItems }: ReplyFormProps) {
   const [message, setMessage] = useState('');
-  const mention = useFileMention({ mentionItems: mentionItems ?? null });
+  const mentionTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const mention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: mentionTextareaRef });
 
   return (
     <div className="diff-reply-form">
       <textarea
-        ref={mention.textareaRef}
+        ref={mentionTextareaRef}
         className="diff-reply-textarea"
         value={message}
         onChange={(e) => { setMessage(e.target.value); mention.handleChange(e.target.value); }}
@@ -372,7 +375,7 @@ export function ReplyForm({ commentId, onSubmit, onCancel, mentionItems }: Reply
         onSelect={(path) => { const v = mention.handleSelect(path); if (v !== null) setMessage(v); }}
         onMouseEnter={mention.setSelectedIdx}
         visible={mention.showDropdown}
-        anchorRef={mention.textareaRef}
+        anchorRef={mentionTextareaRef}
         cursorIdx={mention.atCharIdx}
       />
       <div className="diff-reply-actions">
@@ -417,7 +420,8 @@ interface CommentFormProps {
 
 export function CommentForm({ anchor, onSubmit, onCancel, mentionItems }: CommentFormProps) {
   const [content, setContent] = useState('');
-  const mention = useFileMention({ mentionItems: mentionItems ?? null });
+  const mentionTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const mention = useFileMention({ mentionItems: mentionItems ?? null, textareaRef: mentionTextareaRef });
 
   const handleSubmit = () => {
     if (content.trim()) {
@@ -446,7 +450,7 @@ export function CommentForm({ anchor, onSubmit, onCancel, mentionItems }: Commen
         <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>New comment at {locationLabel}</span>
       </div>
       <textarea
-        ref={mention.textareaRef}
+        ref={mentionTextareaRef}
         value={content}
         onChange={(e) => { setContent(e.target.value); mention.handleChange(e.target.value); }}
         placeholder="Write a comment... (type @ to mention files)"
@@ -464,7 +468,7 @@ export function CommentForm({ anchor, onSubmit, onCancel, mentionItems }: Commen
         onSelect={(path) => { const v = mention.handleSelect(path); if (v !== null) setContent(v); }}
         onMouseEnter={mention.setSelectedIdx}
         visible={mention.showDropdown}
-        anchorRef={mention.textareaRef}
+        anchorRef={mentionTextareaRef}
         cursorIdx={mention.atCharIdx}
       />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6 }}>
