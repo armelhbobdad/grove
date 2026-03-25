@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use crate::acp::{
     self, AcpStartConfig, AcpUpdate, ContentBlockData, PromptCapabilitiesData, QueuedMessage,
 };
-use crate::storage::{chat_history, config, tasks, workspace};
+use crate::storage::{chat_attachments, chat_history, config, tasks, workspace};
 
 /// Client-to-server messages
 #[derive(Debug, Deserialize)]
@@ -185,6 +185,24 @@ struct PermOptionMsg {
     option_id: String,
     name: String,
     kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadAttachmentRequest {
+    name: String,
+    #[serde(default)]
+    mime_type: Option<String>,
+    data: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadAttachmentResponse {
+    r#type: String,
+    uri: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime_type: Option<String>,
+    size: i64,
 }
 
 impl From<AcpUpdate> for ServerMessage {
@@ -697,6 +715,36 @@ pub async fn delete_chat(
     let _ = std::fs::remove_file(acp::sock_path(&project_key, &task_id, &chat_id));
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Store a non-image/audio chat attachment on disk and return an ACP resource_link payload
+pub async fn upload_chat_attachment(
+    Path((project_id, task_id, chat_id)): Path<(String, String, String)>,
+    Json(body): Json<UploadAttachmentRequest>,
+) -> Result<Json<UploadAttachmentResponse>, AcpError> {
+    let (project_key, _, _) = resolve_project_key(&project_id)?;
+
+    let _ = tasks::get_chat_session(&project_key, &task_id, &chat_id)
+        .map_err(|e| AcpError::Internal(e.to_string()))?
+        .ok_or(AcpError::NotFound("Chat not found".to_string()))?;
+
+    let stored = chat_attachments::store_attachment(
+        &project_key,
+        &task_id,
+        &chat_id,
+        &body.name,
+        body.mime_type.as_deref(),
+        &body.data,
+    )
+    .map_err(|e| AcpError::Internal(e.to_string()))?;
+
+    Ok(Json(UploadAttachmentResponse {
+        r#type: "resource_link".to_string(),
+        uri: stored.uri,
+        name: stored.name,
+        mime_type: stored.mime_type,
+        size: stored.size,
+    }))
 }
 
 // ─── Chat WebSocket Handler ─────────────────────────────────────────────────

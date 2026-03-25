@@ -1758,6 +1758,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-server",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "crossterm",
@@ -1796,6 +1797,7 @@ dependencies = [
  "toml 0.8.2",
  "tower-http",
  "ureq",
+ "url",
  "walkdir",
 ]
 

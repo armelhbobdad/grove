@@ -371,6 +371,20 @@ interface UpdateChatTitleRequest {
   title: string;
 }
 
+interface UploadChatAttachmentRequest {
+  name: string;
+  mime_type?: string;
+  data: string;
+}
+
+interface UploadChatAttachmentResponse {
+  type: "resource_link";
+  uri: string;
+  name: string;
+  mime_type?: string;
+  size: number;
+}
+
 /**
  * List all chats for a task
  */
@@ -424,6 +438,18 @@ export async function deleteChat(
 ): Promise<void> {
   return apiClient.delete(
     `/api/v1/projects/${projectId}/tasks/${taskId}/chats/${chatId}`
+  );
+}
+
+export async function uploadChatAttachment(
+  projectId: string,
+  taskId: string,
+  chatId: string,
+  payload: UploadChatAttachmentRequest,
+): Promise<UploadChatAttachmentResponse> {
+  return apiClient.post<UploadChatAttachmentRequest, UploadChatAttachmentResponse>(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/chats/${chatId}/attachments`,
+    payload,
   );
 }
 
@@ -583,4 +609,3 @@ export async function takeControl(
     `/api/v1/projects/${projectId}/tasks/${taskId}/chats/${chatId}/take-control`
   );
 }
-

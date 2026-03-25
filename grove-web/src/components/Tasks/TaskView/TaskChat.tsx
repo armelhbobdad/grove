@@ -34,7 +34,7 @@ import { Button, MarkdownRenderer, agentOptions, FileMentionDropdown } from "../
 import { buildMentionItems, filterMentionItems } from "../../../utils/fileMention";
 import type { Task } from "../../../data/types";
 import { getApiHost, appendHmacToUrl } from "../../../api/client";
-import { getConfig, listChats, createChat, updateChatTitle, deleteChat, getTaskFiles, checkCommands, getChatHistory, takeControl, readFile } from "../../../api";
+import { getConfig, listChats, createChat, updateChatTitle, deleteChat, uploadChatAttachment, getTaskFiles, checkCommands, getChatHistory, takeControl, readFile } from "../../../api";
 import type { ChatSessionResponse, CustomAgent } from "../../../api";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -50,6 +50,8 @@ interface TaskChatProps {
   fullscreen?: boolean;
   onToggleFullscreen?: () => void;
   hideHeader?: boolean;
+  /** Navigate to a file (optionally at a line) in the Review panel */
+  onNavigateToFile?: (filePath: string, line?: number) => void;
 }
 
 type ToolMessage = {
@@ -81,6 +83,8 @@ interface Attachment {
   mimeType: string;
   name: string;       // display name
   previewUrl?: string; // blob URL for image preview
+  uri?: string;
+  size?: number;
 }
 
 type ChatMessage =
@@ -143,6 +147,18 @@ function defaultPerChatState(): PerChatState {
     planFilePath: "",
     planFileContent: "",
   };
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      resolve(dataUrl.split(",")[1] ?? "");
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
 }
 
 // ─── Render grouping types ───────────────────────────────────────────────────
@@ -328,6 +344,7 @@ export function TaskChat({
   fullscreen = false,
   onToggleFullscreen,
   hideHeader = false,
+  onNavigateToFile,
 }: TaskChatProps) {
   // ─── Multi-chat state ───────────────────────────────────────────────────
   const [chats, setChats] = useState<ChatSessionResponse[]>([]);
@@ -893,10 +910,12 @@ export function TaskChat({
             sender: msg.sender || undefined,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             attachments: msg.attachments?.map((a: any) => ({
-              type: a.type as "image" | "audio" | "resource",
+              type: a.type === "resource_link" ? "resource" : a.type as "image" | "audio" | "resource",
               data: a.data ?? "",
               mimeType: a.mime_type ?? "",
-              name: "",
+              name: a.name ?? "",
+              uri: a.uri ?? undefined,
+              size: a.size ?? undefined,
               previewUrl: a.type === "image" ? `data:${a.mime_type};base64,${a.data}` : undefined,
             })),
           }]);
@@ -1058,10 +1077,12 @@ export function TaskChat({
           sender: msg.sender || undefined,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           attachments: msg.attachments?.map((a: any) => ({
-            type: a.type as "image" | "audio" | "resource",
+            type: a.type === "resource_link" ? "resource" : a.type as "image" | "audio" | "resource",
             data: a.data ?? "",
             mimeType: a.mime_type ?? "",
-            name: "",
+            name: a.name ?? "",
+            uri: a.uri ?? undefined,
+            size: a.size ?? undefined,
             previewUrl: a.type === "image" ? `data:${a.mime_type};base64,${a.data}` : undefined,
           })),
         }];
@@ -1212,7 +1233,31 @@ export function TaskChat({
   }, [attachments.length]);
 
   /** Convert a File to an Attachment and add to state */
-  const addFileAsAttachment = useCallback((file: File) => {
+  const addFileAsAttachment = useCallback(async (file: File) => {
+    if (!file.type.startsWith("image/") && !file.type.startsWith("audio/")) {
+      if (!activeChatId) return;
+      try {
+        const data = await fileToBase64(file);
+        const uploaded = await uploadChatAttachment(projectId, task.id, activeChatId, {
+          name: file.name,
+          mime_type: file.type || undefined,
+          data,
+        });
+        setAttachments(prev => [...prev, {
+          type: "resource",
+          data: "",
+          mimeType: uploaded.mime_type ?? file.type ?? "application/octet-stream",
+          name: uploaded.name,
+          uri: uploaded.uri,
+          size: uploaded.size,
+        }]);
+      } catch (err) {
+        console.error("Failed to upload attachment:", err);
+        setMessages(prev => [...prev, { type: "system", content: `Failed to attach ${file.name}.` }]);
+      }
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
@@ -1227,7 +1272,7 @@ export function TaskChat({
       }]);
     };
     reader.readAsDataURL(file);
-  }, []);
+  }, [activeChatId, projectId, task.id]);
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments(prev => {
@@ -1272,9 +1317,19 @@ export function TaskChat({
 
     // Build attachments payload for server
     const contentAttachments = attachments.map(att => ({
-      type: att.type,
-      data: att.data,
-      mime_type: att.mimeType,
+      ...(att.type === "resource"
+        ? {
+            type: "resource_link",
+            uri: att.uri,
+            name: att.name,
+            mime_type: att.mimeType || undefined,
+            size: att.size,
+          }
+        : {
+            type: att.type,
+            data: att.data,
+            mime_type: att.mimeType,
+          }),
     }));
 
     if (isBusy) {
@@ -1537,8 +1592,9 @@ export function TaskChat({
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     files.forEach(file => {
-      if (file.type.startsWith("image/") && promptCaps.image) addFileAsAttachment(file);
-      else if (file.type.startsWith("audio/") && promptCaps.audio) addFileAsAttachment(file);
+      if (file.type.startsWith("image/") && promptCaps.image) void addFileAsAttachment(file);
+      else if (file.type.startsWith("audio/") && promptCaps.audio) void addFileAsAttachment(file);
+      else void addFileAsAttachment(file);
     });
     // Reset input so same file can be selected again
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1547,8 +1603,8 @@ export function TaskChat({
   /** Drag & drop handlers */
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    if (promptCaps.image || promptCaps.audio) setIsDragging(true);
-  }, [promptCaps.image, promptCaps.audio]);
+    setIsDragging(true);
+  }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     // Only set false when leaving the container (not entering a child)
@@ -1560,8 +1616,9 @@ export function TaskChat({
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files);
     files.forEach(file => {
-      if (file.type.startsWith("image/") && promptCaps.image) addFileAsAttachment(file);
-      else if (file.type.startsWith("audio/") && promptCaps.audio) addFileAsAttachment(file);
+      if (file.type.startsWith("image/") && promptCaps.image) void addFileAsAttachment(file);
+      else if (file.type.startsWith("audio/") && promptCaps.audio) void addFileAsAttachment(file);
+      else void addFileAsAttachment(file);
     });
   }, [promptCaps.image, promptCaps.audio, addFileAsAttachment]);
 
@@ -2002,7 +2059,7 @@ export function TaskChat({
         {renderItems.map((item) =>
           item.kind === "single" ? (
             <MessageItem key={`m-${item.index}`} message={item.message} index={item.index} isBusy={isBusy} agentLabel={agentLabel}
-              onToggleThinkingCollapse={toggleThinkingCollapse} onPermissionResponse={handlePermissionResponse} />
+              onToggleThinkingCollapse={toggleThinkingCollapse} onPermissionResponse={handlePermissionResponse} onFileClick={onNavigateToFile} />
           ) : (
             <ToolSectionView
               key={`ts-${item.sectionId}`}
@@ -2088,7 +2145,7 @@ export function TaskChat({
                     <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                       {planFilePath.split("/").pop()}
                     </div>
-                    <MarkdownRenderer content={planFileContent} />
+                    <MarkdownRenderer content={planFileContent} onFileClick={onNavigateToFile} />
                   </div>
                 )}
 
@@ -2244,7 +2301,6 @@ export function TaskChat({
         <input
           ref={fileInputRef}
           type="file"
-          accept={[promptCaps.image ? "image/*" : "", promptCaps.audio ? "audio/*" : ""].filter(Boolean).join(",")}
           multiple
           className="hidden"
           onChange={handleFileSelect}
@@ -2357,6 +2413,10 @@ export function TaskChat({
                   ) : att.type === "audio" ? (
                     <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
                       <Mic className="w-4 h-4 text-[var(--color-text-muted)]" />
+                    </div>
+                  ) : att.type === "resource" ? (
+                    <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
+                      <Paperclip className="w-4 h-4 text-[var(--color-text-muted)]" />
                     </div>
                   ) : null}
                   <div className="min-w-0">
@@ -2523,10 +2583,11 @@ const DropdownSelect = ({ ref, label, options, value, open, onToggle, onSelect }
 );
 
 /** Individual message rendering */
-function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingCollapse, onPermissionResponse }: {
+function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingCollapse, onPermissionResponse, onFileClick }: {
   message: ChatMessage; index: number; isBusy: boolean; agentLabel?: string;
   onToggleThinkingCollapse: (index: number) => void;
   onPermissionResponse?: (optionId: string, optionName: string) => void;
+  onFileClick?: (filePath: string, line?: number) => void;
 }) {
   switch (message.type) {
     case "user":
@@ -2546,6 +2607,25 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
                     onClick={() => window.open(att.previewUrl, '_blank')} alt="" />
                 ) : att.type === "audio" ? (
                   <audio key={i} controls src={`data:${att.mimeType};base64,${att.data}`} className="max-w-full mb-2" />
+                ) : att.type === "resource" ? (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => att.uri && window.open(att.uri, "_blank")}
+                    className="mb-2 flex w-full max-w-[320px] items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-border)_70%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_72%,transparent)] px-3 py-2 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]"
+                    title={att.uri ?? att.name}
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] bg-[var(--color-bg-secondary)]">
+                      <Paperclip className="h-4 w-4 text-[var(--color-text-muted)]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-[var(--color-text)]">{att.name}</div>
+                      <div className="text-[10px] uppercase text-[var(--color-text-muted)]">
+                        {att.mimeType || "file"}
+                        {typeof att.size === "number" ? ` • ${Math.max(1, Math.round(att.size / 1024))} KB` : ""}
+                      </div>
+                    </div>
+                  </button>
                 ) : null
               ))}
               {message.content && <div className="whitespace-pre-wrap">{message.content}</div>}
@@ -2559,7 +2639,7 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
       return (
         <div className="flex justify-start">
           <div className="max-w-[82%] text-sm text-[var(--color-text)]">
-            <MarkdownRenderer content={message.content} />
+            <MarkdownRenderer content={message.content} onFileClick={onFileClick} />
             {!message.complete && isBusy && (
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-[var(--color-text-muted)] animate-pulse rounded-sm" />
             )}
@@ -2664,9 +2744,10 @@ function isSecondaryTool(title: string): boolean {
 }
 
 /** Single tool row used inside ToolSectionView */
-function ToolItemRow({ message, onToggleCollapse }: {
+function ToolItemRow({ message, onToggleCollapse, onFileClick }: {
   message: ToolMessage;
   onToggleCollapse: (id: string) => void;
+  onFileClick?: (filePath: string, line?: number) => void;
 }) {
   const isRunning = message.status === "running";
   const loc = message.locations?.[0];
@@ -2710,7 +2791,7 @@ function ToolItemRow({ message, onToggleCollapse }: {
         <div className="ml-6 mt-1">
           {isWriteMarkdown ? (
             <div className="text-xs max-h-64 overflow-y-auto">
-              <MarkdownRenderer content={stripWrappingFence(message.content!.trim())} />
+              <MarkdownRenderer content={stripWrappingFence(message.content!.trim())} onFileClick={onFileClick} />
             </div>
           ) : (
             <ToolContentBlock content={message.content!} />

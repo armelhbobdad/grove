@@ -83,6 +83,8 @@ hex = "0.4"
 rcgen = { version = "0.13", features = ["pem"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+base64 = "0.22"
+url = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }

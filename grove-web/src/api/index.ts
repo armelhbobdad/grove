@@ -41,6 +41,7 @@ export {
   createChat,
   updateChatTitle,
   deleteChat,
+  uploadChatAttachment,
   getChatHistory,
   takeControl,
   readFile,

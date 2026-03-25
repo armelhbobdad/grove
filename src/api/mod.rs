@@ -85,6 +85,10 @@ pub fn create_api_router() -> Router {
             "/projects/{id}/tasks/{taskId}/chats/{chatId}",
             patch(handlers::acp::update_chat).delete(handlers::acp::delete_chat),
         )
+        .route(
+            "/projects/{id}/tasks/{taskId}/chats/{chatId}/attachments",
+            post(handlers::acp::upload_chat_attachment),
+        )
         // Chat WebSocket (per-chat)
         .route(
             "/projects/{id}/tasks/{taskId}/chats/{chatId}/ws",

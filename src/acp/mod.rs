@@ -183,6 +183,14 @@ pub enum ContentBlockData {
         data: String,
         mime_type: String,
     },
+    ResourceLink {
+        uri: String,
+        name: String,
+        mime_type: Option<String>,
+        size: Option<i64>,
+        title: Option<String>,
+        description: Option<String>,
+    },
     Resource {
         uri: String,
         mime_type: Option<String>,
@@ -755,6 +763,20 @@ fn to_acp_content_block(block: &ContentBlockData) -> acp::ContentBlock {
         ContentBlockData::Audio { data, mime_type } => {
             acp::ContentBlock::Audio(acp::AudioContent::new(data, mime_type))
         }
+        ContentBlockData::ResourceLink {
+            uri,
+            name,
+            mime_type,
+            size,
+            title,
+            description,
+        } => acp::ContentBlock::ResourceLink(
+            acp::ResourceLink::new(name.clone(), uri.clone())
+                .mime_type(mime_type.clone())
+                .size(*size)
+                .title(title.clone())
+                .description(description.clone()),
+        ),
         ContentBlockData::Resource {
             uri,
             mime_type: _,
