@@ -134,6 +134,50 @@ body {
   }
 }
 
+@keyframes chatbox-border-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+
+.chatbox-busy-track {
+  stroke: color-mix(in srgb, var(--color-highlight) 18%, transparent);
+  stroke-width: 1;
+  opacity: 0.22;
+}
+
+.chatbox-busy-glow,
+.chatbox-busy-core,
+.chatbox-busy-tail {
+  stroke-linecap: round;
+  animation: chatbox-border-flow 5.6s linear infinite;
+}
+
+.chatbox-busy-glow {
+  stroke: color-mix(in srgb, var(--color-highlight) 22%, white 8%);
+  stroke-width: 3.2;
+  stroke-dasharray: 120 880;
+  opacity: 0.24;
+}
+
+.chatbox-busy-tail {
+  stroke: color-mix(in srgb, var(--color-highlight) 54%, white 10%);
+  stroke-width: 1.15;
+  stroke-dasharray: 42 958;
+  animation-delay: -0.18s;
+  opacity: 0.42;
+}
+
+.chatbox-busy-core {
+  stroke: color-mix(in srgb, var(--color-highlight) 86%, white 10%);
+  stroke-width: 1.45;
+  stroke-dasharray: 68 932;
+  opacity: 0.78;
+}
+
 /* Blitz mode: Show shortcuts when Command key is pressed */
 body.blitz-command-pressed .blitz-shortcut {
   opacity: 1 !important;

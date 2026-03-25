@@ -28,6 +28,7 @@ import {
   Terminal,
   Eye,
   BookOpen,
+  ArrowDown,
 } from "lucide-react";
 import { Button, MarkdownRenderer, agentOptions, FileMentionDropdown } from "../../ui";
 import { buildMentionItems, filterMentionItems } from "../../../utils/fileMention";
@@ -348,6 +349,7 @@ export function TaskChat({
   const [AgentIcon, setAgentIcon] = useState<React.ComponentType<{ size?: number; className?: string }> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesViewportRef = useRef<HTMLDivElement>(null);
   const editableRef = useRef<HTMLDivElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const permMenuRef = useRef<HTMLDivElement>(null);
@@ -363,8 +365,11 @@ export function TaskChat({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const planFilePathRef = useRef("");
   const planFileToolIdsRef = useRef<Set<string>>(new Set());
+  const shouldStickToBottomRef = useRef(true);
 
   // ─── Read-only observation mode state ──────────────────────────────────
   const [isRemoteSession, setIsRemoteSession] = useState(false);
@@ -465,13 +470,35 @@ export function TaskChat({
   }, [projectId, task.id]);
 
   // Auto-scroll to bottom — only when new messages arrive, not on collapse toggle
+  const updateScrollState = useCallback(() => {
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const isAtBottom = distanceFromBottom < 40;
+    shouldStickToBottomRef.current = isAtBottom;
+    setShowScrollToBottom(!isAtBottom && messages.length > 0);
+  }, [messages.length]);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, []);
+
   const prevMsgCountRef = useRef(0);
   useEffect(() => {
-    if (messages.length > prevMsgCountRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messages.length > prevMsgCountRef.current && shouldStickToBottomRef.current) {
+      scrollMessagesToBottom("smooth");
     }
     prevMsgCountRef.current = messages.length;
-  }, [messages]);
+    requestAnimationFrame(updateScrollState);
+  }, [messages, scrollMessagesToBottom, updateScrollState]);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      shouldStickToBottomRef.current = true;
+      scrollMessagesToBottom("auto");
+      updateScrollState();
+    });
+  }, [activeChatId, scrollMessagesToBottom, updateScrollState]);
 
   // Auto-scroll slash menu to keep selected item visible
   useEffect(() => {
@@ -1768,7 +1795,8 @@ export function TaskChat({
       )}
       {/* Header */}
       {!hideHeader && (
-      <div className="flex items-center justify-between px-3 py-2 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)]">
+      <div className="border-b border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)] backdrop-blur-sm">
+        <div className="flex w-full items-center justify-between px-4 py-2">
         <div className="flex items-center gap-2 text-sm min-w-0">
           {AgentIcon ? <AgentIcon size={16} className="text-[var(--color-text-muted)] shrink-0" /> : <MessageSquare className="w-4 h-4 text-[var(--color-text-muted)] shrink-0" />}
 
@@ -1921,10 +1949,16 @@ export function TaskChat({
           )}
         </div>
       </div>
+      </div>
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0 bg-[var(--color-bg-secondary)]">
+      <div
+        ref={messagesViewportRef}
+        onScroll={updateScrollState}
+        className="relative flex-1 overflow-y-auto px-4 pt-4 pb-44 min-h-0"
+      >
+        <div className="flex w-full flex-col gap-3">
         {renderItems.map((item) =>
           item.kind === "single" ? (
             <MessageItem key={`m-${item.index}`} message={item.message} index={item.index} isBusy={isBusy} agentLabel={agentLabel}
@@ -1954,10 +1988,12 @@ export function TaskChat({
         )}
         <div ref={messagesEndRef} />
       </div>
+      </div>
 
       {/* Todo Section (from ACP Plan notifications) */}
       {planEntries.length > 0 && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
+        <div className="border-t border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]">
+          <div className="w-full">
           <button onClick={() => { const next = !showPlan; setShowPlan(next); if (next) { setShowPlanFile(false); setShowPendingQueue(false); } }}
             className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
             <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
@@ -2002,12 +2038,14 @@ export function TaskChat({
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </div>
       )}
 
       {/* Plan Section (markdown plan file) */}
       {planFileContent && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
+        <div className="border-t border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]">
+          <div className="w-full">
           <button onClick={() => { const next = !showPlanFile; setShowPlanFile(next); if (next) { setShowPlan(false); setShowPendingQueue(false); } }}
             className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
             <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
@@ -2034,12 +2072,14 @@ export function TaskChat({
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </div>
       )}
 
       {/* Pending Queue */}
       {pendingMessages.length > 0 && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
+        <div className="border-t border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]">
+          <div className="w-full">
           <button onClick={() => { const next = !showPendingQueue; setShowPendingQueue(next); if (next) { setShowPlan(false); setShowPlanFile(false); } }}
             className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-[var(--color-bg-tertiary)] transition-colors">
             <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
@@ -2121,12 +2161,14 @@ export function TaskChat({
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </div>
       )}
 
       {/* Read-only observation mode banner */}
       {isRemoteSession && (
-        <div className="flex items-center justify-between px-3 py-2 bg-[color-mix(in_srgb,var(--color-warning)_12%,var(--color-bg))] border-t border-[var(--color-warning)]">
+        <div className="border-t border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,var(--color-bg))]">
+          <div className="flex w-full items-center justify-between px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-[var(--color-warning)]">
             <Eye className="w-3.5 h-3.5" />
             <span>Read-only — controlled by <strong>{remoteOwnerName}</strong></span>
@@ -2142,10 +2184,39 @@ export function TaskChat({
             Take Control
           </Button>
         </div>
+        </div>
       )}
 
       {/* Input */}
-      <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)] px-3 pt-3 pb-2 relative">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pt-2 pb-4">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-bg)_96%,transparent),transparent)]" />
+        <div className="pointer-events-auto relative mx-auto w-full max-w-[920px]">
+        <AnimatePresence>
+          {showScrollToBottom && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="absolute inset-x-0 top-0 z-20 -translate-y-[118%]"
+            >
+              <button
+                onClick={() => {
+                  shouldStickToBottomRef.current = true;
+                  scrollMessagesToBottom("smooth");
+                  setShowScrollToBottom(false);
+                }}
+                className="group relative mx-auto flex items-center gap-2 rounded-full px-3 py-2 text-[15px] font-medium tracking-[0.01em] text-[color-mix(in_srgb,var(--color-highlight)_80%,white_4%)] transition-all duration-200 hover:text-[color-mix(in_srgb,var(--color-highlight)_96%,white_8%)]"
+              >
+                <span className="pointer-events-none absolute inset-0 rounded-full bg-[color-mix(in_srgb,var(--color-highlight)_8%,transparent)] opacity-0 blur-md transition-all duration-200 group-hover:opacity-100" />
+                <span className="relative flex items-center gap-2">
+                  <ArrowDown className="h-4 w-4" />
+                  <span>Scroll to bottom</span>
+                </span>
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {/* Slash command autocomplete popover */}
         <AnimatePresence>
           {showSlashMenu && filteredSlashCommands.length > 0 && (
@@ -2189,27 +2260,6 @@ export function TaskChat({
           menuRef={fileMenuRef}
         />
 
-        {/* Attachment preview strip */}
-        {attachments.length > 0 && (
-          <div className="flex gap-2 px-1 pb-2 flex-wrap">
-            {attachments.map((att, i) => (
-              <div key={i} className="relative group">
-                {att.type === "image" && att.previewUrl ? (
-                  <img src={att.previewUrl} className="w-16 h-16 object-cover rounded border border-[var(--color-border)]" alt={att.name} />
-                ) : att.type === "audio" ? (
-                  <div className="w-16 h-16 rounded border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)]">
-                    <Mic className="w-6 h-6 text-[var(--color-text-muted)]" />
-                  </div>
-                ) : null}
-                <button onClick={() => removeAttachment(i)}
-                  className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-[var(--color-error)] text-white flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
-                  &times;
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
@@ -2220,145 +2270,222 @@ export function TaskChat({
           onChange={handleFileSelect}
         />
 
-        <div className="flex gap-2 items-end">
-          {/* Attachment button */}
-          {(promptCaps.image || promptCaps.audio) && (
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="h-9 w-9 flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
-              title="Attach file"
+        <div
+          className={`relative min-w-0 rounded-[30px] border border-[color-mix(in_srgb,var(--color-border)_62%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,transparent)] px-3 pt-2 pb-3 shadow-[0_22px_60px_rgba(0,0,0,0.18)] backdrop-blur-md transition-all ${
+            isTerminalMode
+              ? "focus-within:border-[var(--color-warning)]"
+              : "focus-within:border-[color-mix(in_srgb,var(--color-highlight)_82%,white_8%)]"
+          }`}
+          style={{ transform: "translateY(-6px)" }}
+        >
+          {isBusy && (
+            <svg
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+              viewBox="0 0 1000 220"
+              preserveAspectRatio="none"
             >
-              <Paperclip className="w-4 h-4" />
-            </button>
+              <defs>
+                <filter id="chatboxBusyGlow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="3.5" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              <rect
+                x="1.5"
+                y="1.5"
+                width="997"
+                height="217"
+                rx="34"
+                ry="34"
+                fill="none"
+                pathLength="1000"
+                className="chatbox-busy-track"
+              />
+              <rect
+                x="1.5"
+                y="1.5"
+                width="997"
+                height="217"
+                rx="34"
+                ry="34"
+                fill="none"
+                pathLength="1000"
+                filter="url(#chatboxBusyGlow)"
+                className="chatbox-busy-glow"
+              />
+              <rect
+                x="1.5"
+                y="1.5"
+                width="997"
+                height="217"
+                rx="34"
+                ry="34"
+                fill="none"
+                pathLength="1000"
+                className="chatbox-busy-tail"
+              />
+              <rect
+                x="1.5"
+                y="1.5"
+                width="997"
+                height="217"
+                rx="34"
+                ry="34"
+                fill="none"
+                pathLength="1000"
+                className="chatbox-busy-core"
+              />
+            </svg>
           )}
-
-          <div
-            className={`flex-1 relative min-w-0 rounded-lg border bg-[var(--color-bg-secondary)] transition-all ${
-              isTerminalMode
-                ? "border-[var(--color-warning)] focus-within:border-[var(--color-warning)]"
-                : "border-[var(--color-border)] focus-within:border-[var(--color-highlight)]"
-            }`}
-          >
-            {/* Placeholder overlay */}
-            {!hasContent && (
-              <div className={`absolute ${isInputExpanded ? "top-0 left-0 right-0 h-9" : "inset-0"} flex items-center px-3 text-sm text-[var(--color-text-muted)] pointer-events-none select-none`}>
-                {!isConnected
-                  ? "Waiting for connection..."
-                  : isTerminalMode
-                    ? "Enter shell command\u2026"
-                    : isBusy
-                      ? "Queue a message\u2026"
-                      : isInputExpanded
-                        ? "Write your message\u2026 (\u2318\u21A9 to send)"
-                        : "Message agent\u2026"}
+          <div className="mb-2 flex items-center justify-between gap-2 pr-10">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-bg)] px-2.5 py-1 text-[11px] text-[var(--color-text)] min-w-0 max-w-full">
+                {AgentIcon ? <AgentIcon size={12} className="shrink-0 text-[var(--color-highlight)]" /> : <Bot className="w-3 h-3 shrink-0 text-[var(--color-highlight)]" />}
+                <span className="text-[var(--color-text-muted)] shrink-0">Agent</span>
+                <span className="truncate font-medium">{agentLabel}</span>
               </div>
-            )}
-            {/* Terminal mode indicator */}
-            {isTerminalMode && !isInputExpanded && (
-              <div className="absolute right-8 top-1/2 -translate-y-1/2 text-[10px] font-medium text-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-1.5 py-0.5 rounded pointer-events-none select-none">
-                SHELL
-              </div>
-            )}
-            {/* Expand/Collapse toggle */}
-            <button
-              onClick={() => {
-                setIsInputExpanded(v => {
-                  if (!v) { setShowPlan(false); setShowPlanFile(false); }
-                  return !v;
-                });
-                setTimeout(() => editableRef.current?.focus(), 0);
-              }}
-              className="absolute right-1.5 top-1.5 p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] rounded transition-colors z-10"
-              title={isInputExpanded ? "Collapse input (Esc)" : "Expand input"}
-            >
-              {isInputExpanded
-                ? <Minimize2 className="w-3.5 h-3.5" />
-                : <Maximize2 className="w-3.5 h-3.5" />}
-            </button>
-            <div
-              ref={editableRef}
-              contentEditable={isConnected && !isRemoteSession}
-              suppressContentEditableWarning
-              onInput={handleInput}
-              onKeyDown={handleKeyDown}
-              onMouseDown={handleEditableMouseDown}
-              onPaste={handlePaste}
-              className={`overflow-y-auto px-3 py-2 pr-8 text-sm text-[var(--color-text)] focus:outline-none ${
-                isInputExpanded ? "min-h-[40vh] max-h-[60vh]" : "min-h-[36px] max-h-32"
-              } ${!isConnected || isRemoteSession ? "opacity-50 cursor-not-allowed" : ""}`}
-              style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
-            />
-            {/* Expanded mode: attachment preview + footer inside the box */}
-            {isInputExpanded && attachments.length > 0 && (
-              <div className="flex gap-2 px-3 pb-2 flex-wrap border-t border-[var(--color-border)]">
-                {attachments.map((att, i) => (
-                  <div key={i} className="relative group mt-2">
-                    {att.type === "image" && att.previewUrl ? (
-                      <img src={att.previewUrl} className="w-12 h-12 object-cover rounded border border-[var(--color-border)]" alt={att.name} />
-                    ) : att.type === "audio" ? (
-                      <div className="w-12 h-12 rounded border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)]">
-                        <Mic className="w-4 h-4 text-[var(--color-text-muted)]" />
-                      </div>
-                    ) : null}
-                    <button onClick={() => removeAttachment(i)}
-                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-[var(--color-error)] text-white flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
-                      &times;
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {/* Expanded mode footer: hints only */}
-            {isInputExpanded && (
-              <div className="flex items-center px-3 py-1.5 border-t border-[var(--color-border)]">
-                <span className="text-[10px] text-[var(--color-text-muted)] opacity-60">
-                  {"\u2318\u21A9"} send &middot; {"\u21A9"} newline &middot; Esc collapse
-                </span>
-              </div>
-            )}
-          </div>
-          {!isBusy && hasContent ? (
-            <Button variant="primary" size="sm" className="h-9 w-9 !p-0" onClick={handleSend} disabled={!isConnected}>
-              <Send className="w-4 h-4" />
-            </Button>
-          ) : isBusy && hasContent ? (
-            <Button variant="primary" size="sm" className="h-9 w-9 !p-0" onClick={handleSend}>
-              <ListPlus className="w-4 h-4" />
-            </Button>
-          ) : isBusy && !hasContent ? (
-            pendingMessages.length > 0 ? (
-              <Button variant="secondary" size="sm" className="h-9 w-9 !p-0" onClick={handleSendNow}>
-                <Send className="w-4 h-4" />
-              </Button>
-            ) : (
-              <Button variant="secondary" size="sm" className="h-9 w-9 !p-0" onClick={handleStopAgent}>
-                <Square className="w-3.5 h-3.5" />
-              </Button>
-            )
-          ) : (
-            <Button variant="primary" size="sm" className="h-9 w-9 !p-0" disabled>
-              <Send className="w-4 h-4" />
-            </Button>
-          )}
-        </div>
-
-        {/* Bottom Toolbar */}
-        {(modelOptions.length > 0 || modeOptions.length > 0) && (
-          <div className="flex items-center justify-end mt-2">
-            <div className="flex items-center gap-2">
-              {modelOptions.length > 0 && (
-                <DropdownSelect ref={modelMenuRef} label="Model" options={modelOptions} value={selectedModel}
-                  open={showModelMenu} onToggle={() => { setShowModelMenu(!showModelMenu); setShowPermMenu(false); }}
-                  onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); }} />
-              )}
-              {modeOptions.length > 0 && (
-                <DropdownSelect ref={permMenuRef} label="Mode" options={modeOptions} value={permissionLevel}
-                  open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
-                  onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); }} />
+              {isTerminalMode && (
+                <div className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]">
+                  <Terminal className="w-3 h-3" />
+                  Shell
+                </div>
               )}
             </div>
+            {(modelOptions.length > 0 || modeOptions.length > 0) && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                {modelOptions.length > 0 && (
+                  <DropdownSelect ref={modelMenuRef} label="Model" options={modelOptions} value={selectedModel}
+                    open={showModelMenu} onToggle={() => { setShowModelMenu(!showModelMenu); setShowPermMenu(false); }}
+                    onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); }} />
+                )}
+                {modeOptions.length > 0 && (
+                  <DropdownSelect ref={permMenuRef} label="Mode" options={modeOptions} value={permissionLevel}
+                    open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
+                    onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); }} />
+                )}
+              </div>
+            )}
           </div>
-        )}
+
+          {attachments.length > 0 && (
+            <div className="mb-2 flex gap-2 flex-wrap">
+              {attachments.map((att, i) => (
+                <div key={i} className="group relative flex items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 pr-7 max-w-full">
+                  {att.type === "image" && att.previewUrl ? (
+                    <img src={att.previewUrl} className="w-8 h-8 object-cover rounded-md border border-[var(--color-border)] shrink-0" alt={att.name} />
+                  ) : att.type === "audio" ? (
+                    <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
+                      <Mic className="w-4 h-4 text-[var(--color-text-muted)]" />
+                    </div>
+                  ) : null}
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-[var(--color-text)] truncate max-w-40">{att.name}</div>
+                    <div className="text-[10px] text-[var(--color-text-muted)] uppercase">{att.type}</div>
+                  </div>
+                  <button onClick={() => removeAttachment(i)}
+                    className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-[var(--color-error)] text-white flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
+                    &times;
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!hasContent && !isInputFocused && (
+            <div className={`absolute ${attachments.length > 0 ? "top-[86px]" : "top-[42px]"} left-4 right-16 h-10 flex items-center text-sm text-[var(--color-text-muted)] pointer-events-none select-none`}>
+              {!isConnected
+                ? "Waiting for connection..."
+                : isTerminalMode
+                  ? "Enter shell command\u2026"
+                  : isBusy
+                    ? "Queue a message\u2026"
+                    : "Ask anything… use @ for mentions, / for commands"}
+            </div>
+          )}
+
+          <button
+            onClick={() => {
+              setIsInputExpanded(v => {
+                if (!v) { setShowPlan(false); setShowPlanFile(false); }
+                return !v;
+              });
+              setTimeout(() => editableRef.current?.focus(), 0);
+            }}
+            className="absolute right-3 top-2.5 p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors z-10"
+            title={isInputExpanded ? "Collapse input (Esc)" : "Expand input"}
+          >
+            {isInputExpanded
+              ? <Minimize2 className="w-3.5 h-3.5" />
+              : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+
+          <div
+            ref={editableRef}
+            contentEditable={isConnected && !isRemoteSession}
+            suppressContentEditableWarning
+            onInput={handleInput}
+            onKeyDown={handleKeyDown}
+            onMouseDown={handleEditableMouseDown}
+            onFocus={() => setIsInputFocused(true)}
+            onBlur={() => setIsInputFocused(false)}
+            onPaste={handlePaste}
+            className={`overflow-y-auto px-4 py-2 text-sm leading-7 text-[var(--color-text)] focus:outline-none ${
+              isInputExpanded ? "min-h-[32vh] max-h-[56vh]" : "min-h-[56px] max-h-32"
+            } ${!isConnected || isRemoteSession ? "opacity-50 cursor-not-allowed" : ""}`}
+            style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
+          />
+
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {(promptCaps.image || promptCaps.audio) && (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-9 w-9 flex items-center justify-center rounded-xl bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
+                  title="Attach file"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+              )}
+              <span className="truncate text-[10px] text-[var(--color-text-muted)]">
+                {!isConnected
+                  ? "Offline"
+                  : isBusy
+                    ? (hasContent ? "Ready to queue" : (pendingMessages.length > 0 ? `${pendingMessages.length} queued` : "Agent running"))
+                    : isInputExpanded
+                      ? "\u2318\u21A9 send \u00b7 \u21A9 newline"
+                      : "Enter send"}
+              </span>
+            </div>
+            {!isBusy && hasContent ? (
+              <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend} disabled={!isConnected}>
+                <Send className="w-4 h-4" />
+              </Button>
+            ) : isBusy && hasContent ? (
+              <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend}>
+                <ListPlus className="w-4 h-4" />
+              </Button>
+            ) : isBusy && !hasContent ? (
+              pendingMessages.length > 0 ? (
+                <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleSendNow}>
+                  <Send className="w-4 h-4" />
+                </Button>
+              ) : (
+                <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleStopAgent}>
+                  <Square className="w-3.5 h-3.5" />
+                </Button>
+              )
+            ) : (
+              <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" disabled>
+                <Send className="w-4 h-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+        </div>
       </div>
     </motion.div>
   );
@@ -2378,10 +2505,10 @@ const DropdownSelect = ({ ref, label, options, value, open, onToggle, onSelect }
 }) => (
   <div className="relative" ref={ref}>
     <button onClick={onToggle}
-      className="flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--color-bg-tertiary)]">
-      <span className="opacity-60">{label}:</span>
-      <span>{options.find((o) => o.value === value)?.label ?? "Default"}</span>
-      <ChevronDown className="w-3 h-3" />
+      className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--color-bg)] px-2.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
+      <span className="opacity-70">{label}</span>
+      <span className="max-w-40 truncate text-[var(--color-text)]">{options.find((o) => o.value === value)?.label ?? "Default"}</span>
+      <ChevronDown className="w-3 h-3 opacity-70" />
     </button>
     {open && (
       <div className="absolute bottom-full right-0 mb-1 min-w-44 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 z-50">
@@ -2408,14 +2535,14 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
     case "user":
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%]">
+          <div className="max-w-[80%]">
             {message.sender && (
               <div className="text-[10px] text-[var(--color-text-muted)] text-right mb-0.5 px-1 flex items-center justify-end gap-1">
                 <Bot className="w-2.5 h-2.5" />
                 {message.sender}
               </div>
             )}
-            <div className="rounded-lg px-3 py-2 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] text-sm text-[var(--color-text)]">
+            <div className="rounded-2xl px-3.5 py-2.5 bg-[color-mix(in_srgb,var(--color-bg-tertiary)_78%,transparent)] border border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] text-sm text-[var(--color-text)] shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
               {message.attachments?.map((att, i) => (
                 att.type === "image" && att.previewUrl ? (
                   <img key={i} src={att.previewUrl} className="max-w-full max-h-48 rounded mb-2 cursor-pointer"
@@ -2434,7 +2561,7 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
       if (!message.content.trim()) return null;
       return (
         <div className="flex justify-start">
-          <div className="max-w-[90%] text-sm text-[var(--color-text)]">
+          <div className="max-w-[82%] text-sm text-[var(--color-text)]">
             <MarkdownRenderer content={message.content} />
             {!message.complete && isBusy && (
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-[var(--color-text-muted)] animate-pulse rounded-sm" />
@@ -2445,7 +2572,7 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
     case "thinking":
       return (
         <div className="flex justify-start">
-          <div className="max-w-[90%] w-full">
+          <div className="max-w-[82%] w-full">
             <button onClick={() => onToggleThinkingCollapse(index)}
               className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors mb-1">
               <Brain className="w-3 h-3" />
