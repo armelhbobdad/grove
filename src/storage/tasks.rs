@@ -543,7 +543,7 @@ mod tests {
         // 格式: feature/add-oauth-login-xxxxxx
         assert!(branch.starts_with("feature/add-oauth-login-"));
         // 最后 6 位是哈希
-        let hash_part = branch.split('-').last().unwrap();
+        let hash_part = branch.split('-').next_back().unwrap();
         assert_eq!(hash_part.len(), 6);
         // 哈希应该是十六进制
         assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()));

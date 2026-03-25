@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.11] - 2026-03-24
+
+### Added
+
+- **Context-aware command palette ranking** — command suggestions are now ranked by page context and usage intent, with a dedicated ranking utility shared across Blitz and Tasks pages
+
+### Changed
+
+- **Task Chat composer redesign** — the Web chat composer now uses a floating, narrower workbench-style layout with integrated Todo/Plan/Pending controls, relocated Model/Mode controls, and improved panel toggling behavior
+- **Task Chat busy state styling** — replaced the previous SVG-based busy border treatment with a border-focused animated highlight implementation
+- **Terminal theme settings** — Web terminal theme selection is now aligned with the app theme model and no longer relies on the old standalone terminal theme config path
+
+### Improved
+
+- **Web terminal interactions** — improved terminal hotkeys, tab lifecycle handling, and backend terminal event behavior for better focus/restore behavior inside FlexLayout
+- **Tasks page command palette flow** — palette switching behavior on the Tasks page is more reliable and consistent when moving between views
+
+### Fixed
+
+- **Task palette switching** — fixed incorrect command palette context switching on the Tasks page
+- **Terminal lifecycle edge cases** — fixed several Web terminal lifecycle and hotkey edge cases across the frontend and terminal handler
+
 ## [0.7.10] - 2026-03-24
 
 ### Changed
