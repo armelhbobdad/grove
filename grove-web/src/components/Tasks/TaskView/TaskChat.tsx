@@ -176,6 +176,39 @@ function buildRenderItems(messages: ChatMessage[]): RenderItem[] {
   return items;
 }
 
+function resolveLatestPendingPermission(
+  messages: ChatMessage[],
+  optionId: string,
+  fallbackResolvedName: string,
+): ChatMessage[] {
+  let targetIndex = -1;
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.type !== "permission" || message.resolved) continue;
+    if (message.options.some((option) => option.option_id === optionId)) {
+      targetIndex = i;
+      break;
+    }
+    if (targetIndex === -1) {
+      targetIndex = i;
+    }
+  }
+
+  if (targetIndex === -1) {
+    return messages;
+  }
+
+  return messages.map((message, index) =>
+    index === targetIndex && message.type === "permission"
+      ? {
+        ...message,
+        resolved: message.options.find((option) => option.option_id === optionId)?.name ?? fallbackResolvedName,
+      }
+      : message,
+  );
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Create a non-editable command chip DOM element */
@@ -332,6 +365,7 @@ export function TaskChat({
   const [planFilePath, setPlanFilePath] = useState("");
   const [planFileContent, setPlanFileContent] = useState("");
   const [showPlanFile, setShowPlanFile] = useState(false);
+  const [showPermissionPanel, setShowPermissionPanel] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
@@ -382,7 +416,13 @@ export function TaskChat({
   const hasTodoPanel = planEntries.length > 0;
   const hasPlanPanel = !!planFileContent;
   const hasPendingPanel = pendingMessages.length > 0;
-  const activeComposerPanel = showPlan && hasTodoPanel
+  const activePermissionMessage = useMemo(
+    () => [...messages].reverse().find((m): m is PermissionMessage => m.type === "permission" && !m.resolved) ?? null,
+    [messages],
+  );
+  const activeComposerPanel = showPermissionPanel && activePermissionMessage
+    ? "permission"
+    : showPlan && hasTodoPanel
     ? "todo"
     : showPlanFile && hasPlanPanel
       ? "plan"
@@ -390,6 +430,17 @@ export function TaskChat({
         ? "pending"
         : null;
   const composerPanelOpen = activeComposerPanel !== null;
+
+  useEffect(() => {
+    if (activePermissionMessage) {
+      setShowPermissionPanel(true);
+      setShowPlan(false);
+      setShowPlanFile(false);
+      setShowPendingQueue(false);
+    } else {
+      setShowPermissionPanel(false);
+    }
+  }, [activePermissionMessage]);
 
   // Filtered slash commands based on current input
   const filteredSlashCommands = useMemo(() => {
@@ -804,6 +855,10 @@ export function TaskChat({
           }
           break;
         case "permission_request":
+          setShowPermissionPanel(true);
+          setShowPlan(false);
+          setShowPlanFile(false);
+          setShowPendingQueue(false);
           setMessages((prev) => [...prev, {
             type: "permission",
             description: msg.description,
@@ -811,12 +866,9 @@ export function TaskChat({
           }]);
           break;
         case "permission_response":
+          setShowPermissionPanel(false);
           setMessages((prev) =>
-            prev.map((m) => {
-              if (m.type !== "permission" || m.resolved) return m;
-              const match = m.options?.find((o: { option_id: string }) => o.option_id === msg.option_id);
-              return { ...m, resolved: match?.name ?? msg.option_id };
-            }),
+            resolveLatestPendingPermission(prev, msg.option_id, msg.option_id),
           );
           break;
         case "complete":
@@ -988,11 +1040,7 @@ export function TaskChat({
         }];
         break;
       case "permission_response":
-        state.messages = state.messages.map((m) => {
-          if (m.type !== "permission" || m.resolved) return m;
-          const match = m.options?.find((o: { option_id: string }) => o.option_id === msg.option_id);
-          return { ...m, resolved: match?.name ?? msg.option_id };
-        });
+        state.messages = resolveLatestPendingPermission(state.messages, msg.option_id, msg.option_id);
         break;
       case "complete":
         state.messages = state.messages.map((m) => m.type === "assistant" && !m.complete ? { ...m, complete: true } : m);
@@ -1319,13 +1367,7 @@ export function TaskChat({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: "permission_response", option_id: optionId }));
     // Mark the permission message as resolved
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.type === "permission" && !m.resolved
-          ? { ...m, resolved: optionName }
-          : m,
-      ),
-    );
+    setMessages((prev) => resolveLatestPendingPermission(prev, optionId, optionName));
   }, []);
 
   /** Detect /slash or @file at cursor position in contentEditable */
@@ -1952,7 +1994,9 @@ export function TaskChat({
       <div
         ref={messagesViewportRef}
         onScroll={updateScrollState}
-        className={`relative z-0 flex-1 overflow-y-auto px-4 pt-4 min-h-0 ${composerPanelOpen ? "pb-[28rem]" : "pb-44"}`}
+        className={`relative z-0 flex-1 overflow-y-auto px-4 pt-4 min-h-0 ${
+          composerPanelOpen ? "pb-[28rem]" : "pb-44"
+        }`}
       >
         <div className="flex w-full flex-col gap-3">
         {renderItems.map((item) =>
@@ -1986,32 +2030,30 @@ export function TaskChat({
       </div>
       </div>
 
-      {/* Read-only observation mode banner */}
-      {isRemoteSession && (
-        <div className="border-t border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,var(--color-bg))]">
-          <div className="flex w-full items-center justify-between px-3 py-2">
-          <div className="flex items-center gap-2 text-xs text-[var(--color-warning)]">
-            <Eye className="w-3.5 h-3.5" />
-            <span>Read-only — controlled by <strong>{remoteOwnerName}</strong></span>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleTakeControl}
-            disabled={isTakingControl}
-            className="text-xs h-6 px-2 text-[var(--color-warning)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
-          >
-            {isTakingControl ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
-            Take Control
-          </Button>
-        </div>
-        </div>
-      )}
-
       {/* Input */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pt-2 pb-4">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-bg)_96%,transparent),transparent)]" />
         <div className="pointer-events-auto relative mx-auto w-full max-w-[920px]">
+        {isRemoteSession && (
+          <div className="absolute inset-x-0 bottom-full z-20 mb-3">
+            <div className="flex items-center justify-between gap-3 rounded-[22px] border border-[color-mix(in_srgb,var(--color-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-4 py-2.5 shadow-[0_10px_28px_rgba(0,0,0,0.12)] backdrop-blur-md">
+              <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--color-warning)]">
+                <Eye className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Read-only — controlled by <strong>{remoteOwnerName}</strong></span>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleTakeControl}
+                disabled={isTakingControl}
+                className="h-7 shrink-0 rounded-full px-3 text-xs text-[var(--color-warning)] hover:bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] hover:text-[var(--color-text)]"
+              >
+                {isTakingControl ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                Take Control
+              </Button>
+            </div>
+          </div>
+        )}
         <AnimatePresence initial={false}>
           {composerPanelOpen && (
             <motion.div
@@ -2101,6 +2143,27 @@ export function TaskChat({
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {activeComposerPanel === "permission" && activePermissionMessage && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--color-warning)]" />
+                      <span className="text-sm font-medium text-[var(--color-text)]">{activePermissionMessage.description}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {activePermissionMessage.options.map((opt) => (
+                        <button
+                          key={opt.option_id}
+                          onClick={() => handlePermissionResponse(opt.option_id, opt.name)}
+                          className="flex w-full items-center justify-between rounded-xl border border-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_7%,transparent)] px-3 py-2.5 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)]"
+                        >
+                          <span className="text-sm font-medium text-[var(--color-text)]">{opt.name}</span>
+                          <ChevronRight className="h-4 w-4 text-[var(--color-warning)]" />
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -2218,7 +2281,7 @@ export function TaskChat({
                   onClick={() => {
                     const next = !showPlan;
                     setShowPlan(next);
-                    if (next) { setShowPlanFile(false); setShowPendingQueue(false); }
+                    if (next) { setShowPermissionPanel(false); setShowPlanFile(false); setShowPendingQueue(false); }
                   }}
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
                     activeComposerPanel === "todo"
@@ -2236,7 +2299,7 @@ export function TaskChat({
                   onClick={() => {
                     const next = !showPlanFile;
                     setShowPlanFile(next);
-                    if (next) { setShowPlan(false); setShowPendingQueue(false); }
+                    if (next) { setShowPermissionPanel(false); setShowPlan(false); setShowPendingQueue(false); }
                   }}
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
                     activeComposerPanel === "plan"
@@ -2253,7 +2316,7 @@ export function TaskChat({
                   onClick={() => {
                     const next = !showPendingQueue;
                     setShowPendingQueue(next);
-                    if (next) { setShowPlan(false); setShowPlanFile(false); }
+                    if (next) { setShowPermissionPanel(false); setShowPlan(false); setShowPlanFile(false); }
                   }}
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
                     activeComposerPanel === "pending"
@@ -2263,6 +2326,23 @@ export function TaskChat({
                 >
                   <ListPlus className="h-3 w-3" />
                   <span>Pending</span>
+                </button>
+              )}
+              {activePermissionMessage && (
+                <button
+                  onClick={() => {
+                    const next = !showPermissionPanel;
+                    setShowPermissionPanel(next);
+                    if (next) { setShowPlan(false); setShowPlanFile(false); setShowPendingQueue(false); }
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                    activeComposerPanel === "permission"
+                      ? "bg-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] text-[var(--color-warning)]"
+                      : "border border-[color-mix(in_srgb,var(--color-warning)_24%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_6%,transparent)] text-[color-mix(in_srgb,var(--color-warning)_96%,white_8%)] hover:bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)]"
+                  }`}
+                >
+                  <ShieldCheck className="h-3 w-3" />
+                  <span>Permission Request</span>
                 </button>
               )}
             </div>
@@ -2294,7 +2374,9 @@ export function TaskChat({
 
           {!hasContent && !isInputFocused && (
             <div className={`absolute ${attachments.length > 0 ? "top-[86px]" : "top-[42px]"} left-4 right-16 h-10 flex items-center text-sm text-[var(--color-text-muted)] pointer-events-none select-none`}>
-              {!isConnected
+              {activePermissionMessage
+                ? "Handle permission above to continue"
+                : !isConnected
                 ? "Waiting for connection..."
                 : isTerminalMode
                   ? "Enter shell command\u2026"
@@ -2322,7 +2404,7 @@ export function TaskChat({
 
           <div
             ref={editableRef}
-            contentEditable={isConnected && !isRemoteSession}
+            contentEditable={isConnected && !isRemoteSession && !activePermissionMessage}
             suppressContentEditableWarning
             onInput={handleInput}
             onKeyDown={handleKeyDown}
@@ -2332,13 +2414,13 @@ export function TaskChat({
             onPaste={handlePaste}
             className={`overflow-y-auto px-4 py-2 text-sm leading-7 text-[var(--color-text)] focus:outline-none ${
               isInputExpanded ? "min-h-[32vh] max-h-[56vh]" : "min-h-[56px] max-h-32"
-            } ${!isConnected || isRemoteSession ? "opacity-50 cursor-not-allowed" : ""}`}
+            } ${!isConnected || isRemoteSession || activePermissionMessage ? "opacity-50 cursor-not-allowed" : ""}`}
             style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
           />
 
           <div className="mt-2 flex items-center justify-between gap-2 select-none">
             <div className="flex items-center gap-2 min-w-0 select-none">
-              {(promptCaps.image || promptCaps.audio) && (
+              {!activePermissionMessage && (promptCaps.image || promptCaps.audio) && (
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="h-9 w-9 flex items-center justify-center rounded-xl bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
@@ -2348,7 +2430,9 @@ export function TaskChat({
                 </button>
               )}
               <span className="truncate text-[10px] text-[var(--color-text-muted)]">
-                {!isConnected
+                {activePermissionMessage
+                  ? "Permission required"
+                  : !isConnected
                   ? "Offline"
                   : isBusy
                     ? (hasContent ? "Ready to queue" : (pendingMessages.length > 0 ? `${pendingMessages.length} queued` : "Agent running"))
@@ -2368,15 +2452,19 @@ export function TaskChat({
                   open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
                   onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); } }} />
               )}
-              {!isBusy && hasContent ? (
+              {activePermissionMessage && isBusy ? (
+                <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleStopAgent}>
+                  <Square className="w-3.5 h-3.5" />
+                </Button>
+              ) : !activePermissionMessage && !isBusy && hasContent ? (
                 <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend} disabled={!isConnected}>
                   <Send className="w-4 h-4" />
                 </Button>
-              ) : isBusy && hasContent ? (
+              ) : !activePermissionMessage && isBusy && hasContent ? (
                 <Button variant="primary" size="sm" className="h-10 w-10 !p-0 rounded-xl shadow-sm" onClick={handleSend}>
                   <ListPlus className="w-4 h-4" />
                 </Button>
-              ) : isBusy && !hasContent ? (
+              ) : !activePermissionMessage && isBusy && !hasContent ? (
                 pendingMessages.length > 0 ? (
                   <Button variant="secondary" size="sm" className="h-10 w-10 !p-0 rounded-xl" onClick={handleSendNow}>
                     <Send className="w-4 h-4" />
@@ -2497,7 +2585,7 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
         </div>
       );
     case "permission":
-      return <PermissionCard message={message} onRespond={onPermissionResponse} />;
+      return message.resolved ? <PermissionCard message={message} onRespond={onPermissionResponse} /> : null;
     case "tool":
       // Tools are rendered via ToolSectionView; skip here
       return null;
