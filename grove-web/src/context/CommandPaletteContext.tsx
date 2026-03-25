@@ -20,7 +20,7 @@ export interface Command {
   ranking?: CommandRanking;
 }
 
-export type CommandBuilder = () => Command[];
+type CommandBuilder = () => Command[];
 
 interface CommandPaletteContextType {
   isOpen: boolean;

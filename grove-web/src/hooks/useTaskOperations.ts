@@ -18,7 +18,7 @@ import { handleArchiveError, buildArchiveConfirmMessage } from "../utils/archive
 /**
  * Configuration for task operations
  */
-export interface TaskOperationsConfig {
+interface TaskOperationsConfig {
   /**
    * Project ID for all operations
    */
@@ -93,7 +93,7 @@ function parseDirtyBranchError(
 /**
  * Task operations state
  */
-export interface TaskOperationsState {
+interface TaskOperationsState {
   // Commit
   showCommitDialog: boolean;
   isCommitting: boolean;

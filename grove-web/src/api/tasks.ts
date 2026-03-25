@@ -32,37 +32,37 @@ export interface TaskResponse {
   is_local: boolean;
 }
 
-export interface TaskListResponse {
+interface TaskListResponse {
   tasks: TaskResponse[];
 }
 
-export interface CreateTaskRequest {
+interface CreateTaskRequest {
   name: string;
   target?: string;
   notes?: string;
 }
 
-export type TaskFilter = 'active' | 'archived';
+type TaskFilter = 'active' | 'archived';
 
-export interface NotesResponse {
+interface NotesResponse {
   content: string;
 }
 
-export interface UpdateNotesRequest {
+interface UpdateNotesRequest {
   content: string;
 }
 
-export interface CommitRequest {
+interface CommitRequest {
   message: string;
 }
 
-export interface GitOperationResponse {
+interface GitOperationResponse {
   success: boolean;
   message: string;
   warning?: string;
 }
 
-export interface DiffFileEntry {
+interface DiffFileEntry {
   path: string;
   status: string; // "A" | "M" | "D" | "R"
   additions: number;
@@ -75,7 +75,7 @@ export interface DiffResponse {
   total_deletions: number;
 }
 
-export interface CommitEntry {
+interface CommitEntry {
   hash: string;
   message: string;
   time_ago: string;
@@ -119,20 +119,14 @@ export interface ReviewCommentsResponse {
   git_user_name?: string;
 }
 
-export interface ReplyCommentRequest {
-  comment_id: number;
-  status: string; // "resolved" | "outdated"
-  message: string;
-}
-
 // Task stats types
-export interface FileEditEntry {
+interface FileEditEntry {
   path: string;
   edit_count: number;
   last_edited: string; // ISO 8601
 }
 
-export interface ActivityEntry {
+interface ActivityEntry {
   hour: string;      // ISO 8601 hour (e.g., "2024-01-15T14:00:00Z")
   buckets: number[]; // 60 minute buckets (index 0 = minute 00, index 59 = minute 59)
   total: number;     // Total edits in this hour
@@ -255,7 +249,7 @@ export async function commitTask(
   );
 }
 
-export interface MergeRequest {
+interface MergeRequest {
   method?: "squash" | "merge-commit";
 }
 
@@ -324,11 +318,11 @@ export async function resetTask(
   );
 }
 
-export interface FilesResponse {
+interface FilesResponse {
   files: string[];
 }
 
-export interface RebaseToRequest {
+interface RebaseToRequest {
   target: string;
 }
 
@@ -364,16 +358,16 @@ export interface ChatSessionResponse {
   created_at: string;
 }
 
-export interface ChatListResponse {
+interface ChatListResponse {
   chats: ChatSessionResponse[];
 }
 
-export interface CreateChatRequest {
+interface CreateChatRequest {
   title?: string;
   agent?: string;
 }
 
-export interface UpdateChatTitleRequest {
+interface UpdateChatTitleRequest {
   title: string;
 }
 
@@ -437,12 +431,12 @@ export async function deleteChat(
 // File Content API (for Monaco Editor)
 // ============================================================================
 
-export interface FileContentResponse {
+interface FileContentResponse {
   content: string;
   path: string;
 }
 
-export interface WriteFileRequest {
+interface WriteFileRequest {
   content: string;
 }
 
@@ -478,24 +472,20 @@ export async function writeFileContent(
 // File System Operations API
 // ============================================================================
 
-export interface FsOperationResponse {
+interface FsOperationResponse {
   success: boolean;
   message: string;
 }
 
-export interface CreateFileRequest {
+interface CreateFileRequest {
   path: string;
   content?: string;
 }
 
-export interface CreateDirectoryRequest {
+interface CreateDirectoryRequest {
   path: string;
 }
 
-export interface CopyFileRequest {
-  source: string;
-  destination: string;
-}
 
 /**
  * Create a new file in a task's worktree
@@ -543,20 +533,20 @@ export async function deleteFileOrDir(
 // Chat History & Take Control API (read-only observation mode)
 // ============================================================================
 
-export interface SessionMetadata {
+interface SessionMetadata {
   pid: number;
   agent_name: string;
   agent_version: string;
 }
 
-export interface ChatHistoryResponse {
+interface ChatHistoryResponse {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   events: any[];
   total: number;
   session: SessionMetadata | null;
 }
 
-export interface TakeControlResponse {
+interface TakeControlResponse {
   success: boolean;
 }
 

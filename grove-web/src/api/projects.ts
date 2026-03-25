@@ -16,7 +16,7 @@ export interface ProjectListItem {
   live_count: number;
 }
 
-export interface ProjectListResponse {
+interface ProjectListResponse {
   projects: ProjectListItem[];
   /** ID of the project matching the current working directory (if any) */
   current_project_id: string | null;
@@ -31,7 +31,7 @@ export interface ProjectResponse {
   added_at: string;
 }
 
-export interface AddProjectRequest {
+interface AddProjectRequest {
   path: string;
   name?: string;
 }
@@ -45,12 +45,12 @@ export interface ProjectStatsResponse {
   weekly_activity: number[];
 }
 
-export interface BranchInfo {
+interface BranchInfo {
   name: string;
   is_current: boolean;
 }
 
-export interface BranchesResponse {
+interface BranchesResponse {
   branches: BranchInfo[];
   current: string;
 }
@@ -106,7 +106,7 @@ export async function getBranches(id: string, remote: string = 'local'): Promise
   return apiClient.get<BranchesResponse>(`/api/v1/projects/${id}/branches?remote=${encodeURIComponent(remote)}`);
 }
 
-export interface RemotesResponse {
+interface RemotesResponse {
   remotes: string[];
 }
 
@@ -117,7 +117,7 @@ export async function getRemotes(id: string): Promise<RemotesResponse> {
   return apiClient.get<RemotesResponse>(`/api/v1/projects/${id}/git/remotes`);
 }
 
-export interface OpenResponse {
+interface OpenResponse {
   success: boolean;
   message: string;
 }

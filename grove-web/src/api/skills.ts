@@ -20,7 +20,7 @@ export interface AgentDef {
   is_builtin: boolean;
 }
 
-export interface AddAgentRequest {
+interface AddAgentRequest {
   display_name: string;
   global_skills_dir: string;
   project_skills_dir: string;
@@ -52,7 +52,7 @@ export interface SkillSummary {
   author: string | null;
 }
 
-export interface SkillMetadata {
+interface SkillMetadata {
   // Official spec fields
   name: string;
   description: string;
@@ -76,7 +76,7 @@ export interface SkillDetail {
   installed_agents: string[];
 }
 
-export interface AgentInstall {
+interface AgentInstall {
   agent_id: string;
   scope: 'global' | 'project';
   symlink_path: string;
@@ -92,14 +92,14 @@ export interface InstalledSkill {
   installed_at: string;
 }
 
-export interface AddSourceRequest {
+interface AddSourceRequest {
   name: string;
   source_type: 'git' | 'local';
   url: string;
   subpath?: string;
 }
 
-export interface InstallSkillRequest {
+interface InstallSkillRequest {
   repo_key: string;
   source_name: string;
   skill_name: string;
@@ -188,8 +188,4 @@ export async function listInstalled(): Promise<InstalledSkill[]> {
 
 export async function installSkill(req: InstallSkillRequest): Promise<InstalledSkill> {
   return apiClient.post('/api/v1/skills/install', req);
-}
-
-export async function uninstallSkill(repoKey: string, repoPath: string): Promise<void> {
-  return apiClient.delete(`/api/v1/skills/installed/${encodeURIComponent(repoKey)}/${repoPath}`);
 }

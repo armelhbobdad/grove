@@ -1,6 +1,6 @@
 import { useEffect, useRef, type DependencyList } from "react";
 
-export interface HotkeyDefinition {
+interface HotkeyDefinition {
   key: string; // e.g. "j", "ArrowDown", "Alt+1", "Space", "?"
   handler: () => void;
   options?: {

@@ -51,7 +51,7 @@ export interface Config {
   acp: AcpConfig;
 }
 
-export interface ConfigPatch {
+interface ConfigPatch {
   theme?: Partial<ThemeConfig>;
   layout?: Partial<LayoutConfig>;
   web?: Partial<WebConfig>;
@@ -69,7 +69,7 @@ export interface AppInfo {
   bundle_id?: string;
 }
 
-export interface ApplicationsResponse {
+interface ApplicationsResponse {
   apps: AppInfo[];
 }
 

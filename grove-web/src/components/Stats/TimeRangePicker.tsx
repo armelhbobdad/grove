@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Calendar, ChevronDown, Check } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-export interface PresetRange {
+interface PresetRange {
   id: string;
   label: string;
 }

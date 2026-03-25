@@ -2,7 +2,7 @@
 
 import { apiClient } from './client';
 
-export interface VersionResponse {
+interface VersionResponse {
   version: string;
 }
 

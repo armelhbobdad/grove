@@ -11,7 +11,7 @@ export interface FilteredMentionItem extends MentionItem {
 }
 
 /** Fuzzy match a query against a target string */
-export function fuzzyMatch(
+function fuzzyMatch(
   query: string,
   target: string,
 ): { match: boolean; score: number; indices: number[] } {
@@ -36,7 +36,7 @@ export function fuzzyMatch(
 }
 
 /** Extract unique directory paths from a flat file list */
-export function extractDirectories(files: string[]): string[] {
+function extractDirectories(files: string[]): string[] {
   const dirs = new Set<string>();
   for (const file of files) {
     const parts = file.split("/");

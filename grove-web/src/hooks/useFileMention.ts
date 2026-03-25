@@ -2,11 +2,11 @@ import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { filterMentionItems } from "../utils/fileMention";
 import type { MentionItem, FilteredMentionItem } from "../utils/fileMention";
 
-export interface UseFileMentionConfig {
+interface UseFileMentionConfig {
   mentionItems: MentionItem[] | null; // null = disabled
 }
 
-export interface UseFileMentionReturn {
+interface UseFileMentionReturn {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   showDropdown: boolean;
   filteredItems: FilteredMentionItem[];

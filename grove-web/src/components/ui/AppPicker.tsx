@@ -5,7 +5,7 @@ import { ChevronDown, Check, Search, Loader2, AppWindow } from "lucide-react";
 import type { AppInfo } from "../../api";
 import { AppIcon } from "./AppIcon";
 
-export interface AppPickerOption {
+interface AppPickerOption {
   id: string;
   label: string;
   /** App name to match against installed applications */

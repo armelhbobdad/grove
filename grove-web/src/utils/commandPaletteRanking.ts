@@ -49,7 +49,7 @@ function getUsageScore(commandId: string, usage: CommandUsageMap): number {
   return frequencyBoost + recencyBoost;
 }
 
-export function getContextScore(
+function getContextScore(
   command: Command,
   context: CommandPalettePageContext,
   usage: CommandUsageMap,

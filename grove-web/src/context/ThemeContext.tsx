@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useMemo } from "react";
 import type { ReactNode } from "react";
 
 // Theme definitions matching TUI themes
-export interface ThemeColors {
+interface ThemeColors {
   bg: string;
   bgSecondary: string;
   bgTertiary: string;
@@ -17,7 +17,7 @@ export interface ThemeColors {
   info: string;
 }
 
-export interface Theme {
+interface Theme {
   id: string;
   name: string;
   colors: ThemeColors;

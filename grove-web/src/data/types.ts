@@ -94,48 +94,6 @@ export interface Stats {
   weeklyActivity: number[];
 }
 
-// Review comment for code review
-export type ReviewStatus = 'open' | 'resolved' | 'outdated';
-
-export interface ReviewComment {
-  id: string;
-  file: string;
-  line: number;
-  content: string;
-  author: string;
-  status: ReviewStatus;
-  createdAt: Date;
-  resolvedAt?: Date;
-}
-
-// Task notes
-export interface TaskNotes {
-  taskId: string;
-  content: string;
-  updatedAt: Date;
-}
-
-// AI data for tasks
-export interface AITodo {
-  id: string;
-  text: string;
-  completed: boolean;
-}
-
-export interface AIData {
-  taskId: string;
-  summary: string;
-  todos: AITodo[];
-  updatedAt: Date;
-}
-
-// Chat session within a task
-export interface ChatSession {
-  id: string;
-  title: string;
-  agent: string;
-  createdAt: Date;
-}
 
 // Task filter type
 export type TaskFilter = 'active' | 'archived';

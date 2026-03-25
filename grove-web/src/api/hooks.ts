@@ -16,7 +16,7 @@ export interface HookEntryResponse {
   project_name: string;
 }
 
-export interface HooksListResponse {
+interface HooksListResponse {
   hooks: HookEntryResponse[];
   total: number;
 }

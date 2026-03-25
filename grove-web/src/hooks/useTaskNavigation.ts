@@ -5,7 +5,7 @@ import type { ContextMenuState } from "./useTaskPageState";
 /**
  * Configuration for task navigation
  */
-export interface TaskNavigationConfig {
+interface TaskNavigationConfig {
   tasks: Task[];
   selectedTask: Task | null;
   inWorkspace: boolean;
@@ -16,7 +16,7 @@ export interface TaskNavigationConfig {
 /**
  * Task navigation handlers
  */
-export interface TaskNavigationHandlers {
+interface TaskNavigationHandlers {
   selectNextTask: () => void;
   selectPreviousTask: () => void;
   openContextMenuAtSelectedTask: () => void;

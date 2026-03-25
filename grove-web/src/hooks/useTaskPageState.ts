@@ -14,7 +14,7 @@ export interface ContextMenuState {
 /**
  * Task page state
  */
-export interface TaskPageState {
+interface TaskPageState {
   selectedTask: Task | null;
   inWorkspace: boolean;
   operationMessage: string | null;
@@ -28,7 +28,7 @@ export interface TaskPageState {
 /**
  * Task page handlers
  */
-export interface TaskPageHandlers {
+interface TaskPageHandlers {
   // Task selection
   handleSelectTask: (task: Task) => void;
   handleDoubleClickTask: (task: Task) => void;

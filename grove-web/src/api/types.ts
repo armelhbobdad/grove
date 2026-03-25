@@ -27,4 +27,3 @@ export const ERROR_CODES = {
   ARCHIVED_TASK_NOT_FOUND: "ARCHIVED_TASK_NOT_FOUND",
 } as const;
 
-export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

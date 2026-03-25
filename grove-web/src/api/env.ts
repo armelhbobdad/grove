@@ -3,14 +3,14 @@
 import { apiClient } from './client';
 
 // Types
-export interface DependencyStatus {
+interface DependencyStatus {
   name: string;
   installed: boolean;
   version: string | null;
   install_command: string;
 }
 
-export interface EnvCheckResponse {
+interface EnvCheckResponse {
   dependencies: DependencyStatus[];
 }
 

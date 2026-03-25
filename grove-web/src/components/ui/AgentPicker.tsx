@@ -7,7 +7,7 @@ import type { CustomAgent } from "../../api/config";
 // Import Lobe icons for AI agents
 import { Claude, Gemini, Copilot, Cursor, Trae, Qwen, Kimi, OpenAI, Junie, OpenCode } from "@lobehub/icons";
 
-export interface AgentOption {
+interface AgentOption {
   id: string;
   label: string;
   value: string;

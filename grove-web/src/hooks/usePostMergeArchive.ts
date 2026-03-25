@@ -6,7 +6,7 @@ import { handleArchiveError, buildArchiveConfirmMessage } from "../utils/archive
 /**
  * Configuration for post-merge archive
  */
-export interface PostMergeArchiveConfig {
+interface PostMergeArchiveConfig {
   /**
    * Project ID for archive operation (Zen mode: fixed; Blitz mode: from merged task)
    */
@@ -36,7 +36,7 @@ export interface PostMergeArchiveConfig {
 /**
  * Post-merge archive state
  */
-export interface PostMergeArchiveState {
+interface PostMergeArchiveState {
   showArchiveAfterMerge: boolean;
   mergedTaskId: string | null;
   mergedTaskName: string;
@@ -46,7 +46,7 @@ export interface PostMergeArchiveState {
 /**
  * Post-merge archive handlers
  */
-export interface PostMergeArchiveHandlers {
+interface PostMergeArchiveHandlers {
   /**
    * Trigger post-merge archive dialog
    *

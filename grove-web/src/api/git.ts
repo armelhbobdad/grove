@@ -25,7 +25,7 @@ export interface BranchDetailInfo {
   behind: number | null;
 }
 
-export interface BranchesDetailResponse {
+interface BranchesDetailResponse {
   branches: BranchDetailInfo[];
   current: string;
 }
@@ -37,34 +37,30 @@ export interface RepoCommitEntry {
   time_ago: string;
 }
 
-export interface RepoCommitsResponse {
+interface RepoCommitsResponse {
   commits: RepoCommitEntry[];
 }
 
-export interface GitOpResponse {
+interface GitOpResponse {
   success: boolean;
   message: string;
 }
 
-export interface CheckoutRequest {
+interface CheckoutRequest {
   branch: string;
 }
 
-export interface StashRequest {
-  pop?: boolean;
-}
-
-export interface CreateBranchRequest {
+interface CreateBranchRequest {
   name: string;
   base?: string;
   checkout?: boolean;
 }
 
-export interface RenameBranchRequest {
+interface RenameBranchRequest {
   new_name: string;
 }
 
-export interface CommitRequest {
+interface CommitRequest {
   message: string;
 }
 
