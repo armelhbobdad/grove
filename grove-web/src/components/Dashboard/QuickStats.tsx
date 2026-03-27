@@ -147,19 +147,20 @@ export function QuickStats({ stats, isLoading = false }: QuickStatsProps) {
             <div className="text-xs text-[var(--color-text-muted)] mb-2">
               Weekly Activity
             </div>
-            <div className="flex items-end justify-between gap-1 h-16">
+            <div className="flex items-end justify-between gap-1">
               {weeklyData.map((count, index) => (
                 <div key={index} className="flex-1 flex flex-col items-center gap-1">
-                  <motion.div
-                    initial={{ height: 0 }}
-                    animate={{ height: `${(count / maxActivity) * 100}%` }}
-                    transition={{ delay: index * 0.05 }}
-                    className="w-full rounded-t bg-[var(--color-highlight)] min-h-[2px]"
-                    style={{
-                      opacity: count > 0 ? 1 : 0.2,
-                      minHeight: count > 0 ? '4px' : '2px'
-                    }}
-                  />
+                  <div className="w-full h-12 flex items-end">
+                    <motion.div
+                      initial={{ height: 0 }}
+                      animate={{ height: `${count > 0 ? Math.max((count / maxActivity) * 100, 12) : 0}%` }}
+                      transition={{ delay: index * 0.05 }}
+                      className="w-full rounded-t bg-[var(--color-highlight)]"
+                      style={{
+                        opacity: count > 0 ? 1 : 0.2,
+                      }}
+                    />
+                  </div>
                   <span className="text-[10px] text-[var(--color-text-muted)]">
                     {dayLabels[index]}
                   </span>
