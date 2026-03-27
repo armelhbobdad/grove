@@ -48,7 +48,7 @@ walkdir = "2"
 rayon = "1.10"
 
 # MCP Server
-rmcp = { version = "0.14", features = ["server", "transport-io"] }
+rmcp = { version = "1.3", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["full"] }
 
 # Web API Server

@@ -172,18 +172,16 @@ impl Default for GroveMcpServer {
 
 impl ServerHandler for GroveMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "grove".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("Grove MCP Server".to_string()),
-                website_url: Some("https://github.com/GarrickZ2/grove".to_string()),
-                icons: None,
-            },
-            instructions: Some(get_instructions().to_string()),
-        }
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        info.protocol_version = ProtocolVersion::LATEST;
+        info.server_info = {
+            let mut impl_info = Implementation::new("grove", env!("CARGO_PKG_VERSION"));
+            impl_info.title = Some("Grove MCP Server".to_string());
+            impl_info.website_url = Some("https://github.com/GarrickZ2/grove".to_string());
+            impl_info
+        };
+        info.instructions = Some(get_instructions().to_string());
+        info
     }
 
     async fn call_tool(
@@ -214,6 +212,7 @@ impl ServerHandler for GroveMcpServer {
 
 /// Single reply to a review comment
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct SingleReply {
     /// The comment ID to reply to
     pub comment_id: u32,
@@ -237,6 +236,7 @@ pub struct ReplyReviewParams {
 
 /// Single comment item
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct CommentItem {
     /// Type of comment: "inline", "file", or "project" (defaults to "inline")
     pub comment_type: Option<String>,
