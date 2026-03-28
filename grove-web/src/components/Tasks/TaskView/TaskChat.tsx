@@ -97,6 +97,12 @@ type ChatMessage =
   | PermissionMessage
   | { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
 
+type ServerEvent = {
+  type: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+};
+
 interface PlanEntry {
   content: string;
   status: string;
@@ -348,6 +354,118 @@ function getPromptFromEditable(el: HTMLElement): string {
   };
   el.childNodes.forEach(walk);
   return parts.join("").trim();
+}
+
+function reduceHistoryMessages(messages: ChatMessage[], msg: ServerEvent): ChatMessage[] {
+  switch (msg.type) {
+    case "message_chunk": {
+      const prev = completeThinking(messages);
+      for (let i = prev.length - 1; i >= 0; i -= 1) {
+        const m = prev[i];
+        if (m.type === "assistant" && !m.complete) {
+          const updated = [...prev];
+          updated[i] = { ...m, content: m.content + msg.text };
+          return updated;
+        }
+        if (m.type === "user" || m.type === "tool") break;
+      }
+      if (!msg.text?.trim()) return prev;
+      return [...prev, { type: "assistant", content: msg.text, complete: false }];
+    }
+    case "thought_chunk": {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i];
+        if (m.type === "thinking") {
+          const updated = [...messages];
+          updated[i] = { ...m, content: m.content + msg.text };
+          return updated;
+        }
+        if (m.type === "user" || m.type === "assistant") break;
+      }
+      return [...messages, { type: "thinking", content: msg.text, collapsed: false, complete: false }];
+    }
+    case "tool_call": {
+      const prev = completeThinking(messages);
+      if (prev.some((m) => m.type === "tool" && m.id === msg.id)) {
+        return prev.map((m) =>
+          m.type === "tool" && m.id === msg.id
+            ? { ...m, title: msg.title, locations: msg.locations?.length ? msg.locations : m.locations }
+            : m,
+        );
+      }
+      const completed = prev.map((m) =>
+        m.type === "assistant" && !m.complete ? { ...m, complete: true } : m,
+      );
+      return [...completed, {
+        type: "tool", id: msg.id, title: msg.title, status: "running", collapsed: false, locations: msg.locations,
+      }];
+    }
+    case "tool_call_update": {
+      const exists = messages.some((m) => m.type === "tool" && m.id === msg.id);
+      if (exists) {
+        return messages.map((m) => m.type === "tool" && m.id === msg.id
+          ? { ...m, status: msg.status, content: msg.content ?? m.content, locations: msg.locations?.length ? msg.locations : m.locations }
+          : m);
+      }
+      return [...messages, {
+        type: "tool", id: msg.id, title: msg.id, status: msg.status,
+        content: msg.content, collapsed: true, locations: msg.locations ?? [],
+      }];
+    }
+    case "permission_request":
+      return [...messages, { type: "permission", description: msg.description, options: msg.options ?? [] }];
+    case "permission_response":
+      return resolveLatestPendingPermission(messages, msg.option_id, msg.option_id);
+    case "complete": {
+      const completed = completeThinking(messages);
+      return completed.map((m) => m.type === "assistant" && !m.complete ? { ...m, complete: true } : m);
+    }
+    case "user_message":
+      return [...messages, {
+        type: "user",
+        content: msg.text,
+        terminal: !!msg.terminal,
+        sender: msg.sender || undefined,
+        attachments: msg.attachments?.map((a: ServerEvent) => ({
+          type: a.type === "resource_link" ? "resource" : a.type as "image" | "audio" | "resource",
+          data: a.data ?? "",
+          mimeType: a.mime_type ?? "",
+          name: a.name ?? "",
+          uri: a.uri ?? undefined,
+          size: a.size ?? undefined,
+          previewUrl: a.type === "image" ? `data:${a.mime_type};base64,${a.data}` : undefined,
+        })),
+      }];
+    case "terminal_execute":
+      return [...messages,
+        { type: "user", content: msg.command, terminal: true },
+        { type: "terminal_output", chunks: [], exitCode: undefined },
+      ];
+    case "terminal_chunk": {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].type === "terminal_output") {
+          const updated = [...messages];
+          const terminalMessage = messages[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
+          updated[i] = { ...terminalMessage, chunks: [...terminalMessage.chunks, msg.output] };
+          return updated;
+        }
+      }
+      return [...messages, { type: "terminal_output", chunks: [msg.output] }];
+    }
+    case "terminal_complete": {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].type === "terminal_output") {
+          const updated = [...messages];
+          const terminalMessage = messages[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
+          updated[i] = { ...terminalMessage, exitCode: msg.exit_code ?? 0 };
+          return updated;
+        }
+      }
+      return messages;
+    }
+    default:
+      return messages;
+  }
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -852,24 +970,7 @@ export function TaskChat({
             }
             return null;
           });
-          setMessages((rawPrev) => {
-            const prev = completeThinking(rawPrev);
-            // Find last incomplete assistant message, but stop at tool/user boundaries
-            // so that chunks after tools create a NEW assistant message segment
-            for (let i = prev.length - 1; i >= 0; i--) {
-              const m = prev[i];
-              if (m.type === "assistant" && !m.complete) {
-                const updated = [...prev];
-                updated[i] = { ...m, content: m.content + msg.text };
-                return updated;
-              }
-              // Stop searching at user or tool boundary
-              if (m.type === "user" || m.type === "tool") break;
-            }
-            // Don't create new message for whitespace-only chunks
-            if (!msg.text.trim()) return prev;
-            return [...prev, { type: "assistant", content: msg.text, complete: false }];
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "thought_chunk":
           // Auto-close the current tool section (same as message_chunk)
@@ -879,41 +980,10 @@ export function TaskChat({
             }
             return null;
           });
-          setMessages((prev) => {
-            // Find last thinking message (may not be the very last due to interleaved tools)
-            for (let i = prev.length - 1; i >= 0; i--) {
-              const m = prev[i];
-              if (m.type === "thinking") {
-                const updated = [...prev];
-                updated[i] = { ...m, content: m.content + msg.text };
-                return updated;
-              }
-              if (m.type === "user" || m.type === "assistant") break;
-            }
-            return [...prev, { type: "thinking", content: msg.text, collapsed: false, complete: false }];
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "tool_call":
-          setMessages((rawPrev) => {
-            const prev = completeThinking(rawPrev);
-            // Upsert: if a tool with same ID already exists, update it (some agents send duplicate ToolCall)
-            if (prev.some((m) => m.type === "tool" && m.id === msg.id)) {
-              return prev.map((m) =>
-                m.type === "tool" && m.id === msg.id
-                  ? { ...m, title: msg.title, locations: msg.locations?.length ? msg.locations : m.locations }
-                  : m,
-              );
-            }
-            // Mark any preceding incomplete assistant messages as complete
-            // (agent has moved on to tool execution, text segment is done)
-            const updated = prev.map((m) =>
-              m.type === "assistant" && !m.complete ? { ...m, complete: true } : m,
-            );
-            return [...updated, {
-              type: "tool", id: msg.id, title: msg.title, status: "running", collapsed: false,
-              locations: msg.locations,
-            }];
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           // Default-expand: new section gets expanded once; existing section untouched
           setAutoExpandSectionId((prev) => {
             if (prev === null) {
@@ -932,19 +1002,7 @@ export function TaskChat({
           }
           break;
         case "tool_call_update":
-          setMessages((prev) => {
-            const exists = prev.some((m) => m.type === "tool" && m.id === msg.id);
-            if (exists) {
-              return prev.map((m) => m.type === "tool" && m.id === msg.id
-                ? { ...m, status: msg.status, content: msg.content ?? m.content,
-                    locations: msg.locations?.length ? msg.locations : m.locations } : m);
-            }
-            // No preceding tool_call (e.g. compacted disk replay) — create entry
-            return [...prev, {
-              type: "tool", id: msg.id, title: msg.id, status: msg.status,
-              content: msg.content, collapsed: true, locations: msg.locations ?? [],
-            }];
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           // Re-fetch plan file content if a completed tool touches the plan file
           if (msg.status === "completed" && planFilePathRef.current && planFileToolIdsRef.current.has(msg.id)) {
             planFileToolIdsRef.current.delete(msg.id);
@@ -956,17 +1014,11 @@ export function TaskChat({
           setShowPlan(false);
           setShowPlanFile(false);
           setShowPendingQueue(false);
-          setMessages((prev) => [...prev, {
-            type: "permission",
-            description: msg.description,
-            options: msg.options ?? [],
-          }]);
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "permission_response":
           setShowPermissionPanel(false);
-          setMessages((prev) =>
-            resolveLatestPendingPermission(prev, msg.option_id, msg.option_id),
-          );
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "complete":
           setAutoExpandSectionId((prev) => {
@@ -975,12 +1027,7 @@ export function TaskChat({
             }
             return null;
           });
-          setMessages((prev) => {
-            const completed = completeThinking(prev);
-            return completed.map((m) =>
-              m.type === "assistant" && !m.complete ? { ...m, complete: true } : m,
-            );
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           setIsBusy(false);
           break;
         case "busy":
@@ -991,22 +1038,7 @@ export function TaskChat({
           setIsBusy(false);
           break;
         case "user_message": {
-          setMessages((prev) => [...prev, {
-            type: "user",
-            content: msg.text,
-            terminal: !!msg.terminal,
-            sender: msg.sender || undefined,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            attachments: msg.attachments?.map((a: any) => ({
-              type: a.type === "resource_link" ? "resource" : a.type as "image" | "audio" | "resource",
-              data: a.data ?? "",
-              mimeType: a.mime_type ?? "",
-              name: a.name ?? "",
-              uri: a.uri ?? undefined,
-              size: a.size ?? undefined,
-              previewUrl: a.type === "image" ? `data:${a.mime_type};base64,${a.data}` : undefined,
-            })),
-          }]);
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         }
         case "mode_changed":
@@ -1058,40 +1090,17 @@ export function TaskChat({
           // User-initiated terminal command — show as terminal user message
           terminalRunningRef.current = true;
           setIsBusy(true);
-          setMessages((prev) => [...prev,
-            { type: "user", content: msg.command, terminal: true },
-            { type: "terminal_output", chunks: [], exitCode: undefined },
-          ]);
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "terminal_chunk":
           // Append chunk to the last terminal_output message
-          setMessages((prev) => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].type === "terminal_output") {
-                const updated = [...prev];
-                const m = prev[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
-                updated[i] = { ...m, chunks: [...m.chunks, msg.output] };
-                return updated;
-              }
-            }
-            return [...prev, { type: "terminal_output", chunks: [msg.output] }];
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "terminal_complete":
           // Set exit code on the last terminal_output message
           terminalRunningRef.current = false;
           setIsBusy(false);
-          setMessages((prev) => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].type === "terminal_output") {
-                const updated = [...prev];
-                const m = prev[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
-                updated[i] = { ...m, exitCode: msg.exit_code ?? 0 };
-                return updated;
-              }
-            }
-            return prev;
-          });
+          setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
         case "session_ended":
           setIsConnected(false);
@@ -1122,80 +1131,21 @@ export function TaskChat({
           };
         }
         break;
-      case "message_chunk": {
-        state.messages = completeThinking(state.messages);
-        const msgs = state.messages;
-        let found = false;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.type === "assistant" && !m.complete) {
-            msgs[i] = { ...m, content: m.content + msg.text };
-            found = true;
-            break;
-          }
-          if (m.type === "user") break;
-        }
-        if (!found && msg.text.trim()) msgs.push({ type: "assistant", content: msg.text, complete: false });
-        state.messages = [...msgs];
-        break;
-      }
-      case "tool_call": {
-        state.messages = completeThinking(state.messages);
-        // Upsert: if a tool with same ID already exists, update it (some agents send duplicate ToolCall)
-        const toolExists = state.messages.some((m) => m.type === "tool" && m.id === msg.id);
-        if (toolExists) {
-          state.messages = state.messages.map((m) =>
-            m.type === "tool" && m.id === msg.id
-              ? { ...m, title: msg.title, locations: msg.locations?.length ? msg.locations : m.locations }
-              : m,
-          );
-        } else {
-          state.messages = [...state.messages, { type: "tool", id: msg.id, title: msg.title, status: "running", collapsed: false, locations: msg.locations }];
-        }
-        break;
-      }
-      case "thought_chunk": {
-        const msgs = state.messages;
-        let found = false;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.type === "thinking") {
-            msgs[i] = { ...m, content: m.content + msg.text };
-            found = true;
-            break;
-          }
-          if (m.type === "user" || m.type === "assistant") break;
-        }
-        if (!found) msgs.push({ type: "thinking", content: msg.text, collapsed: false, complete: false });
-        state.messages = [...msgs];
-        break;
-      }
-      case "tool_call_update": {
-        const toolUpdateExists = state.messages.some((m) => m.type === "tool" && m.id === msg.id);
-        if (toolUpdateExists) {
-          state.messages = state.messages.map((m) =>
-            m.type === "tool" && m.id === msg.id ? { ...m, status: msg.status, content: msg.content ?? m.content, locations: msg.locations?.length ? msg.locations : m.locations } : m);
-        } else {
-          state.messages = [...state.messages, {
-            type: "tool", id: msg.id, title: msg.id, status: msg.status,
-            content: msg.content, collapsed: true, locations: msg.locations ?? [],
-          }];
-        }
-        break;
-      }
+      case "message_chunk":
+      case "tool_call":
+      case "thought_chunk":
+      case "tool_call_update":
       case "permission_request":
-        state.messages = [...state.messages, {
-          type: "permission", description: msg.description, options: msg.options ?? [],
-        }];
-        break;
       case "permission_response":
-        state.messages = resolveLatestPendingPermission(state.messages, msg.option_id, msg.option_id);
-        break;
-      case "complete": {
-        const completed = completeThinking(state.messages);
-        state.messages = completed.map((m) => m.type === "assistant" && !m.complete ? { ...m, complete: true } : m);
-        state.isBusy = false;
-      }
+      case "complete":
+      case "user_message":
+      case "terminal_execute":
+      case "terminal_chunk":
+      case "terminal_complete":
+        state.messages = reduceHistoryMessages(state.messages, msg);
+        if (msg.type === "complete") {
+          state.isBusy = false;
+        }
         break;
       case "queue_update":
         // Server manages queue — ignored for non-active chat cache
@@ -1203,25 +1153,6 @@ export function TaskChat({
       case "busy":
         state.isBusy = msg.value;
         break;
-      case "user_message": {
-        state.messages = [...state.messages, {
-          type: "user",
-          content: msg.text,
-          terminal: !!msg.terminal,
-          sender: msg.sender || undefined,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          attachments: msg.attachments?.map((a: any) => ({
-            type: a.type === "resource_link" ? "resource" : a.type as "image" | "audio" | "resource",
-            data: a.data ?? "",
-            mimeType: a.mime_type ?? "",
-            name: a.name ?? "",
-            uri: a.uri ?? undefined,
-            size: a.size ?? undefined,
-            previewUrl: a.type === "image" ? `data:${a.mime_type};base64,${a.data}` : undefined,
-          })),
-        }];
-        break;
-      }
       case "plan_update":
         state.planEntries = msg.entries ?? [];
         break;
@@ -1234,36 +1165,6 @@ export function TaskChat({
       case "available_commands":
         state.slashCommands = msg.commands ?? [];
         break;
-      case "terminal_execute":
-        state.messages = [...state.messages,
-          { type: "user", content: msg.command, terminal: true },
-          { type: "terminal_output", chunks: [], exitCode: undefined },
-        ];
-        break;
-      case "terminal_chunk": {
-        const msgs = [...state.messages];
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].type === "terminal_output") {
-            const m = msgs[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
-            msgs[i] = { ...m, chunks: [...m.chunks, msg.output] };
-            break;
-          }
-        }
-        state.messages = msgs;
-        break;
-      }
-      case "terminal_complete": {
-        const msgs2 = [...state.messages];
-        for (let i = msgs2.length - 1; i >= 0; i--) {
-          if (msgs2[i].type === "terminal_output") {
-            const m = msgs2[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
-            msgs2[i] = { ...m, exitCode: msg.exit_code ?? 0 };
-            break;
-          }
-        }
-        state.messages = msgs2;
-        break;
-      }
       case "session_ended":
         state.isConnected = false;
         break;
