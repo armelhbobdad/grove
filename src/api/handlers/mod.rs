@@ -1,6 +1,7 @@
 //! API handlers
 
 pub mod acp;
+pub mod ai;
 pub mod config;
 pub mod env;
 pub mod folder;

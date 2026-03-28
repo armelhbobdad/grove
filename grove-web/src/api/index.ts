@@ -79,6 +79,19 @@ export { getVersion, checkUpdate, startAppUpdate, getAppUpdateProgress, installA
 export type { UpdateCheckResponse, AppUpdateProgress } from './version';
 
 export {
+  listProviders,
+  createProvider,
+  updateProvider,
+  deleteProvider,
+  verifyProvider,
+  getAudioSettings,
+  saveAudioGlobal,
+  saveAudioProject,
+  transcribeAudio,
+} from './ai';
+export type { ProviderResponse, TranscribeResult } from './ai';
+
+export {
   getAgentDefs,
   toggleAgentEnabled,
   addAgent,

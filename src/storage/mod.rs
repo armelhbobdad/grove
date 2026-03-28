@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod chat_attachments;
 pub mod chat_history;
 pub mod comments;

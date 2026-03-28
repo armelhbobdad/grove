@@ -88,6 +88,21 @@ async function getSignedHeaders(
   return headers;
 }
 
+/** Build auth-only headers (no Content-Type — for FormData uploads). */
+async function getAuthOnlyHeaders(
+  method: string,
+  path: string,
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  const sig = await signRequest(method, path);
+  if (sig) {
+    headers['X-Timestamp'] = sig.timestamp;
+    headers['X-Nonce'] = sig.nonce;
+    headers['X-Signature'] = sig.signature;
+  }
+  return headers;
+}
+
 /** Append HMAC signature as query params to a WebSocket URL (async). */
 export async function appendHmacToUrl(url: string): Promise<string> {
   // Extract the pathname for signing
@@ -219,6 +234,26 @@ class ApiClient {
     return undefined as T;
   }
 
+  async postFormData<R>(path: string, formData: FormData, signal?: AbortSignal): Promise<R> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: await getAuthOnlyHeaders('POST', path),
+      body: formData,
+      signal,
+    });
+
+    if (!response.ok) {
+      const payload = await extractErrorPayload(response);
+      throw {
+        status: response.status,
+        message: payload.message,
+        data: payload.data,
+      } as ApiError;
+    }
+
+    return response.json();
+  }
+
   async put<T, R>(path: string, data: T): Promise<R> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: 'PUT',
@@ -235,7 +270,12 @@ class ApiClient {
       } as ApiError;
     }
 
-    return response.json();
+    // Handle 204 No Content (empty body)
+    const text = await response.text();
+    if (text) {
+      return JSON.parse(text) as R;
+    }
+    return undefined as R;
   }
 }
 

@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 interface ButtonProps {
   children: ReactNode;
   onClick?: () => void;
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: "primary" | "secondary" | "ghost" | "danger";
   size?: "sm" | "md" | "lg";
   disabled?: boolean;
   className?: string;
@@ -32,6 +32,8 @@ export function Button({
       "bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text)] border border-[var(--color-border)] focus:ring-[var(--color-border)]",
     ghost:
       "bg-transparent hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] focus:ring-[var(--color-border)]",
+    danger:
+      "bg-[var(--color-error)] hover:brightness-95 text-white focus:ring-[var(--color-error)]",
   };
 
   const sizes = {

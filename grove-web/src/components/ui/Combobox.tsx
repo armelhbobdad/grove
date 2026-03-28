@@ -17,6 +17,7 @@ interface ComboboxProps {
   allowCustom?: boolean;
   customPlaceholder?: string;
   label?: string;
+  disabled?: boolean;
 }
 
 interface DropdownPosition {
@@ -33,6 +34,7 @@ export function Combobox({
   allowCustom = true,
   customPlaceholder = "Enter custom value...",
   label,
+  disabled = false,
 }: ComboboxProps) {
   const [isOpen, setIsOpen] = useState(false);
   // Initialize custom mode from initial props (lazy state initializer)
@@ -99,6 +101,7 @@ export function Combobox({
   }, [isCustomMode]);
 
   const handleSelect = (option: ComboboxOption) => {
+    if (disabled) return;
     if (option.id === "custom") {
       setIsCustomMode(true);
       setCustomValue("");
@@ -197,12 +200,14 @@ export function Combobox({
               onKeyDown={handleCustomKeyDown}
               onBlur={handleCustomSubmit}
               placeholder={customPlaceholder}
+              disabled={disabled}
               className="flex-1 px-3 py-2 bg-[var(--color-bg-secondary)] border border-[var(--color-highlight)] rounded-lg
                 text-[var(--color-text)] placeholder-[var(--color-text-muted)] text-sm
                 focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)]
                 transition-all duration-200"
             />
             <button
+              disabled={disabled}
               onClick={() => {
                 setIsCustomMode(false);
                 setIsOpen(true);
@@ -217,9 +222,11 @@ export function Combobox({
         ) : (
           <button
             ref={triggerRef}
-            onClick={() => setIsOpen(!isOpen)}
+            onClick={() => !disabled && setIsOpen(!isOpen)}
+            disabled={disabled}
             className={`w-full flex items-center justify-between px-3 py-2 bg-[var(--color-bg-secondary)] border rounded-lg
               text-sm transition-all duration-200
+              ${disabled ? "cursor-not-allowed border-[var(--color-border)] bg-[var(--color-bg-secondary)]/60 opacity-60" : ""}
               ${isOpen
                 ? "border-[var(--color-highlight)] ring-1 ring-[var(--color-highlight)]"
                 : "border-[var(--color-border)] hover:border-[var(--color-text-muted)]"

@@ -277,6 +277,29 @@ pub fn create_api_router() -> Router {
         .route("/projects/{id}/git/fetch", post(handlers::git::fetch))
         .route("/projects/{id}/git/stash", post(handlers::git::stash))
         .route("/projects/{id}/git/commit", post(handlers::git::commit))
+        // AI Settings API — Providers
+        .route(
+            "/ai/providers",
+            get(handlers::ai::list_providers).post(handlers::ai::create_provider),
+        )
+        .route(
+            "/ai/providers/{id}",
+            put(handlers::ai::update_provider).delete(handlers::ai::delete_provider),
+        )
+        .route(
+            "/ai/providers/{id}/verify",
+            post(handlers::ai::verify_provider),
+        )
+        // AI Settings API — Audio
+        .route("/ai/transcribe", post(handlers::ai::transcribe))
+        .route(
+            "/ai/audio",
+            get(handlers::ai::get_audio).put(handlers::ai::save_audio_global),
+        )
+        .route(
+            "/projects/{id}/ai/audio",
+            put(handlers::ai::save_audio_project),
+        )
         // Skills API — Agents
         .route(
             "/skills/agents",

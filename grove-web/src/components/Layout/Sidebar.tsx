@@ -5,6 +5,7 @@ import {
   LayoutGrid,
   ListTodo,
   Blocks,
+  Sparkles,
   BarChart2,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +30,7 @@ const navItems: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { id: "tasks", label: "Tasks", icon: ListTodo },
   { id: "skills", label: "Skills", icon: Blocks },
+  { id: "ai", label: "AI", icon: Sparkles },
   { id: "statistics", label: "Statistics", icon: BarChart2, beta: true },
 ];
 

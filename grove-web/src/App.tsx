@@ -12,6 +12,7 @@ import { AddProjectDialog } from "./components/Projects/AddProjectDialog";
 import { WelcomePage } from "./components/Welcome";
 import { DiffReviewPage } from "./components/Review";
 import { SkillsPage } from "./components/Skills";
+import { AIPage, GlobalAudioRecorder } from "./components/AI";
 import { ProjectStatsPage } from "./components/Stats/ProjectStatsPage";
 import { UpdateBanner } from "./components/ui/UpdateBanner";
 import { CommandPalette } from "./components/ui/CommandPalette";
@@ -49,20 +50,27 @@ function AppContent() {
   } = useCommandPalette();
   const { theme } = useTheme();
 
-  const NAV_ITEMS = ["dashboard", "tasks", "skills", "statistics"] as const;
+  const NAV_ITEMS = ["dashboard", "tasks", "skills", "ai", "statistics"] as const;
+  const setActiveNavItem = (index: number) => {
+    const nextItem = NAV_ITEMS[index];
+    if (nextItem) {
+      setActiveItem(nextItem);
+    }
+  };
 
   const isZenMode = tasksMode === "zen";
 
   // Cmd+K = command palette, Cmd+P = project palette, Cmd+T = task palette
-  // Cmd+1-4 = tab switch (Zen mode only; Blitz uses Cmd+1-9 for task selection)
+  // Cmd+1-5 = tab switch (Zen mode only; Blitz uses Cmd+1-9 for task selection)
   useHotkeys([
     { key: "Meta+k", handler: openCommandPalette },
     { key: "Meta+p", handler: openProjectPalette },
     { key: "Meta+o", handler: openTaskPalette },
-    { key: "Meta+1", handler: () => setActiveItem(NAV_ITEMS[0]), options: { enabled: isZenMode && !inWorkspace } },
-    { key: "Meta+2", handler: () => setActiveItem(NAV_ITEMS[1]), options: { enabled: isZenMode && !inWorkspace } },
-    { key: "Meta+3", handler: () => setActiveItem(NAV_ITEMS[2]), options: { enabled: isZenMode && !inWorkspace } },
-    { key: "Meta+4", handler: () => setActiveItem(NAV_ITEMS[3]), options: { enabled: isZenMode && !inWorkspace } },
+    { key: "Meta+1", handler: () => setActiveNavItem(0), options: { enabled: isZenMode && !inWorkspace } },
+    { key: "Meta+2", handler: () => setActiveNavItem(1), options: { enabled: isZenMode && !inWorkspace } },
+    { key: "Meta+3", handler: () => setActiveNavItem(2), options: { enabled: isZenMode && !inWorkspace } },
+    { key: "Meta+4", handler: () => setActiveNavItem(3), options: { enabled: isZenMode && !inWorkspace } },
+    { key: "Meta+5", handler: () => setActiveNavItem(4), options: { enabled: isZenMode && !inWorkspace } },
   ], [openCommandPalette, openProjectPalette, openTaskPalette, isZenMode, inWorkspace]);
 
   const handleSwitchToZen = useCallback(() => {
@@ -280,6 +288,8 @@ function AppContent() {
         );
       case "skills":
         return <SkillsPage />;
+      case "ai":
+        return <AIPage />;
       case "statistics":
         return <ProjectStatsPage projectId={selectedProject?.id} />;
       case "settings":
@@ -300,7 +310,7 @@ function AppContent() {
     }
   };
 
-  const isFullWidthPage = activeItem === "tasks" || activeItem === "skills";
+  const isFullWidthPage = activeItem === "tasks" || activeItem === "skills" || activeItem === "ai";
 
   const sidebarProps = {
     activeItem,
@@ -389,6 +399,7 @@ function AppContent() {
           selectedTask={null}
           onTaskSelect={handleTaskSelectFromPalette}
         />
+        <GlobalAudioRecorder projectId={selectedProject?.id ?? null} />
       </div>
     );
   }
@@ -450,6 +461,7 @@ function AppContent() {
         selectedTask={null}
         onTaskSelect={handleTaskSelectFromPalette}
       />
+      <GlobalAudioRecorder projectId={selectedProject?.id ?? null} />
     </div>
   );
 }
