@@ -193,7 +193,7 @@ export interface FlexLayoutContainerHandle {
   selectTabByIndex: (index: number) => void;
   closeActiveTab: () => void;
   /** Navigate to a file (optionally at a line) in the Review panel */
-  navigateToFile: (filePath: string, line?: number) => void;
+  navigateToFile: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
 }
 
 export const FlexLayoutContainer = forwardRef<
@@ -407,9 +407,9 @@ export const FlexLayoutContainer = forwardRef<
   const navSeqRef = useRef(0);
   const [fileNavRequest, setFileNavRequest] = useState<FileNavRequest | null>(null);
 
-  const navigateToFile = useCallback((filePath: string, line?: number) => {
+  const navigateToFile = useCallback((filePath: string, line?: number, mode: 'diff' | 'full' = 'full') => {
     const seq = ++navSeqRef.current;
-    setFileNavRequest({ file: filePath, line, seq });
+    setFileNavRequest({ file: filePath, line, mode, seq });
 
     // Ensure a review tab exists and is selected
     const allTabs = getAllTabs();

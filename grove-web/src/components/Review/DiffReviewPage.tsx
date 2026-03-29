@@ -31,6 +31,7 @@ import './diffTheme.css';
 export interface FileNavRequest {
   file: string;
   line?: number;
+  mode?: 'diff' | 'full';
   /** Monotonic counter so repeated clicks on the same file still trigger */
   seq: number;
 }
@@ -39,7 +40,7 @@ interface DiffReviewPageProps {
   projectId: string;
   taskId: string;
   embedded?: boolean;
-  /** When set, switch to All Files mode and scroll to the given file/line */
+  /** When set, switch mode and scroll to the given file/line */
   navigateToFile?: FileNavRequest | null;
 }
 
@@ -134,8 +135,7 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
     lastNavSeqRef.current = navigateToFile.seq;
     // Store the pending navigation target
     pendingNavRef.current = { file: navigateToFile.file, line: navigateToFile.line };
-    // Switch to All Files mode so the target file becomes available in displayFiles
-    setViewMode('full');
+    setViewMode(navigateToFile.mode ?? 'full');
   }, [navigateToFile]);
 
   // Build mention items from allFiles for @ mention in comment textareas

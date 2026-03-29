@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useIsMobile } from "../../hooks";
 
@@ -11,11 +12,48 @@ interface TooltipProps {
 
 export function Tooltip({ content, children, position = "top", delay = 200 }: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
   const timeoutRef = useRef<number | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
   const { isTouchDevice } = useIsMobile();
+
+  const updatePosition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const gap = 10;
+    const viewportPadding = 12;
+    const estimatedWidth = Math.min(576, window.innerWidth - viewportPadding * 2);
+    const estimatedHeight = 120;
+    let top = position === "bottom" ? rect.bottom + gap : rect.top - gap;
+    let left = position === "left" ? rect.left - gap : position === "right" ? rect.right + gap : rect.left + rect.width / 2;
+
+    if (position === "top" || position === "bottom") {
+      left = Math.max(viewportPadding + estimatedWidth / 2, Math.min(left, window.innerWidth - viewportPadding - estimatedWidth / 2));
+      if (position === "top" && top - estimatedHeight < viewportPadding) {
+        top = rect.bottom + gap;
+      } else if (position === "bottom" && top + estimatedHeight > window.innerHeight - viewportPadding) {
+        top = rect.top - gap;
+      }
+    } else {
+      top = Math.max(viewportPadding + estimatedHeight / 2, Math.min(top, window.innerHeight - viewportPadding - estimatedHeight / 2));
+      if (position === "left" && left - estimatedWidth < viewportPadding) {
+        left = rect.right + gap;
+      } else if (position === "right" && left + estimatedWidth > window.innerWidth - viewportPadding) {
+        left = rect.left - gap;
+      }
+    }
+
+    const next = {
+      top,
+      left,
+    };
+    setCoords(next);
+  }, [position]);
 
   const showTooltip = () => {
     timeoutRef.current = window.setTimeout(() => {
+      updatePosition();
       setIsVisible(true);
     }, delay);
   };
@@ -54,13 +92,16 @@ export function Tooltip({ content, children, position = "top", delay = 200 }: To
       }
     };
   }, []);
-
-  const positionClasses = {
-    top: "bottom-full left-1/2 -translate-x-1/2 mb-2",
-    bottom: "top-full left-1/2 -translate-x-1/2 mt-2",
-    left: "right-full top-1/2 -translate-y-1/2 mr-2",
-    right: "left-full top-1/2 -translate-y-1/2 ml-2",
-  };
+  useEffect(() => {
+    if (!isVisible) return;
+    const handle = () => updatePosition();
+    window.addEventListener("scroll", handle, true);
+    window.addEventListener("resize", handle);
+    return () => {
+      window.removeEventListener("scroll", handle, true);
+      window.removeEventListener("resize", handle);
+    };
+  }, [isVisible, updatePosition]);
 
   const arrowClasses = {
     top: "top-full left-1/2 -translate-x-1/2 border-t-[var(--color-bg-tertiary)] border-x-transparent border-b-transparent",
@@ -71,30 +112,45 @@ export function Tooltip({ content, children, position = "top", delay = 200 }: To
 
   return (
     <div
+      ref={triggerRef}
       className="relative inline-flex"
       onMouseEnter={isTouchDevice ? undefined : showTooltip}
       onMouseLeave={isTouchDevice ? undefined : hideTooltip}
       onClick={isTouchDevice ? handleTouchToggle : undefined}
     >
       {children}
-      <AnimatePresence>
-        {isVisible && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.1 }}
-            className={`absolute z-50 ${positionClasses[position]} pointer-events-none`}
-          >
-            <div className="px-2 py-1 text-xs font-medium text-[var(--color-text)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded shadow-lg whitespace-nowrap">
-              {content}
-            </div>
-            <div
-              className={`absolute w-0 h-0 border-4 ${arrowClasses[position]}`}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {typeof document !== "undefined" && createPortal(
+        <AnimatePresence>
+          {isVisible && coords && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.1 }}
+              className="fixed z-[120] pointer-events-none"
+              style={{
+                top: coords.top,
+                left: coords.left,
+                transform:
+                  position === "top" ? "translate(-50%, -100%)" :
+                  position === "bottom" ? "translate(-50%, 0)" :
+                  position === "left" ? "translate(-100%, -50%)" :
+                  "translate(0, -50%)",
+              }}
+            >
+              <div className="relative">
+                <div className="max-w-[min(36rem,calc(100vw-2rem))] whitespace-pre-wrap break-words rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text)] shadow-lg">
+                  {content}
+                </div>
+                <div
+                  className={`absolute w-0 h-0 border-4 ${arrowClasses[position]}`}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
     </div>
   );
 }

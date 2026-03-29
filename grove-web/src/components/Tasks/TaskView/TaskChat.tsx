@@ -31,7 +31,7 @@ import {
   BookOpen,
   ArrowDown,
 } from "lucide-react";
-import { Button, MarkdownRenderer, agentOptions, FileMentionDropdown } from "../../ui";
+import { Button, MarkdownRenderer, Tooltip, VSCodeIcon, agentOptions, FileMentionDropdown } from "../../ui";
 import { buildMentionItems, filterMentionItems } from "../../../utils/fileMention";
 import type { Task } from "../../../data/types";
 import { getApiHost, appendHmacToUrl } from "../../../api/client";
@@ -52,7 +52,7 @@ interface TaskChatProps {
   onToggleFullscreen?: () => void;
   hideHeader?: boolean;
   /** Navigate to a file (optionally at a line) in the Review panel */
-  onNavigateToFile?: (filePath: string, line?: number) => void;
+  onNavigateToFile?: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
 }
 
 type ToolMessage = {
@@ -215,6 +215,12 @@ function completeThinking(messages: ChatMessage[]): ChatMessage[] {
     return m;
   });
   return changed ? result : messages;
+}
+
+function appendSystemMessage(messages: ChatMessage[], content: string): ChatMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.type === "system" && last.content === content) return messages;
+  return [...messages, { type: "system", content }];
 }
 
 function resolveLatestPendingPermission(
@@ -573,6 +579,7 @@ export function TaskChat({
   const planFilePathRef = useRef("");
   const planFileToolIdsRef = useRef<Set<string>>(new Set());
   const shouldStickToBottomRef = useRef(true);
+  const suppressNextSmoothScrollRef = useRef(false);
 
   // ─── Read-only observation mode state ──────────────────────────────────
   const [isRemoteSession, setIsRemoteSession] = useState(false);
@@ -599,6 +606,9 @@ export function TaskChat({
         ? "pending"
         : null;
   const composerPanelOpen = activeComposerPanel !== null;
+  const messagesBottomPaddingClass = composerPanelOpen
+    ? (isRemoteSession ? "pb-[32rem]" : "pb-[28rem]")
+    : (isRemoteSession ? "pb-56" : "pb-44");
 
   useEffect(() => {
     if (activePermissionMessage) {
@@ -711,19 +721,24 @@ export function TaskChat({
   }, [messages.length]);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
   }, []);
 
   const prevMsgCountRef = useRef(0);
   useEffect(() => {
     if (messages.length > prevMsgCountRef.current && shouldStickToBottomRef.current) {
-      scrollMessagesToBottom("smooth");
+      scrollMessagesToBottom(suppressNextSmoothScrollRef.current ? "auto" : "smooth");
     }
+    suppressNextSmoothScrollRef.current = false;
     prevMsgCountRef.current = messages.length;
     requestAnimationFrame(updateScrollState);
   }, [messages, scrollMessagesToBottom, updateScrollState]);
 
   useEffect(() => {
+    suppressNextSmoothScrollRef.current = true;
+    prevMsgCountRef.current = messages.length;
     requestAnimationFrame(() => {
       shouldStickToBottomRef.current = true;
       scrollMessagesToBottom("auto");
@@ -906,7 +921,7 @@ export function TaskChat({
 
     ws.onerror = () => {
       if (chatId === activeChatIdRef.current) {
-        setMessages((prev) => [...prev, { type: "system", content: "Connection error." }]);
+        setMessages((prev) => appendSystemMessage(prev, "Connection error."));
       }
     };
   }, [projectId, task.id]);
@@ -1081,10 +1096,6 @@ export function TaskChat({
           // Session is owned by another process — enter read-only observation mode
           setIsRemoteSession(true);
           setRemoteOwnerName(msg.agent_name || "Unknown");
-          setMessages((prev) => [...prev, {
-            type: "system",
-            content: `This chat is controlled by another process (${msg.agent_name || "Unknown"})`,
-          }]);
           break;
         case "terminal_execute":
           // User-initiated terminal command — show as terminal user message
@@ -1887,6 +1898,7 @@ export function TaskChat({
         // Strip highlight spans, keep plain text
         const raw = el.textContent || "";
         el.textContent = raw;
+        el.blur();
       }
       setIsTerminalMode(false);
       return;
@@ -1895,6 +1907,7 @@ export function TaskChat({
     if (isInputExpanded && e.key === "Escape") {
       e.preventDefault();
       setIsInputExpanded(false);
+      editableRef.current?.blur();
       return;
     }
     // Slash menu navigation
@@ -1962,6 +1975,15 @@ export function TaskChat({
       handleClearPending();
       return;
     }
+    // Plain input: Escape → blur editor
+    if (e.key === "Escape") {
+      e.preventDefault();
+      editableRef.current?.blur();
+      if (typeof window !== "undefined") {
+        window.getSelection()?.removeAllRanges();
+      }
+      return;
+    }
     // Expanded mode: Cmd/Ctrl+Enter → send, plain Enter → newline
     // Inline mode: Enter → send, Shift+Enter → newline
     if (isInputExpanded) {
@@ -1970,10 +1992,6 @@ export function TaskChat({
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     }
   }, [handleSend, isTerminalMode, isInputExpanded, showSlashMenu, filteredSlashCommands, slashSelectedIdx, insertCommandAtCursor, showFileMenu, filteredFiles, fileSelectedIdx, insertFileAtCursor, pendingMessages, handleClearPending, modeOptions, permissionLevel, checkContent]);
-
-  const toggleToolCollapse = (id: string) => {
-    setMessages((prev) => prev.map((m) => m.type === "tool" && m.id === id ? { ...m, collapsed: !m.collapsed } : m));
-  };
 
   const toggleThinkingCollapse = (index: number) => {
     setMessages((prev) => prev.map((m, i) => i === index && m.type === "thinking" ? { ...m, collapsed: !m.collapsed } : m));
@@ -1989,19 +2007,13 @@ export function TaskChat({
   }
   wasBusyRef.current = isBusy;
 
-  const toggleSection = useCallback((sectionId: string, toolIds: string[]) => {
+  const toggleSection = useCallback((sectionId: string) => {
     setExpandedSections((prev) => {
       const next = new Set(prev);
       if (next.has(sectionId)) {
         next.delete(sectionId);
       } else {
         next.add(sectionId);
-        // When expanding: only expand primary tools; keep secondary tools collapsed
-        setMessages((pm) => pm.map((m) =>
-          m.type === "tool" && toolIds.includes(m.id)
-            ? { ...m, collapsed: isSecondaryTool(m.title) }
-            : m,
-        ));
       }
       return next;
     });
@@ -2031,7 +2043,7 @@ export function TaskChat({
   // ─── Full chat view ──────────────────────────────────────────────────────
 
   return (
-    <motion.div layout initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
       className={`flex-1 flex flex-col overflow-hidden relative ${fullscreen ? "" : "rounded-lg border border-[var(--color-border)]"}`}
       onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
     >
@@ -2204,34 +2216,32 @@ export function TaskChat({
       <div
         ref={messagesViewportRef}
         onScroll={updateScrollState}
-        className={`relative z-0 flex-1 overflow-y-auto px-4 pt-4 min-h-0 ${
-          composerPanelOpen ? "pb-[28rem]" : "pb-44"
-        }`}
+        className={`relative z-0 flex-1 overflow-y-auto px-4 pt-4 min-h-0 ${messagesBottomPaddingClass}`}
       >
         <div className="flex w-full flex-col gap-3">
-        {renderItems.map((item) =>
-          item.kind === "single" ? (
-            <MessageItem key={`m-${item.index}`} message={item.message} index={item.index} isBusy={isBusy} agentLabel={agentLabel}
-              onToggleThinkingCollapse={toggleThinkingCollapse} onPermissionResponse={handlePermissionResponse} onFileClick={onNavigateToFile} onImageClick={setLightboxUrl} />
-          ) : (
-            <ToolSectionView
-              key={`ts-${item.sectionId}`}
-              sectionId={item.sectionId}
-              tools={item.tools}
-              expanded={expandedSections.has(item.sectionId)}
-              forceExpanded={false}
-              onToggleSection={toggleSection}
-              onToggleToolCollapse={toggleToolCollapse}
-            />
-          ),
-        )}
-        {isBusy && messages[messages.length - 1]?.type !== "assistant" && messages[messages.length - 1]?.type !== "terminal_output" && (
-          <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)] py-1">
-            <Loader2 className="w-4 h-4 animate-spin" /><span>Thinking...</span>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+          {renderItems.map((item) =>
+            item.kind === "single" ? (
+              <MessageItem key={`m-${item.index}`} message={item.message} index={item.index} isBusy={isBusy} agentLabel={agentLabel}
+                onToggleThinkingCollapse={toggleThinkingCollapse} onPermissionResponse={handlePermissionResponse} onFileClick={onNavigateToFile} onImageClick={setLightboxUrl} />
+            ) : (
+              <ToolSectionView
+                key={`ts-${item.sectionId}`}
+                sectionId={item.sectionId}
+                tools={item.tools}
+                expanded={expandedSections.has(item.sectionId)}
+                forceExpanded={false}
+                onToggleSection={toggleSection}
+                onFileClick={onNavigateToFile}
+              />
+            ),
+          )}
+          {isBusy && messages[messages.length - 1]?.type !== "assistant" && messages[messages.length - 1]?.type !== "terminal_output" && (
+            <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)] py-1">
+              <Loader2 className="w-4 h-4 animate-spin" /><span>Thinking...</span>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Input */}
@@ -2994,278 +3004,178 @@ function PermissionCard({ message, onRespond }: {
   );
 }
 
-/** Classify tool as secondary (exploration/search) — collapsed by default in tiered view */
-function isSecondaryTool(title: string): boolean {
-  const t = title.toLowerCase();
-  if (t === "read" || t === "read file" || t.startsWith("read ")) return true;
-  if (t === "glob" || t === "grep" || t === "webfetch" || t === "websearch") return true;
-  if (t.startsWith("find ") || t.startsWith("grep ") || t.startsWith("search ")) return true;
-  if (t.startsWith("bash") || title.startsWith("`")) return true;
-  if (t.startsWith("ls ") || t.startsWith("cat ") || t.startsWith("head ")) return true;
+function normalizeToolVerb(title: string): string {
+  const lower = title.toLowerCase();
+  if (lower.startsWith("read")) return "read";
+  if (lower.startsWith("edit") || lower.startsWith("write")) return "edit";
+  if (lower.startsWith("run") || lower === "terminal" || lower === "exec_command" || lower === "write_stdin") return "run";
+  if (lower.startsWith("search") || lower === "grep" || lower.startsWith("find") || lower === "glob" || lower === "toolsearch") return "search";
+  if (lower.startsWith("list") || lower.startsWith("ls")) return "list";
+  if (lower.startsWith("task") || lower.startsWith("update_plan")) return "plan";
+  if (lower.includes("permission")) return "permission";
+  return "other";
+}
+
+function isEditTool(message: ToolMessage): boolean {
+  return normalizeToolVerb(message.title) === "edit";
+}
+
+function isBackgroundAction(message: ToolMessage): boolean {
+  const verb = normalizeToolVerb(message.title);
+  // Generic "Terminal" events often lack the actual command text and only provide
+  // broad shell output. Treat them as background exploration instead of a primary
+  // action so the UI does not surface a low-signal "Terminal" action chip.
+  return verb === "read" || verb === "search" || verb === "list" || message.title.toLowerCase() === "terminal";
+}
+
+function getToolNavMode(message: ToolMessage): 'diff' | 'full' {
+  return isEditTool(message) ? 'diff' : 'full';
+}
+
+type ToolLocationChip = {
+  key: string;
+  label: string;
+  path: string;
+  line?: number;
+  isDirectory: boolean;
+  status?: string;
+  mode: 'diff' | 'full';
+};
+
+const KNOWN_FILE_BASENAMES = new Set([
+  "makefile",
+  "dockerfile",
+  "license",
+  "readme",
+  "procfile",
+  "gemfile",
+  "rakefile",
+  "justfile",
+  "brewfile",
+  ".gitignore",
+  ".gitattributes",
+  ".gitmodules",
+  ".env",
+  ".editorconfig",
+  ".npmrc",
+  ".nvmrc",
+  ".prettierrc",
+  ".eslintrc",
+  ".clang-format",
+  ".dockerignore",
+]);
+
+function getLocationLabel(path: string): string {
+  const normalized = path.replace(/\/+$/, "");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || normalized;
+}
+
+function isIgnorableLocationLabel(label: string): boolean {
+  return label === "" || label === "." || label === "..";
+}
+
+function looksLikeFileLabel(label: string): boolean {
+  const lower = label.toLowerCase();
+  if (KNOWN_FILE_BASENAMES.has(lower)) return true;
+  if (label.startsWith(".") && label.length > 1) return true;
+  if (label.includes(".")) return true;
+  if (/[A-Z]/.test(label)) return true;
   return false;
 }
 
-function formatToolStatusSummary(counts: { completed?: number; cancelled?: number; failed?: number }): string {
-  const parts: string[] = [];
-  if ((counts.completed ?? 0) > 0) parts.push(`${counts.completed} completed`);
-  if ((counts.cancelled ?? 0) > 0) parts.push(`${counts.cancelled} cancelled`);
-  if ((counts.failed ?? 0) > 0) parts.push(`${counts.failed} failed`);
-  return parts.join(", ");
+function isDirectoryLocation(message: ToolMessage, location: NonNullable<ToolMessage["locations"]>[number]): boolean {
+  const label = getLocationLabel(location.path);
+  if (isIgnorableLocationLabel(label)) return true;
+  if (location.line != null) return false;
+  if (location.path.endsWith("/")) return true;
+  if (isEditTool(message)) return false;
+  const verb = normalizeToolVerb(message.title);
+  if (verb === "read") return false;
+  if (looksLikeFileLabel(label)) return false;
+  return verb === "search" || verb === "list" || verb === "run";
 }
 
-/** Single tool row used inside ToolSectionView */
-function ToolItemRow({ message, onToggleCollapse, onFileClick }: {
-  message: ToolMessage;
-  onToggleCollapse: (id: string) => void;
-  onFileClick?: (filePath: string, line?: number) => void;
-}) {
-  const isRunning = message.status === "running";
-  const isCancelled = message.status === "cancelled";
-  const isFailed = message.status === "error" || message.status === "failed";
-  const loc = message.locations?.[0];
-  const shortPath = loc?.path
-    ? loc.path.replace(/^.*\/worktrees\/[^/]+\//, "")
-    : "";
-  const locationLabel = shortPath
-    ? `\u2018${shortPath}\u2019${loc?.line ? `:${loc.line}` : ""}`
-    : "";
-  const hasContent = !!message.content;
-  // Write tool targeting a .md file → render as markdown instead of code block
-  const isWriteMarkdown = message.title.startsWith("Write") &&
-    (message.locations?.[0]?.path?.endsWith(".md") || /\.md['"\s]/i.test(message.title));
+function collectLocationChips(tools: ToolSectionItem[], predicate: (message: ToolMessage) => boolean): ToolLocationChip[] {
+  const seen = new Set<string>();
+  const chips: ToolLocationChip[] = [];
 
-  return (
-    <div>
-      <div
-        role={hasContent ? "button" : undefined}
-        onClick={hasContent ? () => onToggleCollapse(message.id) : undefined}
-        className={`flex items-center gap-1.5 py-1 px-2 rounded-md text-xs w-full text-left min-w-0 ${
-          hasContent ? "hover:bg-[var(--color-bg-tertiary)] cursor-pointer" : ""
-        } transition-colors`}
-      >
-        {isRunning
-          ? <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
-          : <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isCancelled || isFailed ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"}`} />}
-        {hasContent && (message.collapsed
-          ? <ChevronRight className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
-          : <ChevronDown className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />)}
-        <span className={`shrink-0 ${isRunning ? "text-[var(--color-highlight)]" : isCancelled || isFailed ? "text-[var(--color-warning)]" : "text-[var(--color-text-muted)]"}`}>
-          {message.title}
-        </span>
-        {locationLabel && (
-          <span className="text-[var(--color-text-muted)] opacity-60 truncate min-w-0">
-            {locationLabel}
-          </span>
-        )}
-        <span className="ml-auto text-[10px] text-[var(--color-text-muted)] shrink-0 capitalize">{message.status}</span>
-      </div>
-      {hasContent && !message.collapsed && (
-        <div className="ml-6 mt-1">
-          {isWriteMarkdown ? (
-            <div className="text-xs max-h-64 overflow-y-auto">
-              <MarkdownRenderer content={stripWrappingFence(message.content!.trim())} onFileClick={onFileClick} />
-            </div>
-          ) : (
-            <ToolContentBlock content={message.content!} />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Collapsible sub-section for secondary (exploration) tools inside an expanded ToolSection */
-function SecondaryToolsRow({ tools, expanded, onToggle, onToggleToolCollapse }: {
-  tools: ToolSectionItem[];
-  expanded: boolean;
-  onToggle: () => void;
-  onToggleToolCollapse: (id: string) => void;
-}) {
-  const running = tools.filter((t) => t.message.status === "running").length;
-  const cancelled = tools.filter((t) => t.message.status === "cancelled").length;
-  const failed = tools.filter((t) => t.message.status === "error" || t.message.status === "failed").length;
-  const completed = tools.length - running - cancelled - failed;
-  const label = running > 0
-    ? `Running ${completed}/${tools.length} exploration tools\u2026`
-    : cancelled > 0 || failed > 0
-      ? formatToolStatusSummary({ completed, cancelled, failed })
-        : `${tools.length} exploration tool${tools.length > 1 ? "s" : ""} completed`;
-
-  return (
-    <div>
-      <div
-        role="button"
-        onClick={onToggle}
-        className="flex items-center gap-1.5 py-1 px-2 rounded-md text-xs hover:bg-[var(--color-bg-tertiary)] cursor-pointer transition-colors"
-      >
-        {running > 0
-          ? <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
-          : <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${cancelled > 0 || failed > 0 ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"}`} />}
-        {expanded
-          ? <ChevronDown className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
-          : <ChevronRight className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />}
-        <span className="text-[var(--color-text-muted)]">{label}</span>
-      </div>
-      {expanded && (
-        <div className="ml-2 pl-3 border-l border-[var(--color-border)] space-y-0.5">
-          {tools.map((t) => (
-            <ToolItemRow key={t.message.id} message={t.message} onToggleCollapse={onToggleToolCollapse} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Collapsible section that groups consecutive tool calls */
-function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSection, onToggleToolCollapse }: {
-  sectionId: string;
-  tools: ToolSectionItem[];
-  expanded: boolean;
-  forceExpanded: boolean;
-  onToggleSection: (sectionId: string, toolIds: string[]) => void;
-  onToggleToolCollapse: (id: string) => void;
-}) {
-  const total = tools.length;
-  const running = tools.filter((t) => t.message.status === "running").length;
-  const failed = tools.filter((t) => t.message.status === "error" || t.message.status === "failed").length;
-  const cancelled = tools.filter((t) => t.message.status === "cancelled").length;
-  const completed = total - running - failed - cancelled;
-  const sectionExpanded = forceExpanded || expanded;
-
-  const toolIds = useMemo(() => tools.map((t) => t.message.id), [tools]);
-
-  // Classify tools into primary (actions) and secondary (exploration)
-  const primary = useMemo(() => tools.filter((t) => !isSecondaryTool(t.message.title)), [tools]);
-  const secondary = useMemo(() => tools.filter((t) => isSecondaryTool(t.message.title)), [tools]);
-  const [secondaryExpanded, setSecondaryExpanded] = useState(false);
-
-  // Summary label
-  const primaryCount = primary.length;
-  let summaryText: string;
-  const secondaryCount = secondary.length;
-  if (running > 0) {
-    summaryText = `Running ${completed}/${total} tools\u2026`;
-  } else if (cancelled > 0 || failed > 0) {
-    summaryText = formatToolStatusSummary({ completed, cancelled, failed });
-  } else if (primaryCount > 0 && secondaryCount > 0) {
-    summaryText = `${primaryCount} action${primaryCount > 1 ? "s" : ""}, ${secondaryCount} exploration tool${secondaryCount > 1 ? "s" : ""} completed`;
-  } else if (primaryCount > 0) {
-    summaryText = `${primaryCount} action tool${primaryCount > 1 ? "s" : ""} completed`;
-  } else if (secondaryCount > 0) {
-    summaryText = `${secondaryCount} exploration tool${secondaryCount > 1 ? "s" : ""} completed`;
-  } else {
-    summaryText = `${total} tool${total > 1 ? "s" : ""} completed`;
+  for (const tool of tools) {
+    if (!predicate(tool.message)) continue;
+    for (const loc of tool.message.locations ?? []) {
+      const label = getLocationLabel(loc.path);
+      if (isIgnorableLocationLabel(label)) continue;
+      const isDirectory = isDirectoryLocation(tool.message, loc);
+      const key = `${isDirectory ? "dir" : "file"}:${label}:${loc.path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chips.push({
+        key,
+        label,
+        path: loc.path,
+        line: loc.line,
+        isDirectory,
+        status: tool.message.status,
+        mode: getToolNavMode(tool.message),
+      });
+    }
   }
 
-  // Icon
-  const summaryIcon = running > 0
-    ? <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
-    : failed > 0 || cancelled > 0
-      ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
-      : <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />;
+  return chips;
+}
 
-  if (!sectionExpanded) {
-    // Collapsed: single summary row
-    return (
-      <div
-        role="button"
-        onClick={() => onToggleSection(sectionId, toolIds)}
-        className="flex items-center gap-1.5 py-1.5 px-2 rounded-md text-xs hover:bg-[var(--color-bg-tertiary)] cursor-pointer transition-colors"
-      >
-        {summaryIcon}
-        <ChevronRight className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
-        <span className="text-[var(--color-text-muted)]">{summaryText}</span>
-      </div>
-    );
-  }
-
-  // Expanded
-  return (
-    <div>
-      {/* Section header */}
-      <div
-        role="button"
-        onClick={() => onToggleSection(sectionId, toolIds)}
-        className="flex items-center gap-1.5 py-1.5 px-2 rounded-md text-xs hover:bg-[var(--color-bg-tertiary)] cursor-pointer transition-colors"
-      >
-        {summaryIcon}
-        <ChevronDown className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
-        <span className="text-[var(--color-text-muted)]">Tools ({total})</span>
-      </div>
-      {/* Tool items with left border indent — tiered: primary first, secondary collapsed */}
-      <div className="ml-2 pl-3 border-l-2 border-[var(--color-border)] space-y-0.5">
-        {primary.map((t) => (
-          <ToolItemRow key={t.message.id} message={t.message} onToggleCollapse={onToggleToolCollapse} />
-        ))}
-        {secondary.length > 0 && (
-          <SecondaryToolsRow
-            tools={secondary}
-            expanded={secondaryExpanded}
-            onToggle={() => setSecondaryExpanded((p) => !p)}
-            onToggleToolCollapse={onToggleToolCollapse}
-          />
-        )}
-      </div>
-    </div>
+function parseDiffStat(content?: string): { additions: number; deletions: number } | null {
+  if (!content) return null;
+  const lines = content.split("\n");
+  const looksLikeDiff = lines.some((line) =>
+    line.startsWith("@@ ") ||
+    line.startsWith("@@") ||
+    line.startsWith("diff --git ") ||
+    line.startsWith("+++ ") ||
+    line.startsWith("--- "),
   );
-}
-
-/** Lightweight syntax highlighting via regex — returns React nodes with colored spans */
-const HL_RE =
-  /(\/\/.*$|\/\*[\s\S]*?\*\/|#[^\n{[]*$|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\b(?:if|else|for|func|return|defer|var|const|let|type|struct|interface|import|package|range|switch|case|default|break|continue|go|select|chan|map|nil|true|false|fn|pub|mod|use|impl|trait|enum|match|self|class|def|async|await|yield|from|try|catch|throw|finally|new|delete|typeof|instanceof|int|string|bool|byte|error|float64|float32|int64|int32|uint|void|number|boolean)\b|\b\d+(?:\.\d+)?\b)/gm;
-
-function highlightLine(line: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  let lastIdx = 0;
-  HL_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = HL_RE.exec(line)) !== null) {
-    if (m.index > lastIdx) parts.push(line.slice(lastIdx, m.index));
-    const t = m[0];
-    let color: string;
-    if (t.startsWith("//") || t.startsWith("/*") || t.startsWith("#"))
-      color = "var(--color-text-muted)";
-    else if (t.startsWith('"') || t.startsWith("'") || t.startsWith("`"))
-      color = "var(--color-success)";
-    else if (/^\d/.test(t))
-      color = "var(--color-warning)";
-    else
-      color = "var(--color-highlight)";
-    parts.push(<span key={m.index} style={{ color }}>{t}</span>);
-    lastIdx = HL_RE.lastIndex;
+  if (!looksLikeDiff) return null;
+  let additions = 0;
+  let deletions = 0;
+  for (const line of lines) {
+    if (
+      line.startsWith("+++ ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("@@") ||
+      line.startsWith("diff --git ") ||
+      line.startsWith("index ")
+    ) continue;
+    if (line.startsWith("+")) additions += 1;
+    else if (line.startsWith("-")) deletions += 1;
   }
-  if (lastIdx < line.length) parts.push(line.slice(lastIdx));
-  return parts.length > 0 ? <>{parts}</> : line;
+  if (additions === 0 && deletions === 0) return null;
+  return { additions, deletions };
 }
 
-/** Detect content type for tool output */
-function detectContentType(lines: string[]): "line-numbered" | "diff" | "markdown" | "plain" {
-  // Line-numbered: Read File output "  123→\tcontent"
-  const lineNumRegex = /^\s*\d+→/;
-  const numberedCount = lines.filter((l) => lineNumRegex.test(l)).length;
-  if (numberedCount > 0 && numberedCount >= lines.length * 0.5) return "line-numbered";
-
-  // Diff: has @@ hunk markers or ---/+++ headers
-  const hasDiffHeaders = lines.some(
-    (l) => l.startsWith("@@") || l.startsWith("--- ") || l.startsWith("+++ "),
-  );
-  if (hasDiffHeaders) return "diff";
-
-  // Markdown: headings, code fences, bold, task lists
-  if (/^(#{1,6}\s|```|\*\*|- \[)/m.test(lines.join("\n"))) return "markdown";
-
-  return "plain";
+function formatActionCount(count: number): string | null {
+  if (count <= 0) return null;
+  return `${count} action${count !== 1 ? "s" : ""}`;
 }
 
-/** Check if a line is a truncation marker or code fence artifact */
-function isMetaLine(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed === "..." || trimmed === "```" || /^```\w*$/.test(trimmed);
+function formatInspectionCount(count: number): string | null {
+  if (count <= 0) return null;
+  return `${count} inspection step${count !== 1 ? "s" : ""}`;
 }
 
-const PRE_CLASSES =
-  "rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-3 text-xs font-mono text-[var(--color-text)] max-h-64 overflow-y-auto break-words";
+function truncateChipLabel(label: string, maxLength = 72): string {
+  const singleLine = label.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, maxLength - 1)}…`;
+}
+
+function extractRawActionLabel(message: ToolMessage): string {
+  const title = message.title.replace(/^Run\s+/i, "");
+  const verb = normalizeToolVerb(message.title);
+  if (verb === "run") return title;
+  if (verb === "permission") return "Permission request";
+  if (verb === "plan") return "Plan update";
+  return title;
+}
 
 /** Strip outermost code fence wrapper (```lang\n...\n```) if present */
 function stripWrappingFence(raw: string): string {
@@ -3280,111 +3190,363 @@ function stripWrappingFence(raw: string): string {
   return raw;
 }
 
-/** Tool content renderer with format-aware rendering */
-function ToolContentBlock({ content }: { content: string }) {
-  const cleaned = content.trim();
-  if (!cleaned) return null;
-
-  const lines = cleaned.split("\n");
-  const type = detectContentType(lines);
-
-  // Markdown: delegate to MarkdownRenderer
-  if (type === "markdown") {
-    return (
-      <div className="text-xs">
-        <MarkdownRenderer content={stripWrappingFence(cleaned)} />
-      </div>
-    );
+function extractFailureReason(tools: ToolSectionItem[]): string | null {
+  for (const tool of tools) {
+    const m = tool.message;
+    if (m.status !== "error" && m.status !== "failed") continue;
+    const content = m.content?.trim();
+    if (!content) return `Failed during ${extractRawActionLabel(m)}`;
+    const stripped = stripWrappingFence(content)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!stripped) return `Failed during ${extractRawActionLabel(m)}`;
+    return stripped.slice(0, 180);
   }
+  return null;
+}
 
-  // Line-numbered: Read File output → gutter + highlighted code
-  if (type === "line-numbered") {
-    const lineNumRegex = /^\s*(\d+)→\t?(.*)$/;
-    return (
-      <pre className={PRE_CLASSES}>
-        {lines.map((line, i) => {
-          // Truncation / code-fence markers → dimmed ellipsis
-          if (isMetaLine(line)) {
-            return (
-              <div key={i} className="text-center text-[var(--color-text-muted)] opacity-40 leading-relaxed select-none">
-                ⋯
-              </div>
-            );
-          }
-          const match = lineNumRegex.exec(line);
-          if (match) {
-            return (
-              <div key={i} className="flex leading-relaxed">
-                <span className="select-none text-[var(--color-text-muted)] opacity-40 w-8 shrink-0 text-right pr-3 tabular-nums">
-                  {match[1]}
-                </span>
-                <span className="whitespace-pre-wrap">{highlightLine(match[2])}</span>
-              </div>
-            );
-          }
-          return (
-            <div key={i} className="whitespace-pre-wrap pl-8 leading-relaxed">
-              {highlightLine(line)}
-            </div>
-          );
-        })}
-      </pre>
-    );
+function summarizeToolSection(tools: ToolSectionItem[]) {
+  const running = tools.filter((t) => t.message.status === "running").length;
+  const failed = tools.filter((t) => t.message.status === "error" || t.message.status === "failed").length;
+  const cancelled = tools.filter((t) => t.message.status === "cancelled").length;
+  const statusLabel = running > 0 ? "running" : failed > 0 ? "failed" : cancelled > 0 ? "cancelled" : "done";
+  const edits = tools.filter((t) => isEditTool(t.message));
+  const foregroundActions = tools.filter((t) => !isEditTool(t.message) && !isBackgroundAction(t.message));
+  const backgroundActions = tools.filter((t) => isBackgroundAction(t.message));
+
+  let title = "Working";
+  if (failed > 0) title = "Action failed";
+  else if (tools.some((t) => normalizeToolVerb(t.message.title) === "permission")) title = "Waiting for permission";
+  else if (edits.length > 0) title = running > 0 ? "Editing files" : "Edits applied";
+  else if (foregroundActions.length > 0) title = running > 0 ? "Running actions" : "Actions complete";
+  else if (backgroundActions.length > 0) title = running > 0 ? "Inspecting code" : "Inspection complete";
+
+  const editItems = edits.map((tool) => {
+    const loc = tool.message.locations?.[0];
+    const path = loc?.path?.split("/").pop() || tool.message.title.replace(/^(Edit|Write)\s+/i, "");
+    const stat = parseDiffStat(tool.message.content);
+    return {
+      key: `${tool.message.id}:${path}`,
+      toolId: tool.message.id,
+      label: path,
+      additions: stat?.additions ?? 0,
+      deletions: stat?.deletions ?? 0,
+      status: tool.message.status,
+    };
+  });
+
+  const actionItems = foregroundActions.map((tool) => ({
+    key: tool.message.id,
+    label: truncateChipLabel(extractRawActionLabel(tool.message)),
+    fullLabel: extractRawActionLabel(tool.message),
+    status: tool.message.status,
+  }));
+
+  const inspectionEntries = collectLocationChips(tools, isBackgroundAction);
+  const inspectionFiles = inspectionEntries.filter((entry) => !entry.isDirectory);
+  const actionEntries = collectLocationChips(tools, (message) => !isBackgroundAction(message));
+  const actionFiles = actionEntries.map((entry) => entry.label);
+
+  const totalActionCount = edits.length + actionItems.length;
+  const inspectionSectionSummary = inspectionFiles.length > 0
+    ? `Reviewed ${inspectionFiles.length} file${inspectionFiles.length > 1 ? "s" : ""}`
+    : null;
+  const actionSectionSummary = actionFiles.length > 0
+    ? `Action on ${actionFiles.length} file${actionFiles.length > 1 ? "s" : ""}`
+    : formatActionCount(totalActionCount);
+  const headerSummary = backgroundActions.length > 0 && edits.length === 0 && foregroundActions.length === 0
+    ? (inspectionSectionSummary ?? formatInspectionCount(backgroundActions.length))
+    : (actionSectionSummary ?? formatActionCount(totalActionCount));
+
+  return {
+    title,
+    statusLabel,
+    headerSummary,
+    actionSectionSummary,
+    editItems,
+    actionItems,
+    visibleActionItems: actionItems.slice(0, 4),
+    actionItemOverflow: Math.max(0, actionItems.length - 4),
+    inspectionSectionSummary,
+    inspectionEntries,
+    inspectionVisibleEntries: inspectionEntries.slice(0, 3),
+    inspectionOverflow: Math.max(0, inspectionEntries.length - 3),
+    actionEntries,
+    actionVisibleEntries: actionEntries.slice(0, 3),
+    actionOverflow: Math.max(0, actionEntries.length - 3),
+    failureReason: extractFailureReason(tools),
+    running,
+    failed,
+    cancelled,
+  };
+}
+
+function getStatusChipClasses(status: string, muted = false): string {
+  if (status === "error" || status === "failed") {
+    return "bg-[color-mix(in_srgb,var(--color-warning)_16%,var(--color-bg))] text-[color-mix(in_srgb,var(--color-warning)_92%,white_8%)] border border-[color-mix(in_srgb,var(--color-warning)_28%,transparent)]";
   }
-
-  // Diff: line-level coloring for +/- lines
-  if (type === "diff") {
-    return (
-      <pre className={`${PRE_CLASSES} whitespace-pre-wrap`}>
-        {lines.map((line, i) => {
-          if (isMetaLine(line)) {
-            return (
-              <div key={i} className="text-center text-[var(--color-text-muted)] opacity-40 select-none">
-                ⋯
-              </div>
-            );
-          }
-          const isAdd = line.startsWith("+");
-          const isDel = line.startsWith("-");
-          const isHunk = line.startsWith("@@");
-          const prefix = isAdd ? "+" : isDel ? "−" : isHunk ? "" : " ";
-          const body = (isAdd || isDel) ? line.slice(1) : line;
-          return (
-            <div
-              key={i}
-              className="flex"
-              style={
-                isAdd
-                  ? { background: "color-mix(in srgb, var(--color-success) 15%, transparent)", margin: "0 -12px", padding: "0 12px" }
-                  : isDel
-                  ? { background: "color-mix(in srgb, var(--color-error) 15%, transparent)", margin: "0 -12px", padding: "0 12px" }
-                  : isHunk
-                  ? { color: "var(--color-highlight)" }
-                  : undefined
-              }
-            >
-              {!isHunk && (
-                <span
-                  className="select-none shrink-0 w-4 text-center font-bold"
-                  style={{ color: isAdd ? "var(--color-success)" : isDel ? "var(--color-error)" : "transparent" }}
-                >
-                  {prefix}
-                </span>
-              )}
-              <span className="whitespace-pre-wrap break-words min-w-0">{isHunk ? line : (body || " ")}</span>
-            </div>
-          );
-        })}
-      </pre>
-    );
+  if (status === "running") {
+    return muted
+      ? "bg-[color-mix(in_srgb,var(--color-highlight)_10%,var(--color-bg))] text-[color-mix(in_srgb,var(--color-highlight)_80%,white_8%)] border border-[color-mix(in_srgb,var(--color-highlight)_18%,transparent)]"
+      : "bg-[color-mix(in_srgb,var(--color-highlight)_12%,var(--color-bg))] text-[var(--color-text)] border border-[color-mix(in_srgb,var(--color-highlight)_18%,transparent)]";
   }
+  if (status === "cancelled") {
+    return "bg-[color-mix(in_srgb,var(--color-text-muted)_10%,var(--color-bg))] text-[var(--color-text-muted)] border border-[color-mix(in_srgb,var(--color-text-muted)_18%,transparent)]";
+  }
+  return muted
+    ? "bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,var(--color-bg))] text-[var(--color-text-muted)] border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)]"
+    : "bg-[color-mix(in_srgb,var(--color-bg-secondary)_88%,var(--color-bg))] text-[var(--color-text)] border border-[color-mix(in_srgb,var(--color-border)_70%,transparent)]";
+}
 
-  // Plain text: highlighted pre block
+function ExpandableFileChipGroup({
+  title,
+  summary,
+  visibleEntries,
+  allEntries,
+  expanded,
+  onToggleExpanded,
+  onFileClick,
+  muted = true,
+}: {
+  title: string;
+  summary?: string | null;
+  visibleEntries: ToolLocationChip[];
+  allEntries: ToolLocationChip[];
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onFileClick?: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
+  muted?: boolean;
+}) {
+  const overflow = Math.max(0, allEntries.length - visibleEntries.length);
+  const renderEntry = (entry: ToolLocationChip) => (
+    <button
+      key={entry.key}
+      type="button"
+      disabled={entry.isDirectory}
+      onClick={() => {
+        if (!entry.isDirectory) onFileClick?.(entry.path, entry.line, entry.mode);
+      }}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${
+        entry.isDirectory
+          ? "bg-[color-mix(in_srgb,var(--color-bg-secondary)_80%,var(--color-bg))] text-[var(--color-text-muted)] border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)] disabled:cursor-default disabled:opacity-85"
+          : getStatusChipClasses(entry.status ?? "completed", muted)
+      }`}
+    >
+      <VSCodeIcon filename={entry.label} size={13} isFolder={entry.isDirectory} />
+      {entry.label}
+    </button>
+  );
+
   return (
-    <pre className={`${PRE_CLASSES} whitespace-pre-wrap`}>
-      {lines.map((line, i) => (
-        <div key={i} className="leading-relaxed">{highlightLine(line) || " "}</div>
-      ))}
-    </pre>
+    <div className="space-y-2">
+      <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+        {title}
+        {summary ? <span className="ml-2 normal-case tracking-normal text-[11px] opacity-80">{summary}</span> : null}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {visibleEntries.map(renderEntry)}
+        {overflow > 0 && (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_80%,var(--color-bg))] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)]"
+          >
+            {expanded ? "Show less" : `+${overflow} more`}
+          </button>
+        )}
+      </div>
+      {expanded && overflow > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {allEntries.slice(visibleEntries.length).map(renderEntry)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsible section that groups consecutive tool calls */
+function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSection, onFileClick }: {
+  sectionId: string;
+  tools: ToolSectionItem[];
+  expanded: boolean;
+  forceExpanded: boolean;
+  onToggleSection: (sectionId: string) => void;
+  onFileClick?: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
+}) {
+  const sectionExpanded = forceExpanded || expanded;
+  const summary = useMemo(() => summarizeToolSection(tools), [tools]);
+  const [inspectionExpanded, setInspectionExpanded] = useState(false);
+  const [actionExpanded, setActionExpanded] = useState(false);
+  const hasDetails = summary.inspectionEntries.length > 0 || summary.editItems.length > 0 || summary.actionItems.length > 0 || summary.actionEntries.length > 0;
+  const summaryIcon = summary.running > 0
+    ? <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
+    : summary.failed > 0 || summary.cancelled > 0
+      ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
+      : <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />;
+  const collapsedSecondaryText = summary.failureReason ?? summary.headerSummary;
+  return (
+    <motion.div
+      layout
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className={`rounded-xl border border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] transition-colors ${
+        sectionExpanded
+          ? "bg-[color-mix(in_srgb,var(--color-bg-secondary)_72%,transparent)] px-3 py-3"
+          : `bg-[color-mix(in_srgb,var(--color-bg-secondary)_62%,transparent)] px-3 py-2.5${hasDetails ? " hover:bg-[color-mix(in_srgb,var(--color-bg-secondary)_82%,transparent)]" : ""}`
+      }`}
+    >
+      <div
+        role={hasDetails ? "button" : undefined}
+        onClick={hasDetails ? () => onToggleSection(sectionId) : undefined}
+        className={`flex gap-2.5${sectionExpanded ? " items-start" : " items-center"}${hasDetails ? " cursor-pointer" : ""}`}
+      >
+        <div className={sectionExpanded ? "pt-0.5" : ""}>{summaryIcon}</div>
+        <div className="min-w-0 flex-1">
+          {!sectionExpanded ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0 text-sm font-medium text-[var(--color-text)]">{summary.title}</span>
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{summary.statusLabel}</span>
+              {collapsedSecondaryText ? (
+                <span
+                  className={`min-w-0 truncate text-xs ${summary.failureReason ? "text-[color-mix(in_srgb,var(--color-warning)_95%,white_4%)]" : "text-[var(--color-text-muted)]"}`}
+                  title={collapsedSecondaryText}
+                >
+                  <span className="mr-1 text-[var(--color-text-muted)]">·</span>
+                  {collapsedSecondaryText}
+                </span>
+              ) : null}
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-[var(--color-text)]">{summary.title}</span>
+                <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{summary.statusLabel}</span>
+              </div>
+              {summary.failureReason && (
+                <div className="mt-1 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-2.5 py-2 text-xs text-[color-mix(in_srgb,var(--color-warning)_95%,white_4%)]">
+                  {summary.failureReason}
+                </div>
+              )}
+              {!summary.failureReason && (
+                <div className="mt-1 text-xs text-[var(--color-text-muted)]">{summary.headerSummary}</div>
+              )}
+            </>
+          )}
+        </div>
+        {hasDetails ? (
+          <motion.div
+            animate={{ rotate: sectionExpanded ? 90 : 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className={`shrink-0 ${sectionExpanded ? "mt-0.5" : ""}`}
+          >
+            <ChevronRight className="w-3 h-3 text-[var(--color-text-muted)]" />
+          </motion.div>
+        ) : null}
+      </div>
+
+      <AnimatePresence initial={false}>
+        {sectionExpanded && hasDetails && (
+          <motion.div
+            key="tool-section-body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="mt-3 border-t border-[color-mix(in_srgb,var(--color-border)_62%,transparent)] pt-3 space-y-3">
+              {summary.inspectionEntries.length > 0 && (
+                <ExpandableFileChipGroup
+                  title="Inspection"
+                  summary={summary.inspectionSectionSummary}
+                  visibleEntries={summary.inspectionVisibleEntries}
+                  allEntries={summary.inspectionEntries}
+                  expanded={inspectionExpanded}
+                  onToggleExpanded={() => setInspectionExpanded((v) => !v)}
+                  onFileClick={onFileClick}
+                  muted
+                />
+              )}
+
+              {summary.editItems.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">Edit</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {summary.editItems.map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => {
+                          const tool = tools.find((t) => t.message.id === item.toolId)?.message;
+                          const loc = tool?.locations?.[0];
+                          if (loc?.path && tool) onFileClick?.(loc.path, loc.line, getToolNavMode(tool));
+                        }}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${getStatusChipClasses(item.status)}`}
+                      >
+                        <VSCodeIcon filename={item.label} size={13} />
+                        <span>{item.label}</span>
+                        {(item.additions > 0 || item.deletions > 0) && (
+                          <span className="text-[10px]">
+                            <span className="text-[var(--color-success)]">+{item.additions}</span>
+                            <span className="mx-0.5 text-[var(--color-text-muted)]">/</span>
+                            <span className="text-[var(--color-error)]">-{item.deletions}</span>
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(summary.actionItems.length > 0 || summary.actionEntries.length > 0) && (
+                <div className="space-y-2">
+                  {summary.actionEntries.length > 0 && (
+                    <ExpandableFileChipGroup
+                      title="Action"
+                      summary={summary.actionSectionSummary}
+                      visibleEntries={summary.actionVisibleEntries}
+                      allEntries={summary.actionEntries}
+                      expanded={actionExpanded}
+                      onToggleExpanded={() => setActionExpanded((v) => !v)}
+                      onFileClick={onFileClick}
+                      muted
+                    />
+                  )}
+                  {(summary.visibleActionItems.length > 0 || summary.actionItemOverflow > 0) && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {summary.visibleActionItems.map((item) => (
+                        item.fullLabel !== item.label ? (
+                          <Tooltip key={item.key} content={item.fullLabel}>
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${getStatusChipClasses(item.status)}`}
+                            >
+                              {item.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-[var(--color-highlight)]" /> : null}
+                              <span>{item.label}</span>
+                            </span>
+                          </Tooltip>
+                        ) : (
+                          <span
+                            key={item.key}
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${getStatusChipClasses(item.status)}`}
+                          >
+                            {item.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-[var(--color-highlight)]" /> : null}
+                            <span>{item.label}</span>
+                          </span>
+                        )
+                      ))}
+                      {summary.actionItemOverflow > 0 && (
+                        <span className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_80%,var(--color-bg))] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)]">
+                          +{summary.actionItemOverflow} more actions
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
