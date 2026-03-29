@@ -161,6 +161,15 @@ body {
   }
 }
 
+@keyframes overflow-title-marquee {
+  0%, 16% {
+    transform: translateX(0);
+  }
+  84%, 100% {
+    transform: translateX(var(--overflow-shift));
+  }
+}
+
 .chatbox-busy-border {
   border-color: transparent !important;
   position: relative;
@@ -192,6 +201,11 @@ body {
     linear-gradient(#000 0 0);
   mask-composite: exclude;
   animation: chatbox-busy-border-spin 4.8s linear infinite;
+}
+
+.overflow-title-animate {
+  animation: overflow-title-marquee 4.8s ease-in-out infinite;
+  will-change: transform;
 }
 
 /* Blitz mode: Show shortcuts when Command key is pressed */

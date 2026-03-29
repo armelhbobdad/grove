@@ -1,7 +1,16 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  type CSSProperties,
+} from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare,
+  ChevronLeft,
   ChevronRight,
   ChevronDown,
   Maximize2,
@@ -31,11 +40,33 @@ import {
   BookOpen,
   ArrowDown,
 } from "lucide-react";
-import { Button, MarkdownRenderer, Tooltip, VSCodeIcon, agentOptions, FileMentionDropdown } from "../../ui";
-import { buildMentionItems, filterMentionItems } from "../../../utils/fileMention";
+import {
+  Button,
+  MarkdownRenderer,
+  Tooltip,
+  VSCodeIcon,
+  agentOptions,
+  FileMentionDropdown,
+} from "../../ui";
+import {
+  buildMentionItems,
+  filterMentionItems,
+} from "../../../utils/fileMention";
 import type { Task } from "../../../data/types";
 import { getApiHost, appendHmacToUrl } from "../../../api/client";
-import { getConfig, listChats, createChat, updateChatTitle, deleteChat, uploadChatAttachment, getTaskFiles, checkCommands, getChatHistory, takeControl, readFile } from "../../../api";
+import {
+  getConfig,
+  listChats,
+  createChat,
+  updateChatTitle,
+  deleteChat,
+  uploadChatAttachment,
+  getTaskFiles,
+  checkCommands,
+  getChatHistory,
+  takeControl,
+  readFile,
+} from "../../../api";
 import type { ChatSessionResponse, CustomAgent } from "../../../api";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -52,7 +83,11 @@ interface TaskChatProps {
   onToggleFullscreen?: () => void;
   hideHeader?: boolean;
   /** Navigate to a file (optionally at a line) in the Review panel */
-  onNavigateToFile?: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
+  onNavigateToFile?: (
+    filePath: string,
+    line?: number,
+    mode?: "diff" | "full",
+  ) => void;
 }
 
 type ToolMessage = {
@@ -80,16 +115,22 @@ type PermissionMessage = {
 
 interface Attachment {
   type: "image" | "audio" | "resource";
-  data: string;       // base64 for image/audio
+  data: string; // base64 for image/audio
   mimeType: string;
-  name: string;       // display name
+  name: string; // display name
   previewUrl?: string; // blob URL for image preview
   uri?: string;
   size?: number;
 }
 
 type ChatMessage =
-  | { type: "user"; content: string; sender?: string; attachments?: Attachment[]; terminal?: boolean }
+  | {
+      type: "user";
+      content: string;
+      sender?: string;
+      attachments?: Attachment[];
+      terminal?: boolean;
+    }
   | { type: "assistant"; content: string; complete: boolean }
   | { type: "thinking"; content: string; collapsed: boolean; complete: boolean }
   | ToolMessage
@@ -119,6 +160,12 @@ interface PromptCaps {
   audio: boolean;
   embeddedContext: boolean;
 }
+
+type TitleEditSurface = "header" | "sidebar-header" | "sidebar-list";
+
+const AGENT_PICKER_MENU_WIDTH = 192;
+const AGENT_PICKER_MENU_MAX_HEIGHT = 256;
+const AGENT_PICKER_VIEWPORT_MARGIN = 8;
 
 /** Per-chat cached state (preserved across chat switches) */
 interface PerChatState {
@@ -168,7 +215,8 @@ function fileToBase64(file: File): Promise<string> {
       const dataUrl = reader.result as string;
       resolve(dataUrl.split(",")[1] ?? "");
     };
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("Failed to read file"));
     reader.readAsDataURL(file);
   });
 }
@@ -187,7 +235,11 @@ function buildRenderItems(messages: ChatMessage[]): RenderItem[] {
 
   const flush = () => {
     if (toolBuf.length > 0) {
-      items.push({ kind: "tool-section", sectionId: toolBuf[0].message.id, tools: [...toolBuf] });
+      items.push({
+        kind: "tool-section",
+        sectionId: toolBuf[0].message.id,
+        tools: [...toolBuf],
+      });
       toolBuf = [];
     }
   };
@@ -217,10 +269,116 @@ function completeThinking(messages: ChatMessage[]): ChatMessage[] {
   return changed ? result : messages;
 }
 
-function appendSystemMessage(messages: ChatMessage[], content: string): ChatMessage[] {
+function appendSystemMessage(
+  messages: ChatMessage[],
+  content: string,
+): ChatMessage[] {
   const last = messages[messages.length - 1];
   if (last?.type === "system" && last.content === content) return messages;
   return [...messages, { type: "system", content }];
+}
+
+function buildDefaultSessionTitle() {
+  const now = new Date();
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `New Session ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+function OverflowTitle({
+  text,
+  className = "",
+}: {
+  text: string;
+  className?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const [shift, setShift] = useState(0);
+
+  const measure = useCallback(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const overflow = Math.max(0, content.scrollWidth - container.clientWidth);
+    setShift(overflow);
+  }, []);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") {
+      measure();
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+
+    const observer = new ResizeObserver(() => {
+      measure();
+    });
+
+    measure();
+    observer.observe(container);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [measure, text]);
+
+  const shouldAnimate = hovered && shift > 8;
+  const style: (CSSProperties & { "--overflow-shift"?: string }) | undefined =
+    shouldAnimate ? { "--overflow-shift": `-${shift}px` } : undefined;
+
+  return (
+    <div
+      ref={containerRef}
+      className={`overflow-hidden whitespace-nowrap ${className}`}
+      title={text}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <div
+        ref={contentRef}
+        style={style}
+        className={
+          shouldAnimate
+            ? "overflow-title-animate inline-block whitespace-nowrap"
+            : "truncate"
+        }
+      >
+        {text}
+      </div>
+    </div>
+  );
+}
+
+function InlineEditTitle({
+  value,
+  onChange,
+  onSave,
+  onCancel,
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  className: string;
+}) {
+  return (
+    <input
+      autoFocus
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onSave}
+      onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter") onSave();
+        if (e.key === "Escape") onCancel();
+      }}
+      className={className}
+    />
+  );
 }
 
 function resolveLatestPendingPermission(
@@ -249,9 +407,11 @@ function resolveLatestPendingPermission(
   return messages.map((message, index) =>
     index === targetIndex && message.type === "permission"
       ? {
-        ...message,
-        resolved: message.options.find((option) => option.option_id === optionId)?.name ?? fallbackResolvedName,
-      }
+          ...message,
+          resolved:
+            message.options.find((option) => option.option_id === optionId)
+              ?.name ?? fallbackResolvedName,
+        }
       : message,
   );
 }
@@ -284,7 +444,6 @@ function createCommandChip(name: string): HTMLSpanElement {
   return chip;
 }
 
-
 /** Create a non-editable file chip DOM element */
 function createFileChip(filePath: string, isDir = false): HTMLSpanElement {
   const chip = document.createElement("span");
@@ -312,11 +471,20 @@ function createFileChip(filePath: string, isDir = false): HTMLSpanElement {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   if (isDir) {
     // Lucide Folder icon
-    path.setAttribute("d", "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z");
+    path.setAttribute(
+      "d",
+      "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
+    );
   } else {
     // Lucide FileText icon
-    path.setAttribute("d", "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z");
-    const poly = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    path.setAttribute(
+      "d",
+      "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z",
+    );
+    const poly = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "polyline",
+    );
     poly.setAttribute("points", "14 2 14 8 20 8");
     icon.appendChild(poly);
   }
@@ -324,7 +492,7 @@ function createFileChip(filePath: string, isDir = false): HTMLSpanElement {
   chip.appendChild(icon);
 
   const label = document.createElement("span");
-  label.textContent = isDir ? filePath : (filePath.split("/").pop() || filePath);
+  label.textContent = isDir ? filePath : filePath.split("/").pop() || filePath;
   chip.appendChild(label);
 
   const closeBtn = document.createElement("span");
@@ -351,7 +519,8 @@ function getPromptFromEditable(el: HTMLElement): string {
       } else if (node.tagName === "BR") {
         parts.push("\n");
       } else if (node.tagName === "DIV" || node.tagName === "P") {
-        if (parts.length > 0 && parts[parts.length - 1] !== "\n") parts.push("\n");
+        if (parts.length > 0 && parts[parts.length - 1] !== "\n")
+          parts.push("\n");
         node.childNodes.forEach(walk);
       } else {
         node.childNodes.forEach(walk);
@@ -362,7 +531,10 @@ function getPromptFromEditable(el: HTMLElement): string {
   return parts.join("").trim();
 }
 
-function reduceHistoryMessages(messages: ChatMessage[], msg: ServerEvent): ChatMessage[] {
+function reduceHistoryMessages(
+  messages: ChatMessage[],
+  msg: ServerEvent,
+): ChatMessage[] {
   switch (msg.type) {
     case "message_chunk": {
       const prev = completeThinking(messages);
@@ -376,7 +548,10 @@ function reduceHistoryMessages(messages: ChatMessage[], msg: ServerEvent): ChatM
         if (m.type === "user" || m.type === "tool") break;
       }
       if (!msg.text?.trim()) return prev;
-      return [...prev, { type: "assistant", content: msg.text, complete: false }];
+      return [
+        ...prev,
+        { type: "assistant", content: msg.text, complete: false },
+      ];
     }
     case "thought_chunk": {
       for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -388,62 +563,120 @@ function reduceHistoryMessages(messages: ChatMessage[], msg: ServerEvent): ChatM
         }
         if (m.type === "user" || m.type === "assistant") break;
       }
-      return [...messages, { type: "thinking", content: msg.text, collapsed: false, complete: false }];
+      return [
+        ...messages,
+        {
+          type: "thinking",
+          content: msg.text,
+          collapsed: false,
+          complete: false,
+        },
+      ];
     }
     case "tool_call": {
       const prev = completeThinking(messages);
       if (prev.some((m) => m.type === "tool" && m.id === msg.id)) {
         return prev.map((m) =>
           m.type === "tool" && m.id === msg.id
-            ? { ...m, title: msg.title, locations: msg.locations?.length ? msg.locations : m.locations }
+            ? {
+                ...m,
+                title: msg.title,
+                locations: msg.locations?.length ? msg.locations : m.locations,
+              }
             : m,
         );
       }
       const completed = prev.map((m) =>
         m.type === "assistant" && !m.complete ? { ...m, complete: true } : m,
       );
-      return [...completed, {
-        type: "tool", id: msg.id, title: msg.title, status: "running", collapsed: false, locations: msg.locations,
-      }];
+      return [
+        ...completed,
+        {
+          type: "tool",
+          id: msg.id,
+          title: msg.title,
+          status: "running",
+          collapsed: false,
+          locations: msg.locations,
+        },
+      ];
     }
     case "tool_call_update": {
       const exists = messages.some((m) => m.type === "tool" && m.id === msg.id);
       if (exists) {
-        return messages.map((m) => m.type === "tool" && m.id === msg.id
-          ? { ...m, status: msg.status, content: msg.content ?? m.content, locations: msg.locations?.length ? msg.locations : m.locations }
-          : m);
+        return messages.map((m) =>
+          m.type === "tool" && m.id === msg.id
+            ? {
+                ...m,
+                status: msg.status,
+                content: msg.content ?? m.content,
+                locations: msg.locations?.length ? msg.locations : m.locations,
+              }
+            : m,
+        );
       }
-      return [...messages, {
-        type: "tool", id: msg.id, title: msg.id, status: msg.status,
-        content: msg.content, collapsed: true, locations: msg.locations ?? [],
-      }];
+      return [
+        ...messages,
+        {
+          type: "tool",
+          id: msg.id,
+          title: msg.id,
+          status: msg.status,
+          content: msg.content,
+          collapsed: true,
+          locations: msg.locations ?? [],
+        },
+      ];
     }
     case "permission_request":
-      return [...messages, { type: "permission", description: msg.description, options: msg.options ?? [] }];
+      return [
+        ...messages,
+        {
+          type: "permission",
+          description: msg.description,
+          options: msg.options ?? [],
+        },
+      ];
     case "permission_response":
-      return resolveLatestPendingPermission(messages, msg.option_id, msg.option_id);
+      return resolveLatestPendingPermission(
+        messages,
+        msg.option_id,
+        msg.option_id,
+      );
     case "complete": {
       const completed = completeThinking(messages);
-      return completed.map((m) => m.type === "assistant" && !m.complete ? { ...m, complete: true } : m);
+      return completed.map((m) =>
+        m.type === "assistant" && !m.complete ? { ...m, complete: true } : m,
+      );
     }
     case "user_message":
-      return [...messages, {
-        type: "user",
-        content: msg.text,
-        terminal: !!msg.terminal,
-        sender: msg.sender || undefined,
-        attachments: msg.attachments?.map((a: ServerEvent) => ({
-          type: a.type === "resource_link" ? "resource" : a.type as "image" | "audio" | "resource",
-          data: a.data ?? "",
-          mimeType: a.mime_type ?? "",
-          name: a.name ?? "",
-          uri: a.uri ?? undefined,
-          size: a.size ?? undefined,
-          previewUrl: a.type === "image" ? `data:${a.mime_type};base64,${a.data}` : undefined,
-        })),
-      }];
+      return [
+        ...messages,
+        {
+          type: "user",
+          content: msg.text,
+          terminal: !!msg.terminal,
+          sender: msg.sender || undefined,
+          attachments: msg.attachments?.map((a: ServerEvent) => ({
+            type:
+              a.type === "resource_link"
+                ? "resource"
+                : (a.type as "image" | "audio" | "resource"),
+            data: a.data ?? "",
+            mimeType: a.mime_type ?? "",
+            name: a.name ?? "",
+            uri: a.uri ?? undefined,
+            size: a.size ?? undefined,
+            previewUrl:
+              a.type === "image"
+                ? `data:${a.mime_type};base64,${a.data}`
+                : undefined,
+          })),
+        },
+      ];
     case "terminal_execute":
-      return [...messages,
+      return [
+        ...messages,
         { type: "user", content: msg.command, terminal: true },
         { type: "terminal_output", chunks: [], exitCode: undefined },
       ];
@@ -451,8 +684,15 @@ function reduceHistoryMessages(messages: ChatMessage[], msg: ServerEvent): ChatM
       for (let i = messages.length - 1; i >= 0; i -= 1) {
         if (messages[i].type === "terminal_output") {
           const updated = [...messages];
-          const terminalMessage = messages[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
-          updated[i] = { ...terminalMessage, chunks: [...terminalMessage.chunks, msg.output] };
+          const terminalMessage = messages[i] as {
+            type: "terminal_output";
+            chunks: string[];
+            exitCode?: number | null;
+          };
+          updated[i] = {
+            ...terminalMessage,
+            chunks: [...terminalMessage.chunks, msg.output],
+          };
           return updated;
         }
       }
@@ -462,7 +702,11 @@ function reduceHistoryMessages(messages: ChatMessage[], msg: ServerEvent): ChatM
       for (let i = messages.length - 1; i >= 0; i -= 1) {
         if (messages[i].type === "terminal_output") {
           const updated = [...messages];
-          const terminalMessage = messages[i] as { type: "terminal_output"; chunks: string[]; exitCode?: number | null };
+          const terminalMessage = messages[i] as {
+            type: "terminal_output";
+            chunks: string[];
+            exitCode?: number | null;
+          };
           updated[i] = { ...terminalMessage, exitCode: msg.exit_code ?? 0 };
           return updated;
         }
@@ -489,18 +733,37 @@ export function TaskChat({
   hideHeader = false,
   onNavigateToFile,
 }: TaskChatProps) {
+  const sessionModeStorageKey = `taskchat:session-mode:${projectId}`;
   // ─── Multi-chat state ───────────────────────────────────────────────────
   const [chats, setChats] = useState<ChatSessionResponse[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showChatMenu, setShowChatMenu] = useState(false);
-  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingTitle, setEditingTitle] = useState<{
+    chatId: string;
+    surface: TitleEditSurface;
+  } | null>(null);
   const [editTitleValue, setEditTitleValue] = useState("");
   const chatMenuRef = useRef<HTMLDivElement>(null);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
-  const [acpAgentAvailability, setAcpAgentAvailability] = useState<Record<string, boolean>>({});
+  const [acpAgentAvailability, setAcpAgentAvailability] = useState<
+    Record<string, boolean>
+  >({});
   const [acpAvailabilityLoaded, setAcpAvailabilityLoaded] = useState(false);
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
-  const agentPickerRef = useRef<HTMLDivElement>(null);
+  const headerAgentPickerRef = useRef<HTMLDivElement>(null);
+  const sidebarAgentPickerRef = useRef<HTMLDivElement>(null);
+  const agentPickerMenuRef = useRef<HTMLDivElement>(null);
+  const [agentPickerAnchor, setAgentPickerAnchor] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
+  const showAgentPickerRef = useRef(false);
+  const [sessionRailCollapsed, setSessionRailCollapsed] = useState<boolean>(
+    () => {
+      if (typeof window === "undefined") return true;
+      return window.localStorage.getItem(sessionModeStorageKey) !== "sidebar";
+    },
+  );
 
   // Per-chat state cache (preserved across chat switches)
   const perChatStateRef = useRef<Map<string, PerChatState>>(new Map());
@@ -520,8 +783,12 @@ export function TaskChat({
   const composingRef = useRef(false);
   const [selectedModel, setSelectedModel] = useState("");
   const [permissionLevel, setPermissionLevel] = useState("");
-  const [modelOptions, setModelOptions] = useState<{label: string; value: string}[]>([]);
-  const [modeOptions, setModeOptions] = useState<{label: string; value: string}[]>([]);
+  const [modelOptions, setModelOptions] = useState<
+    { label: string; value: string }[]
+  >([]);
+  const [modeOptions, setModeOptions] = useState<
+    { label: string; value: string }[]
+  >([]);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPermMenu, setShowPermMenu] = useState(false);
   const [planEntries, setPlanEntries] = useState<PlanEntry[]>([]);
@@ -546,16 +813,23 @@ export function TaskChat({
   const [slashFilter, setSlashFilter] = useState("");
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
   const [isTerminalMode, setIsTerminalMode] = useState(false);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(
+    new Set(),
+  );
   // The sectionId of the currently auto-expanded tool section (null = none)
   // Set on tool_call, cleared on message_chunk or complete
   const [, setAutoExpandSectionId] = useState<string | null>(null);
   const [pendingMessages, setPendingMessages] = useState<string[]>([]);
   const [showPendingQueue, setShowPendingQueue] = useState(true);
-  const [editingPendingIdx, setEditingPendingIdx] = useState<number | null>(null);
+  const [editingPendingIdx, setEditingPendingIdx] = useState<number | null>(
+    null,
+  );
   const [editingPendingValue, setEditingPendingValue] = useState("");
   const [agentLabel, setAgentLabel] = useState("Chat");
-  const [AgentIcon, setAgentIcon] = useState<React.ComponentType<{ size?: number; className?: string }> | null>(null);
+  const [AgentIcon, setAgentIcon] = useState<React.ComponentType<{
+    size?: number;
+    className?: string;
+  }> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
@@ -569,7 +843,11 @@ export function TaskChat({
   const [fileFilter, setFileFilter] = useState("");
   const [fileSelectedIdx, setFileSelectedIdx] = useState(0);
   const fileMenuRef = useRef<HTMLDivElement>(null);
-  const [promptCaps, setPromptCaps] = useState<PromptCaps>({ image: false, audio: false, embeddedContext: false });
+  const [promptCaps, setPromptCaps] = useState<PromptCaps>({
+    image: false,
+    audio: false,
+    embeddedContext: false,
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -589,26 +867,37 @@ export function TaskChat({
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeChat = chats.find((c) => c.id === activeChatId);
+  const orderedChats = useMemo(() => [...chats].reverse(), [chats]);
   const hasTodoPanel = planEntries.length > 0;
   const hasPlanPanel = !!planFileContent;
   const hasPendingPanel = pendingMessages.length > 0;
   const activePermissionMessage = useMemo(
-    () => [...messages].reverse().find((m): m is PermissionMessage => m.type === "permission" && !m.resolved) ?? null,
+    () =>
+      [...messages]
+        .reverse()
+        .find(
+          (m): m is PermissionMessage => m.type === "permission" && !m.resolved,
+        ) ?? null,
     [messages],
   );
-  const activeComposerPanel = showPermissionPanel && activePermissionMessage
-    ? "permission"
-    : showPlan && hasTodoPanel
-    ? "todo"
-    : showPlanFile && hasPlanPanel
-      ? "plan"
-      : showPendingQueue && hasPendingPanel
-        ? "pending"
-        : null;
+  const activeComposerPanel =
+    showPermissionPanel && activePermissionMessage
+      ? "permission"
+      : showPlan && hasTodoPanel
+        ? "todo"
+        : showPlanFile && hasPlanPanel
+          ? "plan"
+          : showPendingQueue && hasPendingPanel
+            ? "pending"
+            : null;
   const composerPanelOpen = activeComposerPanel !== null;
   const messagesBottomPaddingClass = composerPanelOpen
-    ? (isRemoteSession ? "pb-[32rem]" : "pb-[28rem]")
-    : (isRemoteSession ? "pb-56" : "pb-44");
+    ? isRemoteSession
+      ? "pb-[32rem]"
+      : "pb-[28rem]"
+    : isRemoteSession
+      ? "pb-56"
+      : "pb-44";
 
   useEffect(() => {
     if (activePermissionMessage) {
@@ -626,7 +915,9 @@ export function TaskChat({
     if (!slashFilter) return slashCommands;
     const lower = slashFilter.toLowerCase();
     return slashCommands.filter(
-      (c) => c.name.toLowerCase().includes(lower) || c.description.toLowerCase().includes(lower),
+      (c) =>
+        c.name.toLowerCase().includes(lower) ||
+        c.description.toLowerCase().includes(lower),
     );
   }, [slashCommands, slashFilter]);
 
@@ -653,7 +944,9 @@ export function TaskChat({
         ]);
         setAcpAgentAvailability(cmdResults);
         setCustomAgents(cfg.acp?.custom_agents ?? []);
-      } catch { /* fail-open */ }
+      } catch {
+        /* fail-open */
+      }
       setAcpAvailabilityLoaded(true);
     };
     checkAvailability();
@@ -662,8 +955,8 @@ export function TaskChat({
   // Compute available ACP agent options
   const acpAgentOptions = useMemo(() => {
     return agentOptions
-      .filter(opt => opt.acpCheck)
-      .map(opt => {
+      .filter((opt) => opt.acpCheck)
+      .map((opt) => {
         if (!acpAvailabilityLoaded) return opt;
         const cmd = opt.acpCheck!;
         if (acpAgentAvailability[cmd] === false) {
@@ -672,6 +965,15 @@ export function TaskChat({
         return opt;
       });
   }, [acpAgentAvailability, acpAvailabilityLoaded]);
+
+  const getChatIcon = (agentId: string) => {
+    const builtin = agentOptions.find((option) => option.value === agentId);
+    if (builtin?.icon) return builtin.icon;
+    const custom = customAgents.find((agent) => agent.id === agentId);
+    if (custom?.type === "remote") return Globe;
+    if (custom) return Terminal;
+    return MessageSquare;
+  };
 
   // Resolve agent label and icon from active chat's agent
   useEffect(() => {
@@ -698,7 +1000,9 @@ export function TaskChat({
         .catch(() => resolve(activeChat.agent));
     } else {
       getConfig()
-        .then((cfg) => resolve(cfg.layout.agent_command || "claude", cfg.acp?.custom_agents))
+        .then((cfg) =>
+          resolve(cfg.layout.agent_command || "claude", cfg.acp?.custom_agents),
+        )
         .catch(() => resolve("claude"));
     }
   }, [activeChat]);
@@ -714,22 +1018,31 @@ export function TaskChat({
   const updateScrollState = useCallback(() => {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
-    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const distanceFromBottom =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     const isAtBottom = distanceFromBottom < 40;
     shouldStickToBottomRef.current = isAtBottom;
     setShowScrollToBottom(!isAtBottom && messages.length > 0);
   }, [messages.length]);
 
-  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    const viewport = messagesViewportRef.current;
-    if (!viewport) return;
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
-  }, []);
+  const scrollMessagesToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      const viewport = messagesViewportRef.current;
+      if (!viewport) return;
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+    },
+    [],
+  );
 
   const prevMsgCountRef = useRef(0);
   useEffect(() => {
-    if (messages.length > prevMsgCountRef.current && shouldStickToBottomRef.current) {
-      scrollMessagesToBottom(suppressNextSmoothScrollRef.current ? "auto" : "smooth");
+    if (
+      messages.length > prevMsgCountRef.current &&
+      shouldStickToBottomRef.current
+    ) {
+      scrollMessagesToBottom(
+        suppressNextSmoothScrollRef.current ? "auto" : "smooth",
+      );
     }
     suppressNextSmoothScrollRef.current = false;
     prevMsgCountRef.current = messages.length;
@@ -748,20 +1061,110 @@ export function TaskChat({
 
   // Auto-scroll slash menu to keep selected item visible
   useEffect(() => {
-    slashItemRefs.current[slashSelectedIdx]?.scrollIntoView({ block: "nearest" });
+    slashItemRefs.current[slashSelectedIdx]?.scrollIntoView({
+      block: "nearest",
+    });
   }, [slashSelectedIdx]);
 
   // Close dropdown menus when clicking outside
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      sessionModeStorageKey,
+      sessionRailCollapsed ? "header" : "sidebar",
+    );
+  }, [sessionModeStorageKey, sessionRailCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setSessionRailCollapsed(
+      window.localStorage.getItem(sessionModeStorageKey) !== "sidebar",
+    );
+  }, [sessionModeStorageKey]);
+
+  useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) setShowModelMenu(false);
-      if (permMenuRef.current && !permMenuRef.current.contains(e.target as Node)) setShowPermMenu(false);
-      if (chatMenuRef.current && !chatMenuRef.current.contains(e.target as Node)) setShowChatMenu(false);
-      if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) setShowAgentPicker(false);
+      if (
+        modelMenuRef.current &&
+        !modelMenuRef.current.contains(e.target as Node)
+      )
+        setShowModelMenu(false);
+      if (
+        permMenuRef.current &&
+        !permMenuRef.current.contains(e.target as Node)
+      )
+        setShowPermMenu(false);
+      if (
+        chatMenuRef.current &&
+        !chatMenuRef.current.contains(e.target as Node)
+      )
+        setShowChatMenu(false);
+      const insideHeaderAgentPicker =
+        headerAgentPickerRef.current?.contains(e.target as Node) ?? false;
+      const insideSidebarAgentPicker =
+        sidebarAgentPickerRef.current?.contains(e.target as Node) ?? false;
+      const insideAgentPickerMenu =
+        agentPickerMenuRef.current?.contains(e.target as Node) ?? false;
+      if (
+        !insideHeaderAgentPicker &&
+        !insideSidebarAgentPicker &&
+        !insideAgentPickerMenu
+      ) {
+        setShowAgentPicker(false);
+      }
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
+
+  useEffect(() => {
+    showAgentPickerRef.current = showAgentPicker;
+  }, [showAgentPicker]);
+
+  const toggleAgentPicker = useCallback((el: HTMLElement) => {
+    if (showAgentPickerRef.current) {
+      setShowAgentPicker(false);
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const preferredLeft = rect.right + AGENT_PICKER_VIEWPORT_MARGIN;
+    const preferredTop = rect.top;
+
+    setAgentPickerAnchor({
+      top: Math.max(
+        AGENT_PICKER_VIEWPORT_MARGIN,
+        Math.min(
+          preferredTop,
+          viewportHeight - AGENT_PICKER_MENU_MAX_HEIGHT - AGENT_PICKER_VIEWPORT_MARGIN,
+        ),
+      ),
+      left: Math.max(
+        AGENT_PICKER_VIEWPORT_MARGIN,
+        Math.min(
+          preferredLeft,
+          viewportWidth - AGENT_PICKER_MENU_WIDTH - AGENT_PICKER_VIEWPORT_MARGIN,
+        ),
+      ),
+    });
+    setShowChatMenu(false);
+    setShowAgentPicker(true);
+  }, []);
+
+  useEffect(() => {
+    if (!showAgentPicker) return;
+
+    const close = () => setShowAgentPicker(false);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [showAgentPicker]);
 
   // ─── Save/Restore per-chat state on switch ─────────────────────────────
 
@@ -769,12 +1172,42 @@ export function TaskChat({
   const saveCurrentChatState = useCallback(() => {
     if (!activeChatId) return;
     perChatStateRef.current.set(activeChatId, {
-      messages, isBusy, selectedModel, permissionLevel,
-      modelOptions, modeOptions, planEntries, slashCommands,
-      isConnected, agentLabel, agentIcon: AgentIcon, promptCaps,
-      planFilePath, planFileContent, isRemoteSession, remoteOwnerName,
+      messages,
+      isBusy,
+      selectedModel,
+      permissionLevel,
+      modelOptions,
+      modeOptions,
+      planEntries,
+      slashCommands,
+      isConnected,
+      agentLabel,
+      agentIcon: AgentIcon,
+      promptCaps,
+      planFilePath,
+      planFileContent,
+      isRemoteSession,
+      remoteOwnerName,
     });
-  }, [activeChatId, messages, isBusy, selectedModel, permissionLevel, modelOptions, modeOptions, planEntries, slashCommands, isConnected, agentLabel, AgentIcon, promptCaps, planFilePath, planFileContent, isRemoteSession, remoteOwnerName]);
+  }, [
+    activeChatId,
+    messages,
+    isBusy,
+    selectedModel,
+    permissionLevel,
+    modelOptions,
+    modeOptions,
+    planEntries,
+    slashCommands,
+    isConnected,
+    agentLabel,
+    AgentIcon,
+    promptCaps,
+    planFilePath,
+    planFileContent,
+    isRemoteSession,
+    remoteOwnerName,
+  ]);
 
   /** Restore chat state from cache */
   const restoreChatState = useCallback((chatId: string) => {
@@ -836,7 +1269,11 @@ export function TaskChat({
         let chatList = await listChats(projectId, task.id);
         if (chatList.length === 0) {
           // Auto-create first chat
-          const newChat = await createChat(projectId, task.id);
+          const newChat = await createChat(
+            projectId,
+            task.id,
+            buildDefaultSessionTitle(),
+          );
           chatList = [newChat];
         }
         if (cancelled) return;
@@ -849,7 +1286,9 @@ export function TaskChat({
       }
     };
     init();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [projectId, task.id]);
 
   // ─── Per-chat WebSocket management ─────────────────────────────────────
@@ -858,73 +1297,82 @@ export function TaskChat({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleServerMessageRef = useRef<(msg: any) => void>(() => {});
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleServerMessageForCacheRef = useRef<(chatId: string, msg: any) => void>(() => {});
+  const handleServerMessageForCacheRef = useRef<
+    (chatId: string, msg: any) => void
+  >(() => {});
   const onDisconnectedPropRef = useRef(onDisconnectedProp);
   onDisconnectedPropRef.current = onDisconnectedProp;
 
   /** Connect a WebSocket for a given chat ID (idempotent) */
-  const connectChatWs = useCallback(async (chatId: string) => {
-    if (wsMapRef.current.has(chatId)) return; // Already connected
-    if (connectingRef.current.has(chatId)) return; // Connection already in-flight
-    connectingRef.current.add(chatId);
+  const connectChatWs = useCallback(
+    async (chatId: string) => {
+      if (wsMapRef.current.has(chatId)) return; // Already connected
+      if (connectingRef.current.has(chatId)) return; // Connection already in-flight
+      connectingRef.current.add(chatId);
 
-    const host = getApiHost();
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = await appendHmacToUrl(`${protocol}//${host}/api/v1/projects/${projectId}/tasks/${task.id}/chats/${chatId}/ws`);
+      const host = getApiHost();
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const url = await appendHmacToUrl(
+        `${protocol}//${host}/api/v1/projects/${projectId}/tasks/${task.id}/chats/${chatId}/ws`,
+      );
 
-    connectingRef.current.delete(chatId);
-    // Re-check after async gap: another call may have connected while we awaited
-    if (wsMapRef.current.has(chatId)) return;
+      connectingRef.current.delete(chatId);
+      // Re-check after async gap: another call may have connected while we awaited
+      if (wsMapRef.current.has(chatId)) return;
 
-    const ws = new WebSocket(url);
-    wsMapRef.current.set(chatId, ws);
+      const ws = new WebSocket(url);
+      wsMapRef.current.set(chatId, ws);
 
-    ws.onopen = () => {};
+      ws.onopen = () => {};
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (chatId === activeChatIdRef.current) {
-          handleServerMessageRef.current(data);
-        } else {
-          // Buffer into per-chat cache
-          handleServerMessageForCacheRef.current(chatId, data);
-        }
-      } catch { /* ignore */ }
-    };
-
-    ws.onclose = () => {
-      wsMapRef.current.delete(chatId);
-      if (chatId === activeChatIdRef.current) {
-        setIsConnected(false);
-        onDisconnectedPropRef.current?.();
-      } else {
-        const cached = perChatStateRef.current.get(chatId);
-        if (cached) cached.isConnected = false;
-      }
-      // Auto-reconnect after unexpected close (e.g., session killed by Take Control).
-      // Skip if this was an intentional close (unmount, chat switch, etc.)
-      if (intentionalCloseRef.current.has(chatId)) {
-        intentionalCloseRef.current.delete(chatId);
-      } else {
-        setTimeout(() => {
-          if (!wsMapRef.current.has(chatId)) {
-            connectChatWs(chatId).then(() => {
-              if (chatId === activeChatIdRef.current) {
-                wsRef.current = wsMapRef.current.get(chatId) ?? null;
-              }
-            });
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (chatId === activeChatIdRef.current) {
+            handleServerMessageRef.current(data);
+          } else {
+            // Buffer into per-chat cache
+            handleServerMessageForCacheRef.current(chatId, data);
           }
-        }, 1000);
-      }
-    };
+        } catch {
+          /* ignore */
+        }
+      };
 
-    ws.onerror = () => {
-      if (chatId === activeChatIdRef.current) {
-        setMessages((prev) => appendSystemMessage(prev, "Connection error."));
-      }
-    };
-  }, [projectId, task.id]);
+      ws.onclose = () => {
+        wsMapRef.current.delete(chatId);
+        if (chatId === activeChatIdRef.current) {
+          setIsConnected(false);
+          onDisconnectedPropRef.current?.();
+        } else {
+          const cached = perChatStateRef.current.get(chatId);
+          if (cached) cached.isConnected = false;
+        }
+        // Auto-reconnect after unexpected close (e.g., session killed by Take Control).
+        // Skip if this was an intentional close (unmount, chat switch, etc.)
+        if (intentionalCloseRef.current.has(chatId)) {
+          intentionalCloseRef.current.delete(chatId);
+        } else {
+          setTimeout(() => {
+            if (!wsMapRef.current.has(chatId)) {
+              connectChatWs(chatId).then(() => {
+                if (chatId === activeChatIdRef.current) {
+                  wsRef.current = wsMapRef.current.get(chatId) ?? null;
+                }
+              });
+            }
+          }, 1000);
+        }
+      };
+
+      ws.onerror = () => {
+        if (chatId === activeChatIdRef.current) {
+          setMessages((prev) => appendSystemMessage(prev, "Connection error."));
+        }
+      };
+    },
+    [projectId, task.id],
+  );
 
   // Ref to track current activeChatId (for use in callbacks)
   const activeChatIdRef = useRef<string | null>(null);
@@ -961,11 +1409,21 @@ export function TaskChat({
           onConnectedProp?.();
           // Dynamic modes/models from agent
           if (msg.available_modes?.length) {
-            setModeOptions(msg.available_modes.map((m: { id: string; name: string }) => ({ label: m.name, value: m.id })));
+            setModeOptions(
+              msg.available_modes.map((m: { id: string; name: string }) => ({
+                label: m.name,
+                value: m.id,
+              })),
+            );
           }
           if (msg.current_mode_id) setPermissionLevel(msg.current_mode_id);
           if (msg.available_models?.length) {
-            setModelOptions(msg.available_models.map((m: { id: string; name: string }) => ({ label: m.name, value: m.id })));
+            setModelOptions(
+              msg.available_models.map((m: { id: string; name: string }) => ({
+                label: m.name,
+                value: m.id,
+              })),
+            );
           }
           if (msg.current_model_id) setSelectedModel(msg.current_model_id);
           // Extract prompt capabilities
@@ -973,7 +1431,8 @@ export function TaskChat({
             setPromptCaps({
               image: msg.prompt_capabilities.image ?? false,
               audio: msg.prompt_capabilities.audio ?? false,
-              embeddedContext: msg.prompt_capabilities.embedded_context ?? false,
+              embeddedContext:
+                msg.prompt_capabilities.embedded_context ?? false,
             });
           }
           break;
@@ -981,7 +1440,11 @@ export function TaskChat({
           // Auto-close the current tool section (one-time)
           setAutoExpandSectionId((prev) => {
             if (prev) {
-              setExpandedSections((s) => { const n = new Set(s); n.delete(prev); return n; });
+              setExpandedSections((s) => {
+                const n = new Set(s);
+                n.delete(prev);
+                return n;
+              });
             }
             return null;
           });
@@ -991,7 +1454,11 @@ export function TaskChat({
           // Auto-close the current tool section (same as message_chunk)
           setAutoExpandSectionId((prev) => {
             if (prev) {
-              setExpandedSections((s) => { const n = new Set(s); n.delete(prev); return n; });
+              setExpandedSections((s) => {
+                const n = new Set(s);
+                n.delete(prev);
+                return n;
+              });
             }
             return null;
           });
@@ -1003,25 +1470,38 @@ export function TaskChat({
           setAutoExpandSectionId((prev) => {
             if (prev === null) {
               // New section — default expand it once
-              setExpandedSections((s) => { const n = new Set(s); n.add(msg.id); return n; });
+              setExpandedSections((s) => {
+                const n = new Set(s);
+                n.add(msg.id);
+                return n;
+              });
               return msg.id;
             }
             // Same section continues — don't touch expandedSections
             return prev;
           });
           // Track tool_call IDs that touch the plan file (for re-fetch on completion)
-          if (planFilePathRef.current && msg.locations?.some(
-            (l: { path: string }) => l.path === planFilePathRef.current
-          )) {
+          if (
+            planFilePathRef.current &&
+            msg.locations?.some(
+              (l: { path: string }) => l.path === planFilePathRef.current,
+            )
+          ) {
             planFileToolIdsRef.current.add(msg.id);
           }
           break;
         case "tool_call_update":
           setMessages((prev) => reduceHistoryMessages(prev, msg));
           // Re-fetch plan file content if a completed tool touches the plan file
-          if (msg.status === "completed" && planFilePathRef.current && planFileToolIdsRef.current.has(msg.id)) {
+          if (
+            msg.status === "completed" &&
+            planFilePathRef.current &&
+            planFileToolIdsRef.current.has(msg.id)
+          ) {
             planFileToolIdsRef.current.delete(msg.id);
-            readFile(planFilePathRef.current).then((res) => setPlanFileContent(res.content)).catch(() => {});
+            readFile(planFilePathRef.current)
+              .then((res) => setPlanFileContent(res.content))
+              .catch(() => {});
           }
           break;
         case "permission_request":
@@ -1038,7 +1518,11 @@ export function TaskChat({
         case "complete":
           setAutoExpandSectionId((prev) => {
             if (prev) {
-              setExpandedSections((s) => { const n = new Set(s); n.delete(prev); return n; });
+              setExpandedSections((s) => {
+                const n = new Set(s);
+                n.delete(prev);
+                return n;
+              });
             }
             return null;
           });
@@ -1049,7 +1533,10 @@ export function TaskChat({
           setIsBusy(msg.value);
           break;
         case "error":
-          setMessages((prev) => [...prev, { type: "system", content: `Error: ${msg.message}` }]);
+          setMessages((prev) => [
+            ...prev,
+            { type: "system", content: `Error: ${msg.message}` },
+          ]);
           setIsBusy(false);
           break;
         case "user_message": {
@@ -1063,10 +1550,15 @@ export function TaskChat({
           const entries: PlanEntry[] = msg.entries ?? [];
           setPlanEntries(entries);
           // Auto-expand while in progress, auto-collapse when all done
-          const allDone = entries.length > 0 && entries.every((e: PlanEntry) => e.status === "completed");
+          const allDone =
+            entries.length > 0 &&
+            entries.every((e: PlanEntry) => e.status === "completed");
           const shouldOpen = !allDone;
           setShowPlan(shouldOpen);
-          if (shouldOpen) { setShowPlanFile(false); setShowPendingQueue(false); }
+          if (shouldOpen) {
+            setShowPlanFile(false);
+            setShowPendingQueue(false);
+          }
           break;
         }
         case "plan_file_update":
@@ -1075,13 +1567,17 @@ export function TaskChat({
           if (msg.content) {
             setPlanFileContent(msg.content);
             setShowPlanFile(true);
-            setShowPlan(false); setShowPendingQueue(false);
+            setShowPlan(false);
+            setShowPendingQueue(false);
           } else {
-            readFile(msg.path).then((res) => {
-              setPlanFileContent(res.content);
-              setShowPlanFile(true);
-              setShowPlan(false); setShowPendingQueue(false);
-            }).catch(() => {});
+            readFile(msg.path)
+              .then((res) => {
+                setPlanFileContent(res.content);
+                setShowPlanFile(true);
+                setShowPlan(false);
+                setShowPendingQueue(false);
+              })
+              .catch(() => {});
           }
           break;
         case "available_commands":
@@ -1090,7 +1586,11 @@ export function TaskChat({
         case "queue_update":
           // Server sends QueuedMessage[]; extract text for display
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setPendingMessages((msg.messages ?? []).map((m: any) => typeof m === "string" ? m : m.text));
+          setPendingMessages(
+            (msg.messages ?? []).map((m: any) =>
+              typeof m === "string" ? m : m.text,
+            ),
+          );
           break;
         case "remote_session":
           // Session is owned by another process — enter read-only observation mode
@@ -1123,65 +1623,80 @@ export function TaskChat({
 
   /** Buffer a server message into the per-chat cache (for non-active chats) */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleServerMessageForCache = useCallback((chatId: string, msg: any) => {
-    const state = perChatStateRef.current.get(chatId) ?? defaultPerChatState();
-    switch (msg.type) {
-      case "session_ready":
-        state.isConnected = true;
-        if (msg.available_modes?.length)
-          state.modeOptions = msg.available_modes.map((m: { id: string; name: string }) => ({ label: m.name, value: m.id }));
-        if (msg.current_mode_id) state.permissionLevel = msg.current_mode_id;
-        if (msg.available_models?.length)
-          state.modelOptions = msg.available_models.map((m: { id: string; name: string }) => ({ label: m.name, value: m.id }));
-        if (msg.current_model_id) state.selectedModel = msg.current_model_id;
-        if (msg.prompt_capabilities) {
-          state.promptCaps = {
-            image: msg.prompt_capabilities.image ?? false,
-            audio: msg.prompt_capabilities.audio ?? false,
-            embeddedContext: msg.prompt_capabilities.embedded_context ?? false,
-          };
-        }
-        break;
-      case "message_chunk":
-      case "tool_call":
-      case "thought_chunk":
-      case "tool_call_update":
-      case "permission_request":
-      case "permission_response":
-      case "complete":
-      case "user_message":
-      case "terminal_execute":
-      case "terminal_chunk":
-      case "terminal_complete":
-        state.messages = reduceHistoryMessages(state.messages, msg);
-        if (msg.type === "complete") {
-          state.isBusy = false;
-        }
-        break;
-      case "queue_update":
-        // Server manages queue — ignored for non-active chat cache
-        break;
-      case "busy":
-        state.isBusy = msg.value;
-        break;
-      case "plan_update":
-        state.planEntries = msg.entries ?? [];
-        break;
-      case "plan_file_update":
-        state.planFilePath = msg.path;
-        if (msg.content) {
-          state.planFileContent = msg.content;
-        }
-        break;
-      case "available_commands":
-        state.slashCommands = msg.commands ?? [];
-        break;
-      case "session_ended":
-        state.isConnected = false;
-        break;
-    }
-    perChatStateRef.current.set(chatId, state);
-  }, []);
+  const handleServerMessageForCache = useCallback(
+    (chatId: string, msg: any) => {
+      const state =
+        perChatStateRef.current.get(chatId) ?? defaultPerChatState();
+      switch (msg.type) {
+        case "session_ready":
+          state.isConnected = true;
+          if (msg.available_modes?.length)
+            state.modeOptions = msg.available_modes.map(
+              (m: { id: string; name: string }) => ({
+                label: m.name,
+                value: m.id,
+              }),
+            );
+          if (msg.current_mode_id) state.permissionLevel = msg.current_mode_id;
+          if (msg.available_models?.length)
+            state.modelOptions = msg.available_models.map(
+              (m: { id: string; name: string }) => ({
+                label: m.name,
+                value: m.id,
+              }),
+            );
+          if (msg.current_model_id) state.selectedModel = msg.current_model_id;
+          if (msg.prompt_capabilities) {
+            state.promptCaps = {
+              image: msg.prompt_capabilities.image ?? false,
+              audio: msg.prompt_capabilities.audio ?? false,
+              embeddedContext:
+                msg.prompt_capabilities.embedded_context ?? false,
+            };
+          }
+          break;
+        case "message_chunk":
+        case "tool_call":
+        case "thought_chunk":
+        case "tool_call_update":
+        case "permission_request":
+        case "permission_response":
+        case "complete":
+        case "user_message":
+        case "terminal_execute":
+        case "terminal_chunk":
+        case "terminal_complete":
+          state.messages = reduceHistoryMessages(state.messages, msg);
+          if (msg.type === "complete") {
+            state.isBusy = false;
+          }
+          break;
+        case "queue_update":
+          // Server manages queue — ignored for non-active chat cache
+          break;
+        case "busy":
+          state.isBusy = msg.value;
+          break;
+        case "plan_update":
+          state.planEntries = msg.entries ?? [];
+          break;
+        case "plan_file_update":
+          state.planFilePath = msg.path;
+          if (msg.content) {
+            state.planFileContent = msg.content;
+          }
+          break;
+        case "available_commands":
+          state.slashCommands = msg.commands ?? [];
+          break;
+        case "session_ended":
+          state.isConnected = false;
+          break;
+      }
+      perChatStateRef.current.set(chatId, state);
+    },
+    [],
+  );
 
   // Keep refs in sync so connectChatWs WS handlers always call latest versions
   handleServerMessageRef.current = handleServerMessage;
@@ -1213,7 +1728,12 @@ export function TaskChat({
     // Poll every 5 seconds for incremental updates
     const timer = setInterval(async () => {
       try {
-        const res = await getChatHistory(projectId, task.id, chatId, pollingOffsetRef.current);
+        const res = await getChatHistory(
+          projectId,
+          task.id,
+          chatId,
+          pollingOffsetRef.current,
+        );
         if (res.events.length > 0) {
           for (const evt of res.events) {
             handleServerMessage(evt);
@@ -1225,7 +1745,9 @@ export function TaskChat({
           setIsRemoteSession(false);
           setRemoteOwnerName("");
         }
-      } catch { /* ignore polling errors */ }
+      } catch {
+        /* ignore polling errors */
+      }
     }, 5000);
     pollingTimerRef.current = timer;
 
@@ -1237,126 +1759,178 @@ export function TaskChat({
 
   // ─── Chat switching ────────────────────────────────────────────────────
 
-  const switchChat = useCallback(async (chatId: string) => {
-    if (chatId === activeChatId) return;
-    saveCurrentChatState();
-    setActiveChatId(chatId);
-    restoreChatState(chatId);
-    setShowChatMenu(false);
-    // Connect WS if needed
-    await connectChatWs(chatId);
-    wsRef.current = wsMapRef.current.get(chatId) ?? null;
-  }, [activeChatId, saveCurrentChatState, restoreChatState, connectChatWs]);
+  const switchChat = useCallback(
+    async (chatId: string) => {
+      if (chatId === activeChatId) return;
+      saveCurrentChatState();
+      setActiveChatId(chatId);
+      restoreChatState(chatId);
+      setShowChatMenu(false);
+      // Connect WS if needed
+      await connectChatWs(chatId);
+      wsRef.current = wsMapRef.current.get(chatId) ?? null;
+    },
+    [activeChatId, saveCurrentChatState, restoreChatState, connectChatWs],
+  );
 
   // ─── New chat creation ─────────────────────────────────────────────────
 
-  const handleNewChatWithAgent = useCallback(async (agent: string) => {
-    setShowAgentPicker(false);
-    try {
-      const newChat = await createChat(projectId, task.id, undefined, agent);
-      setChats((prev) => [...prev, newChat]);
-      switchChat(newChat.id);
-    } catch (err) {
-      console.error("Failed to create chat:", err);
-    }
-  }, [projectId, task.id, switchChat]);
+  const handleNewChatWithAgent = useCallback(
+    async (agent: string) => {
+      setShowAgentPicker(false);
+      try {
+        const newChat = await createChat(
+          projectId,
+          task.id,
+          buildDefaultSessionTitle(),
+          agent,
+        );
+        setChats((prev) => [...prev, newChat]);
+        switchChat(newChat.id);
+      } catch (err) {
+        console.error("Failed to create chat:", err);
+      }
+    },
+    [projectId, task.id, switchChat],
+  );
 
   // ─── Chat title editing ─────────────────────────────────────────────────
 
   const handleTitleSave = useCallback(async () => {
-    if (!activeChatId || !editTitleValue.trim()) {
-      setEditingTitle(false);
+    if (!editingTitle || !editTitleValue.trim()) {
+      setEditingTitle(null);
       return;
     }
     try {
-      await updateChatTitle(projectId, task.id, activeChatId, editTitleValue.trim());
-      setChats((prev) => prev.map((c) => c.id === activeChatId ? { ...c, title: editTitleValue.trim() } : c));
+      await updateChatTitle(
+        projectId,
+        task.id,
+        editingTitle.chatId,
+        editTitleValue.trim(),
+      );
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === editingTitle.chatId
+            ? { ...c, title: editTitleValue.trim() }
+            : c,
+        ),
+      );
     } catch (err) {
       console.error("Failed to update chat title:", err);
     }
-    setEditingTitle(false);
-  }, [activeChatId, editTitleValue, projectId, task.id]);
+    setEditingTitle(null);
+  }, [editingTitle, editTitleValue, projectId, task.id]);
 
   // ─── Chat deletion ─────────────────────────────────────────────────────
 
-  const handleDeleteChat = useCallback(async (chatId: string) => {
-    if (chats.length <= 1) return; // Don't delete the last chat
-    try {
-      await deleteChat(projectId, task.id, chatId);
-      // Close WebSocket if connected
-      const ws = wsMapRef.current.get(chatId);
-      if (ws) { intentionalCloseRef.current.add(chatId); ws.close(); wsMapRef.current.delete(chatId); }
-      perChatStateRef.current.delete(chatId);
-      setChats((prev) => {
-        const updated = prev.filter((c) => c.id !== chatId);
-        if (chatId === activeChatId && updated.length > 0) {
-          const next = updated[updated.length - 1];
-          setActiveChatId(next.id);
-          restoreChatState(next.id);
+  const handleDeleteChat = useCallback(
+    async (chatId: string) => {
+      if (chats.length <= 1) return; // Don't delete the last chat
+      try {
+        await deleteChat(projectId, task.id, chatId);
+        // Close WebSocket if connected
+        const ws = wsMapRef.current.get(chatId);
+        if (ws) {
+          intentionalCloseRef.current.add(chatId);
+          ws.close();
+          wsMapRef.current.delete(chatId);
         }
-        return updated;
-      });
-    } catch (err) {
-      console.error("Failed to delete chat:", err);
-    }
-    setShowChatMenu(false);
-  }, [chats.length, projectId, task.id, activeChatId, restoreChatState]);
+        perChatStateRef.current.delete(chatId);
+        setChats((prev) => {
+          const updated = prev.filter((c) => c.id !== chatId);
+          if (chatId === activeChatId && updated.length > 0) {
+            const next = updated[updated.length - 1];
+            setActiveChatId(next.id);
+            restoreChatState(next.id);
+          }
+          return updated;
+        });
+      } catch (err) {
+        console.error("Failed to delete chat:", err);
+      }
+      setShowChatMenu(false);
+    },
+    [chats.length, projectId, task.id, activeChatId, restoreChatState],
+  );
 
   // ─── User actions ────────────────────────────────────────────────────────
 
   /** Check if the editable has any content (text, chips, or attachments) */
   const checkContent = useCallback(() => {
     const el = editableRef.current;
-    if (!el) { setHasContent(attachments.length > 0); return; }
+    if (!el) {
+      setHasContent(attachments.length > 0);
+      return;
+    }
     const text = el.textContent?.trim() || "";
     const hasChips = el.querySelector("[data-command],[data-file]") !== null;
     setHasContent(text.length > 0 || hasChips || attachments.length > 0);
   }, [attachments.length]);
 
   /** Convert a File to an Attachment and add to state */
-  const addFileAsAttachment = useCallback(async (file: File) => {
-    if (!file.type.startsWith("image/") && !file.type.startsWith("audio/")) {
-      if (!activeChatId) return;
-      try {
-        const data = await fileToBase64(file);
-        const uploaded = await uploadChatAttachment(projectId, task.id, activeChatId, {
-          name: file.name,
-          mime_type: file.type || undefined,
-          data,
-        });
-        setAttachments(prev => [...prev, {
-          type: "resource",
-          data: "",
-          mimeType: uploaded.mime_type ?? file.type ?? "application/octet-stream",
-          name: uploaded.name,
-          uri: uploaded.uri,
-          size: uploaded.size,
-        }]);
-      } catch (err) {
-        console.error("Failed to upload attachment:", err);
-        setMessages(prev => [...prev, { type: "system", content: `Failed to attach ${file.name}.` }]);
+  const addFileAsAttachment = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("image/") && !file.type.startsWith("audio/")) {
+        if (!activeChatId) return;
+        try {
+          const data = await fileToBase64(file);
+          const uploaded = await uploadChatAttachment(
+            projectId,
+            task.id,
+            activeChatId,
+            {
+              name: file.name,
+              mime_type: file.type || undefined,
+              data,
+            },
+          );
+          setAttachments((prev) => [
+            ...prev,
+            {
+              type: "resource",
+              data: "",
+              mimeType:
+                uploaded.mime_type ?? file.type ?? "application/octet-stream",
+              name: uploaded.name,
+              uri: uploaded.uri,
+              size: uploaded.size,
+            },
+          ]);
+        } catch (err) {
+          console.error("Failed to upload attachment:", err);
+          setMessages((prev) => [
+            ...prev,
+            { type: "system", content: `Failed to attach ${file.name}.` },
+          ]);
+        }
+        return;
       }
-      return;
-    }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      const base64 = dataUrl.split(",")[1];
-      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-      setAttachments(prev => [...prev, {
-        type: file.type.startsWith("image/") ? "image" : "audio",
-        data: base64,
-        mimeType: file.type,
-        name: file.name,
-        previewUrl,
-      }]);
-    };
-    reader.readAsDataURL(file);
-  }, [activeChatId, projectId, task.id]);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.split(",")[1];
+        const previewUrl = file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : undefined;
+        setAttachments((prev) => [
+          ...prev,
+          {
+            type: file.type.startsWith("image/") ? "image" : "audio",
+            data: base64,
+            mimeType: file.type,
+            name: file.name,
+            previewUrl,
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    },
+    [activeChatId, projectId, task.id],
+  );
 
   const removeAttachment = useCallback((index: number) => {
-    setAttachments(prev => {
+    setAttachments((prev) => {
       const att = prev[index];
       if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
       return prev.filter((_, i) => i !== index);
@@ -1374,11 +1948,13 @@ export function TaskChat({
       setRemoteOwnerName("");
       // Resolve any pending permission requests (session was killed, permissions are void)
       setShowPermissionPanel(false);
-      setMessages((prev) => prev.map((m) =>
-        m.type === "permission" && !m.resolved
-          ? { ...m, resolved: "Cancelled" }
-          : m,
-      ));
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.type === "permission" && !m.resolved
+            ? { ...m, resolved: "Cancelled" }
+            : m,
+        ),
+      );
       pollingOffsetRef.current = 0;
       // Reconnect via WebSocket (normal flow)
       intentionalCloseRef.current.add(activeChatId);
@@ -1387,7 +1963,13 @@ export function TaskChat({
       await connectChatWs(activeChatId);
       wsRef.current = wsMapRef.current.get(activeChatId) ?? null;
     } catch {
-      setMessages((prev) => [...prev, { type: "system", content: "Failed to take control. Please try again." }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          type: "system",
+          content: "Failed to take control. Please try again.",
+        },
+      ]);
     } finally {
       setIsTakingControl(false);
     }
@@ -1397,12 +1979,19 @@ export function TaskChat({
     const el = editableRef.current;
     if (!el) return;
     const prompt = getPromptFromEditable(el);
-    if ((!prompt && attachments.length === 0) || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (
+      (!prompt && attachments.length === 0) ||
+      !wsRef.current ||
+      wsRef.current.readyState !== WebSocket.OPEN
+    )
+      return;
 
     // Shell mode → send terminal_execute directly (bypasses AI)
     if (isTerminalMode) {
       if (!prompt || isBusy) return;
-      wsRef.current.send(JSON.stringify({ type: "terminal_execute", command: prompt }));
+      wsRef.current.send(
+        JSON.stringify({ type: "terminal_execute", command: prompt }),
+      );
       el.innerHTML = "";
       setHasContent(false);
       setAttachments([]);
@@ -1415,7 +2004,7 @@ export function TaskChat({
     const text = prompt;
 
     // Build attachments payload for server
-    const contentAttachments = attachments.map(att => ({
+    const contentAttachments = attachments.map((att) => ({
       ...(att.type === "resource"
         ? {
             type: "resource_link",
@@ -1433,7 +2022,13 @@ export function TaskChat({
 
     if (isBusy) {
       // Queue message on server when agent is busy
-      wsRef.current.send(JSON.stringify({ type: "queue_message", text, attachments: contentAttachments }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "queue_message",
+          text,
+          attachments: contentAttachments,
+        }),
+      );
       el.innerHTML = "";
       setHasContent(false);
       setAttachments([]);
@@ -1446,7 +2041,13 @@ export function TaskChat({
       setShowPlanFile(false);
       el.focus();
     } else {
-      wsRef.current.send(JSON.stringify({ type: "prompt", text, attachments: contentAttachments }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "prompt",
+          text,
+          attachments: contentAttachments,
+        }),
+      );
       el.innerHTML = "";
       setHasContent(false);
       setAttachments([]);
@@ -1475,21 +2076,37 @@ export function TaskChat({
     }
   }, []);
 
-  const handleEditPending = useCallback((i: number) => {
-    setEditingPendingIdx(i);
-    setEditingPendingValue(pendingMessages[i]);
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "pause_queue" }));
-    }
-  }, [pendingMessages]);
+  const handleEditPending = useCallback(
+    (i: number) => {
+      setEditingPendingIdx(i);
+      setEditingPendingValue(pendingMessages[i]);
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "pause_queue" }));
+      }
+    },
+    [pendingMessages],
+  );
 
   const handleSavePendingEdit = useCallback(() => {
-    if (editingPendingIdx === null || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (
+      editingPendingIdx === null ||
+      !wsRef.current ||
+      wsRef.current.readyState !== WebSocket.OPEN
+    )
+      return;
     const trimmed = editingPendingValue.trim();
     if (!trimmed) {
-      wsRef.current.send(JSON.stringify({ type: "dequeue_message", index: editingPendingIdx }));
+      wsRef.current.send(
+        JSON.stringify({ type: "dequeue_message", index: editingPendingIdx }),
+      );
     } else {
-      wsRef.current.send(JSON.stringify({ type: "update_queued_message", index: editingPendingIdx, text: trimmed }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "update_queued_message",
+          index: editingPendingIdx,
+          text: trimmed,
+        }),
+      );
     }
     setEditingPendingIdx(null);
     setEditingPendingValue("");
@@ -1504,14 +2121,17 @@ export function TaskChat({
     }
   }, []);
 
-  const handleDeletePending = useCallback((i: number) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({ type: "dequeue_message", index: i }));
-    if (editingPendingIdx === i) {
-      setEditingPendingIdx(null);
-      setEditingPendingValue("");
-    }
-  }, [editingPendingIdx]);
+  const handleDeletePending = useCallback(
+    (i: number) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      wsRef.current.send(JSON.stringify({ type: "dequeue_message", index: i }));
+      if (editingPendingIdx === i) {
+        setEditingPendingIdx(null);
+        setEditingPendingValue("");
+      }
+    },
+    [editingPendingIdx],
+  );
 
   const handleClearPending = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -1523,7 +2143,9 @@ export function TaskChat({
   /** Respond to a permission request */
   const handlePermissionResponse = useCallback((optionId: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({ type: "permission_response", option_id: optionId }));
+    wsRef.current.send(
+      JSON.stringify({ type: "permission_response", option_id: optionId }),
+    );
   }, []);
 
   /** Detect /slash or @file at cursor position in contentEditable */
@@ -1559,8 +2181,15 @@ export function TaskChat({
             offset += (node.textContent || "").length;
           }
         }
-        const escCmd = match[1].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const escArgs = match[2].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+        const escCmd = match[1]
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const escArgs = match[2]
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\n/g, "<br>");
         const highlighted = `<span style="color:var(--color-accent);font-weight:600">${escCmd}</span>${escArgs}`;
         el.innerHTML = highlighted;
         // Restore cursor
@@ -1637,125 +2266,157 @@ export function TaskChat({
       setShowSlashMenu(false);
       setShowFileMenu(false);
     }
-  }, [checkContent, isTerminalMode, isBusy, slashCommands.length, taskFiles.length]);
+  }, [
+    checkContent,
+    isTerminalMode,
+    isBusy,
+    slashCommands.length,
+    taskFiles.length,
+  ]);
 
   /** Insert a command chip at the current cursor position, replacing the /partial text */
-  const insertCommandAtCursor = useCallback((name: string) => {
-    const el = editableRef.current;
-    if (!el) return;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    const node = range.startContainer;
-    if (node.nodeType !== Node.TEXT_NODE) return;
-    const text = node.textContent || "";
-    const offset = range.startOffset;
-    // Find the "/" start
-    let slashIdx = -1;
-    for (let i = offset - 1; i >= 0; i--) {
-      if (text[i] === "/") { if (i === 0 || /\s/.test(text[i - 1])) slashIdx = i; break; }
-      if (/\s/.test(text[i])) break;
-    }
-    if (slashIdx < 0) return;
-    const before = text.slice(0, slashIdx);
-    const after = text.slice(offset);
-    const parent = node.parentNode;
-    if (!parent) return;
-    // Build replacement: textBefore + chip + textAfter
-    const chip = createCommandChip(name);
-    const frag = document.createDocumentFragment();
-    if (before) frag.appendChild(document.createTextNode(before));
-    frag.appendChild(chip);
-    const afterNode = document.createTextNode(after || " ");
-    frag.appendChild(afterNode);
-    parent.replaceChild(frag, node);
-    // Move cursor after chip
-    const newRange = document.createRange();
-    newRange.setStart(afterNode, after ? 0 : 1);
-    newRange.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(newRange);
-    setShowSlashMenu(false);
-    checkContent();
-  }, [checkContent]);
+  const insertCommandAtCursor = useCallback(
+    (name: string) => {
+      const el = editableRef.current;
+      if (!el) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const node = range.startContainer;
+      if (node.nodeType !== Node.TEXT_NODE) return;
+      const text = node.textContent || "";
+      const offset = range.startOffset;
+      // Find the "/" start
+      let slashIdx = -1;
+      for (let i = offset - 1; i >= 0; i--) {
+        if (text[i] === "/") {
+          if (i === 0 || /\s/.test(text[i - 1])) slashIdx = i;
+          break;
+        }
+        if (/\s/.test(text[i])) break;
+      }
+      if (slashIdx < 0) return;
+      const before = text.slice(0, slashIdx);
+      const after = text.slice(offset);
+      const parent = node.parentNode;
+      if (!parent) return;
+      // Build replacement: textBefore + chip + textAfter
+      const chip = createCommandChip(name);
+      const frag = document.createDocumentFragment();
+      if (before) frag.appendChild(document.createTextNode(before));
+      frag.appendChild(chip);
+      const afterNode = document.createTextNode(after || " ");
+      frag.appendChild(afterNode);
+      parent.replaceChild(frag, node);
+      // Move cursor after chip
+      const newRange = document.createRange();
+      newRange.setStart(afterNode, after ? 0 : 1);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      setShowSlashMenu(false);
+      checkContent();
+    },
+    [checkContent],
+  );
 
   /** Insert a file chip at the current cursor position, replacing the @partial text */
-  const insertFileAtCursor = useCallback((filePath: string, isDir?: boolean) => {
-    const el = editableRef.current;
-    if (!el) return;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    const node = range.startContainer;
-    if (node.nodeType !== Node.TEXT_NODE) return;
-    const text = node.textContent || "";
-    const offset = range.startOffset;
-    // Find the "@" start
-    let atIdx = -1;
-    for (let i = offset - 1; i >= 0; i--) {
-      if (text[i] === "@") { if (i === 0 || /\s/.test(text[i - 1])) atIdx = i; break; }
-      if (/\s/.test(text[i])) break;
-    }
-    if (atIdx < 0) return;
-    const before = text.slice(0, atIdx);
-    const after = text.slice(offset);
-    const parent = node.parentNode;
-    if (!parent) return;
-    const chip = createFileChip(filePath, isDir);
-    const frag = document.createDocumentFragment();
-    if (before) frag.appendChild(document.createTextNode(before));
-    frag.appendChild(chip);
-    const afterNode = document.createTextNode(after || " ");
-    frag.appendChild(afterNode);
-    parent.replaceChild(frag, node);
-    const newRange = document.createRange();
-    newRange.setStart(afterNode, after ? 0 : 1);
-    newRange.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(newRange);
-    setShowFileMenu(false);
-    checkContent();
-  }, [checkContent]);
+  const insertFileAtCursor = useCallback(
+    (filePath: string, isDir?: boolean) => {
+      const el = editableRef.current;
+      if (!el) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const node = range.startContainer;
+      if (node.nodeType !== Node.TEXT_NODE) return;
+      const text = node.textContent || "";
+      const offset = range.startOffset;
+      // Find the "@" start
+      let atIdx = -1;
+      for (let i = offset - 1; i >= 0; i--) {
+        if (text[i] === "@") {
+          if (i === 0 || /\s/.test(text[i - 1])) atIdx = i;
+          break;
+        }
+        if (/\s/.test(text[i])) break;
+      }
+      if (atIdx < 0) return;
+      const before = text.slice(0, atIdx);
+      const after = text.slice(offset);
+      const parent = node.parentNode;
+      if (!parent) return;
+      const chip = createFileChip(filePath, isDir);
+      const frag = document.createDocumentFragment();
+      if (before) frag.appendChild(document.createTextNode(before));
+      frag.appendChild(chip);
+      const afterNode = document.createTextNode(after || " ");
+      frag.appendChild(afterNode);
+      parent.replaceChild(frag, node);
+      const newRange = document.createRange();
+      newRange.setStart(afterNode, after ? 0 : 1);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      setShowFileMenu(false);
+      checkContent();
+    },
+    [checkContent],
+  );
 
   /** Delegated click handler for chip close buttons */
-  const handleEditableMouseDown = useCallback((e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.dataset.chipClose || target.closest("[data-chip-close]")) {
-      e.preventDefault();
-      const chip = target.closest("[data-command],[data-file]");
-      if (chip) { chip.remove(); checkContent(); }
-    }
-  }, [checkContent]);
+  const handleEditableMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.dataset.chipClose || target.closest("[data-chip-close]")) {
+        e.preventDefault();
+        const chip = target.closest("[data-command],[data-file]");
+        if (chip) {
+          chip.remove();
+          checkContent();
+        }
+      }
+    },
+    [checkContent],
+  );
 
   /** Strip HTML on paste — insert plain text or handle image paste */
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    // Check for image paste
-    const items = Array.from(e.clipboardData.items);
-    const imageItem = items.find(i => i.type.startsWith("image/"));
-    if (imageItem && promptCaps.image) {
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      // Check for image paste
+      const items = Array.from(e.clipboardData.items);
+      const imageItem = items.find((i) => i.type.startsWith("image/"));
+      if (imageItem && promptCaps.image) {
+        e.preventDefault();
+        const file = imageItem.getAsFile();
+        if (file) addFileAsAttachment(file);
+        return;
+      }
+      // Default: plain text paste
       e.preventDefault();
-      const file = imageItem.getAsFile();
-      if (file) addFileAsAttachment(file);
-      return;
-    }
-    // Default: plain text paste
-    e.preventDefault();
-    const text = e.clipboardData.getData("text/plain");
-    document.execCommand("insertText", false, text);
-    checkContent();
-  }, [checkContent, promptCaps.image, addFileAsAttachment]);
+      const text = e.clipboardData.getData("text/plain");
+      document.execCommand("insertText", false, text);
+      checkContent();
+    },
+    [checkContent, promptCaps.image, addFileAsAttachment],
+  );
 
   /** Handle file input selection */
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    files.forEach(file => {
-      if (file.type.startsWith("image/") && promptCaps.image) void addFileAsAttachment(file);
-      else if (file.type.startsWith("audio/") && promptCaps.audio) void addFileAsAttachment(file);
-      else void addFileAsAttachment(file);
-    });
-    // Reset input so same file can be selected again
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [promptCaps.image, promptCaps.audio, addFileAsAttachment]);
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      files.forEach((file) => {
+        if (file.type.startsWith("image/") && promptCaps.image)
+          void addFileAsAttachment(file);
+        else if (file.type.startsWith("audio/") && promptCaps.audio)
+          void addFileAsAttachment(file);
+        else void addFileAsAttachment(file);
+      });
+      // Reset input so same file can be selected again
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    [promptCaps.image, promptCaps.audio, addFileAsAttachment],
+  );
 
   /** Drag & drop handlers */
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -1765,236 +2426,295 @@ export function TaskChat({
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     // Only set false when leaving the container (not entering a child)
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false);
+    if (!e.currentTarget.contains(e.relatedTarget as Node))
+      setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files);
-    files.forEach(file => {
-      if (file.type.startsWith("image/") && promptCaps.image) void addFileAsAttachment(file);
-      else if (file.type.startsWith("audio/") && promptCaps.audio) void addFileAsAttachment(file);
-      else void addFileAsAttachment(file);
-    });
-  }, [promptCaps.image, promptCaps.audio, addFileAsAttachment]);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      const files = Array.from(e.dataTransfer.files);
+      files.forEach((file) => {
+        if (file.type.startsWith("image/") && promptCaps.image)
+          void addFileAsAttachment(file);
+        else if (file.type.startsWith("audio/") && promptCaps.audio)
+          void addFileAsAttachment(file);
+        else void addFileAsAttachment(file);
+      });
+    },
+    [promptCaps.image, promptCaps.audio, addFileAsAttachment],
+  );
 
   // Re-check hasContent when attachments change
-  useEffect(() => { checkContent(); }, [attachments.length, checkContent]);
+  useEffect(() => {
+    checkContent();
+  }, [attachments.length, checkContent]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Skip during IME composition (e.g. Chinese/Japanese input)
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Skip during IME composition (e.g. Chinese/Japanese input)
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
 
-    // Backspace: robust chip deletion for contentEditable
-    if (e.key === "Backspace" && !e.metaKey && !e.altKey) {
-      const sel = window.getSelection();
-      if (sel && sel.isCollapsed && sel.anchorNode) {
-        const anchor = sel.anchorNode;
-        const offset = sel.anchorOffset;
-        const isChipEl = (n: Node): n is HTMLElement =>
-          n instanceof HTMLElement && (n.dataset.command !== undefined || n.dataset.file !== undefined);
+      // Backspace: robust chip deletion for contentEditable
+      if (e.key === "Backspace" && !e.metaKey && !e.altKey) {
+        const sel = window.getSelection();
+        if (sel && sel.isCollapsed && sel.anchorNode) {
+          const anchor = sel.anchorNode;
+          const offset = sel.anchorOffset;
+          const isChipEl = (n: Node): n is HTMLElement =>
+            n instanceof HTMLElement &&
+            (n.dataset.command !== undefined || n.dataset.file !== undefined);
 
-        // Case A: Cursor at start of text node — chip is previous sibling → delete chip
-        if (anchor.nodeType === Node.TEXT_NODE && offset === 0) {
-          const prev = anchor.previousSibling;
-          if (prev && isChipEl(prev)) {
-            e.preventDefault();
-            const before = prev.previousSibling;
-            prev.remove();
-            // Position cursor at end of preceding text, or start of container
-            if (before && before.nodeType === Node.TEXT_NODE) {
-              const r = document.createRange();
-              r.setStart(before, (before.textContent || "").length);
-              r.collapse(true);
-              sel.removeAllRanges();
-              sel.addRange(r);
-            }
-            checkContent();
-            return;
-          }
-        }
-
-        // Case B: Cursor in element node — previous child is chip → delete chip
-        if (anchor.nodeType === Node.ELEMENT_NODE && offset > 0) {
-          const prevChild = anchor.childNodes[offset - 1];
-          if (isChipEl(prevChild)) {
-            e.preventDefault();
-            const before = prevChild.previousSibling;
-            prevChild.remove();
-            if (before && before.nodeType === Node.TEXT_NODE) {
-              const r = document.createRange();
-              r.setStart(before, (before.textContent || "").length);
-              r.collapse(true);
-              sel.removeAllRanges();
-              sel.addRange(r);
-            }
-            checkContent();
-            return;
-          }
-        }
-
-        // Case C: Cursor in a whitespace-only text node right after a chip
-        // (the trailing " " inserted as cursor placeholder after chip creation)
-        // Handle deletion ourselves to prevent browser from mangling the DOM
-        if (anchor.nodeType === Node.TEXT_NODE && offset > 0) {
-          const text = anchor.textContent || "";
-          const prev = anchor.previousSibling;
-          if (prev && isChipEl(prev) && text.trimEnd().length === 0) {
-            e.preventDefault();
-            if (text.length <= 1) {
-              // Last whitespace char — delete both the padding text node and the chip
-              const beforeChip = prev.previousSibling;
+          // Case A: Cursor at start of text node — chip is previous sibling → delete chip
+          if (anchor.nodeType === Node.TEXT_NODE && offset === 0) {
+            const prev = anchor.previousSibling;
+            if (prev && isChipEl(prev)) {
+              e.preventDefault();
+              const before = prev.previousSibling;
               prev.remove();
-              anchor.parentNode?.removeChild(anchor);
-              if (beforeChip && beforeChip.nodeType === Node.TEXT_NODE) {
+              // Position cursor at end of preceding text, or start of container
+              if (before && before.nodeType === Node.TEXT_NODE) {
                 const r = document.createRange();
-                r.setStart(beforeChip, (beforeChip.textContent || "").length);
+                r.setStart(before, (before.textContent || "").length);
                 r.collapse(true);
                 sel.removeAllRanges();
                 sel.addRange(r);
-              } else {
-                // No text before chip — position at end of remaining content
-                const el = editableRef.current;
-                if (el) {
+              }
+              checkContent();
+              return;
+            }
+          }
+
+          // Case B: Cursor in element node — previous child is chip → delete chip
+          if (anchor.nodeType === Node.ELEMENT_NODE && offset > 0) {
+            const prevChild = anchor.childNodes[offset - 1];
+            if (isChipEl(prevChild)) {
+              e.preventDefault();
+              const before = prevChild.previousSibling;
+              prevChild.remove();
+              if (before && before.nodeType === Node.TEXT_NODE) {
+                const r = document.createRange();
+                r.setStart(before, (before.textContent || "").length);
+                r.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(r);
+              }
+              checkContent();
+              return;
+            }
+          }
+
+          // Case C: Cursor in a whitespace-only text node right after a chip
+          // (the trailing " " inserted as cursor placeholder after chip creation)
+          // Handle deletion ourselves to prevent browser from mangling the DOM
+          if (anchor.nodeType === Node.TEXT_NODE && offset > 0) {
+            const text = anchor.textContent || "";
+            const prev = anchor.previousSibling;
+            if (prev && isChipEl(prev) && text.trimEnd().length === 0) {
+              e.preventDefault();
+              if (text.length <= 1) {
+                // Last whitespace char — delete both the padding text node and the chip
+                const beforeChip = prev.previousSibling;
+                prev.remove();
+                anchor.parentNode?.removeChild(anchor);
+                if (beforeChip && beforeChip.nodeType === Node.TEXT_NODE) {
                   const r = document.createRange();
-                  r.selectNodeContents(el);
-                  r.collapse(false);
+                  r.setStart(beforeChip, (beforeChip.textContent || "").length);
+                  r.collapse(true);
                   sel.removeAllRanges();
                   sel.addRange(r);
+                } else {
+                  // No text before chip — position at end of remaining content
+                  const el = editableRef.current;
+                  if (el) {
+                    const r = document.createRange();
+                    r.selectNodeContents(el);
+                    r.collapse(false);
+                    sel.removeAllRanges();
+                    sel.addRange(r);
+                  }
                 }
+              } else {
+                // Multiple whitespace chars — delete one manually
+                anchor.textContent =
+                  text.slice(0, offset - 1) + text.slice(offset);
+                const r = document.createRange();
+                r.setStart(anchor, offset - 1);
+                r.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(r);
               }
-            } else {
-              // Multiple whitespace chars — delete one manually
-              anchor.textContent = text.slice(0, offset - 1) + text.slice(offset);
-              const r = document.createRange();
-              r.setStart(anchor, offset - 1);
-              r.collapse(true);
-              sel.removeAllRanges();
-              sel.addRange(r);
+              checkContent();
+              return;
             }
-            checkContent();
-            return;
           }
         }
       }
-    }
 
-    // Shell mode: Backspace on empty input → exit shell mode
-    if (isTerminalMode && e.key === "Backspace") {
-      const el = editableRef.current;
-      if (el && !el.textContent?.trim()) {
+      // Shell mode: Backspace on empty input → exit shell mode
+      if (isTerminalMode && e.key === "Backspace") {
+        const el = editableRef.current;
+        if (el && !el.textContent?.trim()) {
+          e.preventDefault();
+          el.innerHTML = "";
+          setIsTerminalMode(false);
+          return;
+        }
+      }
+      // Shell mode: Escape → exit shell mode
+      if (isTerminalMode && e.key === "Escape") {
         e.preventDefault();
-        el.innerHTML = "";
+        const el = editableRef.current;
+        if (el) {
+          // Strip highlight spans, keep plain text
+          const raw = el.textContent || "";
+          el.textContent = raw;
+          el.blur();
+        }
         setIsTerminalMode(false);
         return;
       }
-    }
-    // Shell mode: Escape → exit shell mode
-    if (isTerminalMode && e.key === "Escape") {
-      e.preventDefault();
-      const el = editableRef.current;
-      if (el) {
-        // Strip highlight spans, keep plain text
-        const raw = el.textContent || "";
-        el.textContent = raw;
-        el.blur();
-      }
-      setIsTerminalMode(false);
-      return;
-    }
-    // Expanded input: Escape → collapse
-    if (isInputExpanded && e.key === "Escape") {
-      e.preventDefault();
-      setIsInputExpanded(false);
-      editableRef.current?.blur();
-      return;
-    }
-    // Slash menu navigation
-    if (showSlashMenu && filteredSlashCommands.length > 0) {
-      if (e.key === "ArrowDown") {
+      // Expanded input: Escape → collapse
+      if (isInputExpanded && e.key === "Escape") {
         e.preventDefault();
-        setSlashSelectedIdx((prev) => (prev + 1) % filteredSlashCommands.length);
+        setIsInputExpanded(false);
+        editableRef.current?.blur();
         return;
       }
-      if (e.key === "ArrowUp") {
+      // Slash menu navigation
+      if (showSlashMenu && filteredSlashCommands.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashSelectedIdx(
+            (prev) => (prev + 1) % filteredSlashCommands.length,
+          );
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashSelectedIdx(
+            (prev) =>
+              (prev - 1 + filteredSlashCommands.length) %
+              filteredSlashCommands.length,
+          );
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          e.preventDefault();
+          insertCommandAtCursor(filteredSlashCommands[slashSelectedIdx].name);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setShowSlashMenu(false);
+          return;
+        }
+      }
+      // File menu navigation
+      if (showFileMenu && filteredFiles.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setFileSelectedIdx((prev) => (prev + 1) % filteredFiles.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setFileSelectedIdx(
+            (prev) => (prev - 1 + filteredFiles.length) % filteredFiles.length,
+          );
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          e.preventDefault();
+          const sel_item = filteredFiles[fileSelectedIdx];
+          insertFileAtCursor(sel_item.path, sel_item.isDir);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setShowFileMenu(false);
+          return;
+        }
+      }
+      // Shift+Tab → cycle permission mode
+      if (e.key === "Tab" && e.shiftKey && modeOptions.length > 0) {
         e.preventDefault();
-        setSlashSelectedIdx((prev) => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length);
+        const currentIdx = modeOptions.findIndex(
+          (m) => m.value === permissionLevel,
+        );
+        const nextIdx = (currentIdx + 1) % modeOptions.length;
+        const next = modeOptions[nextIdx];
+        setPermissionLevel(next.value);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({ type: "set_mode", mode_id: next.value }),
+          );
+        }
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      // Cmd+Option+Backspace → clear pending queue
+      if (
+        e.key === "Backspace" &&
+        e.metaKey &&
+        e.altKey &&
+        pendingMessages.length > 0
+      ) {
         e.preventDefault();
-        insertCommandAtCursor(filteredSlashCommands[slashSelectedIdx].name);
+        handleClearPending();
         return;
       }
+      // Plain input: Escape → blur editor
       if (e.key === "Escape") {
         e.preventDefault();
-        setShowSlashMenu(false);
+        editableRef.current?.blur();
+        if (typeof window !== "undefined") {
+          window.getSelection()?.removeAllRanges();
+        }
         return;
       }
-    }
-    // File menu navigation
-    if (showFileMenu && filteredFiles.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setFileSelectedIdx((prev) => (prev + 1) % filteredFiles.length);
-        return;
+      // Expanded mode: Cmd/Ctrl+Enter → send, plain Enter → newline
+      // Inline mode: Enter → send, Shift+Enter → newline
+      if (isInputExpanded) {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          handleSend();
+        }
+      } else {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          handleSend();
+        }
       }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setFileSelectedIdx((prev) => (prev - 1 + filteredFiles.length) % filteredFiles.length);
-        return;
-      }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-        e.preventDefault();
-        const sel_item = filteredFiles[fileSelectedIdx];
-        insertFileAtCursor(sel_item.path, sel_item.isDir);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setShowFileMenu(false);
-        return;
-      }
-    }
-    // Shift+Tab → cycle permission mode
-    if (e.key === "Tab" && e.shiftKey && modeOptions.length > 0) {
-      e.preventDefault();
-      const currentIdx = modeOptions.findIndex((m) => m.value === permissionLevel);
-      const nextIdx = (currentIdx + 1) % modeOptions.length;
-      const next = modeOptions[nextIdx];
-      setPermissionLevel(next.value);
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: next.value }));
-      }
-      return;
-    }
-    // Cmd+Option+Backspace → clear pending queue
-    if (e.key === "Backspace" && e.metaKey && e.altKey && pendingMessages.length > 0) {
-      e.preventDefault();
-      handleClearPending();
-      return;
-    }
-    // Plain input: Escape → blur editor
-    if (e.key === "Escape") {
-      e.preventDefault();
-      editableRef.current?.blur();
-      if (typeof window !== "undefined") {
-        window.getSelection()?.removeAllRanges();
-      }
-      return;
-    }
-    // Expanded mode: Cmd/Ctrl+Enter → send, plain Enter → newline
-    // Inline mode: Enter → send, Shift+Enter → newline
-    if (isInputExpanded) {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSend(); }
-    } else {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
-    }
-  }, [handleSend, isTerminalMode, isInputExpanded, showSlashMenu, filteredSlashCommands, slashSelectedIdx, insertCommandAtCursor, showFileMenu, filteredFiles, fileSelectedIdx, insertFileAtCursor, pendingMessages, handleClearPending, modeOptions, permissionLevel, checkContent]);
+    },
+    [
+      handleSend,
+      isTerminalMode,
+      isInputExpanded,
+      showSlashMenu,
+      filteredSlashCommands,
+      slashSelectedIdx,
+      insertCommandAtCursor,
+      showFileMenu,
+      filteredFiles,
+      fileSelectedIdx,
+      insertFileAtCursor,
+      pendingMessages,
+      handleClearPending,
+      modeOptions,
+      permissionLevel,
+      checkContent,
+    ],
+  );
 
   const toggleThinkingCollapse = (index: number) => {
-    setMessages((prev) => prev.map((m, i) => i === index && m.type === "thinking" ? { ...m, collapsed: !m.collapsed } : m));
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === index && m.type === "thinking"
+          ? { ...m, collapsed: !m.collapsed }
+          : m,
+      ),
+    );
   };
 
   const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
@@ -2023,694 +2743,1067 @@ export function TaskChat({
 
   if (collapsed) {
     return (
-      <motion.div layout initial={{ width: 48 }} animate={{ width: 48 }}
+      <motion.div
+        layout
+        initial={{ width: 48 }}
+        animate={{ width: 48 }}
         transition={{ type: "spring", damping: 25, stiffness: 200 }}
         className="h-full flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] overflow-hidden cursor-pointer hover:bg-[var(--color-bg)] transition-colors"
-        onClick={onExpand} title="Expand Chat (t)"
+        onClick={onExpand}
+        title="Expand Chat (t)"
       >
         <div className="flex-1 flex flex-col items-center py-2">
-          <div className="p-3 text-[var(--color-text-muted)]">{AgentIcon ? <AgentIcon size={20} /> : <MessageSquare className="w-5 h-5" />}</div>
-          {isConnected && <div className="p-3"><div className="w-2.5 h-2.5 rounded-full bg-[var(--color-success)] animate-pulse" /></div>}
+          <div className="p-3 text-[var(--color-text-muted)]">
+            {AgentIcon ? (
+              <AgentIcon size={20} />
+            ) : (
+              <MessageSquare className="w-5 h-5" />
+            )}
+          </div>
+          {isConnected && (
+            <div className="p-3">
+              <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-success)] animate-pulse" />
+            </div>
+          )}
           <div className="flex-1" />
-          <div className="p-3 text-[var(--color-text-muted)]"><ChevronRight className="w-5 h-5" /></div>
+          <div className="p-3 text-[var(--color-text-muted)]">
+            <ChevronRight className="w-5 h-5" />
+          </div>
         </div>
       </motion.div>
     );
   }
 
-
-
   // ─── Full chat view ──────────────────────────────────────────────────────
 
   return (
-    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
       className={`flex-1 flex flex-col overflow-hidden relative ${fullscreen ? "" : "rounded-lg border border-[var(--color-border)]"}`}
-      onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       {/* Full-window drag overlay */}
       {isDragging && (
         <div className="absolute inset-0 bg-[color-mix(in_srgb,var(--color-highlight)_8%,transparent)] border-2 border-dashed border-[var(--color-highlight)] rounded-lg flex items-center justify-center z-50 pointer-events-none">
-          <span className="text-[var(--color-highlight)] font-medium text-sm">Drop files here</span>
+          <span className="text-[var(--color-highlight)] font-medium text-sm">
+            Drop files here
+          </span>
         </div>
       )}
       {/* Header */}
-      {!hideHeader && (
-      <div className="relative z-30 border-b border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)] backdrop-blur-sm select-none">
-        <div className="flex w-full items-center justify-between px-4 py-2">
-        <div className="flex items-center gap-2 text-sm min-w-0 select-none">
-          {AgentIcon ? <AgentIcon size={16} className="text-[var(--color-text-muted)] shrink-0" /> : <MessageSquare className="w-4 h-4 text-[var(--color-text-muted)] shrink-0" />}
-
-          {/* Chat title / dropdown */}
-          {activeChat ? (
-            <div className="relative min-w-0 flex-1" ref={chatMenuRef}>
-              {editingTitle ? (
-                <input
-                  autoFocus
-                  value={editTitleValue}
-                  onChange={(e) => setEditTitleValue(e.target.value)}
-                  onBlur={handleTitleSave}
-                  onKeyDown={(e) => {
-                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                    if (e.key === "Enter") handleTitleSave();
-                    if (e.key === "Escape") setEditingTitle(false);
-                  }}
-                  className="text-sm text-[var(--color-text)] bg-transparent border-b border-[var(--color-highlight)] outline-none px-0 py-0 min-w-0 w-40"
-                />
-              ) : (
-                <button
-                  onClick={() => setShowChatMenu(!showChatMenu)}
-                  onDoubleClick={() => {
-                    setEditTitleValue(activeChat.title);
-                    setEditingTitle(true);
-                    setShowChatMenu(false);
-                  }}
-                  className="flex items-center gap-1 text-sm text-[var(--color-text)] hover:text-[var(--color-highlight)] transition-colors min-w-0"
-                  title="Double-click to rename"
-                >
-                  <span className="truncate">{activeChat.title}</span>
-                  <ChevronDown className="w-3 h-3 shrink-0 text-[var(--color-text-muted)]" />
-                </button>
-              )}
-
-              {/* Chat dropdown menu */}
-              {showChatMenu && (
-                <div className="absolute top-full left-0 mt-1 min-w-56 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 z-[80]">
-                  {[...chats].reverse().map((chat) => {
-                    const chatAgent = agentOptions.find((a) => a.value === chat.agent);
-                    const ChatIcon = chatAgent?.icon;
-                    return (
-                      <div
-                        key={chat.id}
-                        className={`flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors group ${
-                          chat.id === activeChatId
-                            ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text)]"
-                            : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text)]"
-                        }`}
-                        onClick={() => switchChat(chat.id)}
-                      >
-                        {ChatIcon ? <ChatIcon size={14} className="shrink-0" /> : <MessageSquare className="w-3.5 h-3.5 shrink-0" />}
-                        <div className="flex-1 min-w-0">
-                          <div className="truncate">{chat.title}</div>
-                          <div className="text-[10px] text-[var(--color-text-muted)]">
-                            {new Date(chat.created_at).toLocaleDateString()}
-                          </div>
-                        </div>
-                        {chat.id === activeChatId && (
-                          <span className="text-[var(--color-highlight)] text-xs shrink-0">●</span>
-                        )}
-                        {chats.length > 1 && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.id); }}
-                            className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-error)] transition-all shrink-0"
-                            title="Delete chat"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            <span className="text-[var(--color-text-muted)]">{agentLabel}</span>
-          )}
-
-          {/* New Chat button + Agent Picker */}
-          <div className="relative shrink-0" ref={agentPickerRef}>
-            <button
-              onClick={() => { setShowChatMenu(false); setShowAgentPicker(!showAgentPicker); }}
-              className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-highlight)] hover:bg-[var(--color-bg-tertiary)] rounded transition-colors"
-              title="New Chat"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-
-            {showAgentPicker && (
-              <div className="absolute top-full left-0 mt-1 min-w-48 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 z-[80]">
-                {!acpAvailabilityLoaded && (
-                  <div className="flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-text-muted)]">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking...
-                  </div>
-                )}
-                {acpAvailabilityLoaded && acpAgentOptions.filter(opt => !opt.disabled).map(opt => {
-                  const Icon = opt.icon;
-                  return (
-                    <button key={opt.id}
-                      onClick={() => handleNewChatWithAgent(opt.value)}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)] transition-colors">
-                      <div className="w-4 h-4 flex items-center justify-center shrink-0">
-                        {Icon ? <Icon size={14} /> : <Bot className="w-3.5 h-3.5" />}
-                      </div>
-                      <span className="truncate">{opt.label}</span>
-                    </button>
-                  );
-                })}
-                {acpAvailabilityLoaded && customAgents.length > 0 && (
-                  <>
-                    <div className="my-1 border-t border-[var(--color-border)]" />
-                    <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">Custom</div>
-                    {customAgents.map(agent => (
-                      <button key={agent.id}
-                        onClick={() => handleNewChatWithAgent(agent.id)}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)] transition-colors">
-                        <div className="w-4 h-4 flex items-center justify-center shrink-0">
-                          {agent.type === "remote"
-                            ? <Globe className="w-3.5 h-3.5 text-[var(--color-info)]" />
-                            : <Terminal className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />}
-                        </div>
-                        <span className="truncate">{agent.name}</span>
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0 select-none">
-          <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-[var(--color-success)] animate-pulse" : "bg-[var(--color-warning)]"}`} />
-          <span className="text-xs text-[var(--color-text-muted)]">{isConnected ? "Connected" : "Connecting..."}</span>
-          {onToggleFullscreen && (
-            <button onClick={onToggleFullscreen}
-              className="ml-1 p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] rounded transition-colors"
-              title={fullscreen ? "Exit Fullscreen" : "Fullscreen"}>
-              {fullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            </button>
-          )}
-          {onCollapse && (
-            <button onClick={onCollapse}
-              className="ml-1 p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] rounded transition-colors"
-              title="Minimize Chat">
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-      </div>
-      )}
-
-      {/* Messages */}
-      <div
-        ref={messagesViewportRef}
-        onScroll={updateScrollState}
-        className={`relative z-0 flex-1 overflow-y-auto px-4 pt-4 min-h-0 ${messagesBottomPaddingClass}`}
-      >
-        <div className="flex w-full flex-col gap-3">
-          {renderItems.map((item) =>
-            item.kind === "single" ? (
-              <MessageItem key={`m-${item.index}`} message={item.message} index={item.index} isBusy={isBusy} agentLabel={agentLabel}
-                onToggleThinkingCollapse={toggleThinkingCollapse} onPermissionResponse={handlePermissionResponse} onFileClick={onNavigateToFile} onImageClick={setLightboxUrl} />
-            ) : (
-              <ToolSectionView
-                key={`ts-${item.sectionId}`}
-                sectionId={item.sectionId}
-                tools={item.tools}
-                expanded={expandedSections.has(item.sectionId)}
-                forceExpanded={false}
-                onToggleSection={toggleSection}
-                onFileClick={onNavigateToFile}
-              />
-            ),
-          )}
-          {isBusy && messages[messages.length - 1]?.type !== "assistant" && messages[messages.length - 1]?.type !== "terminal_output" && (
-            <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)] py-1">
-              <Loader2 className="w-4 h-4 animate-spin" /><span>Thinking...</span>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pt-2 pb-4">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-bg)_96%,transparent),transparent)]" />
-        <div className="pointer-events-auto relative mx-auto w-full max-w-[920px]">
-        {isRemoteSession && (
-          <div className="absolute inset-x-0 bottom-full z-20 mb-3">
-            <div className="flex items-center justify-between gap-3 rounded-[22px] border border-[color-mix(in_srgb,var(--color-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-4 py-2.5 shadow-[0_10px_28px_rgba(0,0,0,0.12)] backdrop-blur-md">
-              <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--color-warning)]">
-                <Eye className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Read-only — controlled by <strong>{remoteOwnerName}</strong></span>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleTakeControl}
-                disabled={isTakingControl}
-                className="h-7 shrink-0 rounded-full px-3 text-xs text-[var(--color-warning)] hover:bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] hover:text-[var(--color-text)]"
-              >
-                {isTakingControl ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                Take Control
-              </Button>
-            </div>
-          </div>
-        )}
-        <AnimatePresence initial={false}>
-          {composerPanelOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: 10, height: 0 }}
-              animate={{ opacity: 1, y: 0, height: "auto" }}
-              exit={{ opacity: 0, y: 8, height: 0 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="mb-3 overflow-hidden rounded-[26px] border border-[color-mix(in_srgb,var(--color-border)_62%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_82%,transparent)] shadow-[0_16px_40px_rgba(0,0,0,0.14)] backdrop-blur-md"
-            >
-              <div className="max-h-72 overflow-y-auto px-3 py-3">
-                {activeComposerPanel === "todo" && (
-                  <div className="space-y-1">
-                    {planEntries.map((entry, i) => (
-                      <div key={i} className="flex items-center gap-2 py-0.5 text-sm">
-                        {entry.status === "completed" ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
-                        ) : entry.status === "in_progress" ? (
-                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-highlight)]" />
-                        ) : (
-                          <Circle className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
-                        )}
-                        <span className={entry.status === "completed" ? "text-[var(--color-text-muted)] line-through" : "text-[var(--color-text)]"}>
-                          {entry.content}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {activeComposerPanel === "plan" && (
-                  <div className="space-y-2">
-                    <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-                      {planFilePath.split("/").pop()}
+      {!hideHeader && sessionRailCollapsed && (
+        <div className="relative z-30 border-b border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)] backdrop-blur-sm select-none">
+          <div className="flex w-full items-center justify-between px-3 py-1.5">
+            <div className="flex min-w-0 items-center gap-2 text-sm select-none">
+              {activeChat ? (
+                <div className="relative min-w-0" ref={chatMenuRef}>
+                  {editingTitle?.chatId === activeChat.id &&
+                  editingTitle.surface === "header" ? (
+                    <div className="flex min-w-0 items-center gap-2">
+                      {AgentIcon ? (
+                        <AgentIcon
+                          size={14}
+                          className="shrink-0 text-[var(--color-text-muted)]"
+                        />
+                      ) : (
+                        <MessageSquare className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                      )}
+                      <InlineEditTitle
+                        value={editTitleValue}
+                        onChange={setEditTitleValue}
+                        onSave={handleTitleSave}
+                        onCancel={() => setEditingTitle(null)}
+                        className="min-w-0 w-48 border-b border-[var(--color-highlight)] bg-transparent px-0 py-0 text-sm text-[var(--color-text)] outline-none"
+                      />
                     </div>
-                    <MarkdownRenderer content={planFileContent} onFileClick={onNavigateToFile} />
-                  </div>
-                )}
+                  ) : (
+                    <button
+                      onClick={() => setShowChatMenu((prev) => !prev)}
+                      onDoubleClick={() => {
+                        setEditTitleValue(activeChat.title);
+                        setEditingTitle({
+                          chatId: activeChat.id,
+                          surface: "header",
+                        });
+                        setShowChatMenu(false);
+                      }}
+                      className="flex min-w-0 items-center gap-2 text-left"
+                      title="Double-click to rename"
+                    >
+                      {AgentIcon ? (
+                        <AgentIcon
+                          size={14}
+                          className="shrink-0 text-[var(--color-text-muted)]"
+                        />
+                      ) : (
+                        <MessageSquare className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                      )}
+                      <OverflowTitle
+                        text={activeChat.title}
+                        className="text-[13px] font-medium text-[var(--color-text)]"
+                      />
+                      <ChevronDown className="h-3 w-3 shrink-0 text-[var(--color-text-muted)]" />
+                    </button>
+                  )}
 
-                {activeComposerPanel === "pending" && (
-                  <div className="space-y-1">
-                    {pendingMessages.map((msg, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1 text-sm">
-                        <span className="w-4 shrink-0 text-right text-xs text-[var(--color-text-muted)]">{i + 1}</span>
-                        {editingPendingIdx === i ? (
-                          <input
-                            autoFocus
-                            value={editingPendingValue}
-                            onChange={(e) => setEditingPendingValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                              if (e.key === "Enter") { e.preventDefault(); handleSavePendingEdit(); }
-                              if (e.key === "Escape") handleCancelPendingEdit();
-                            }}
-                            onBlur={handleSavePendingEdit}
-                            className="flex-1 min-w-0 rounded border border-[var(--color-highlight)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-sm text-[var(--color-text)] outline-none"
-                          />
-                        ) : (
-                          <>
-                            <span className="flex-1 min-w-0 truncate text-[var(--color-text)]">{msg}</span>
-                            <div className="flex items-center gap-1 shrink-0">
-                              {i === 0 && (
+                  {showChatMenu && (
+                    <div className="absolute top-full left-0 z-[80] mt-1 min-w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg">
+                      <div className="border-b border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] bg-[var(--color-bg)] px-2 py-1">
+                        <button
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            setSessionRailCollapsed(false);
+                          }}
+                          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-[12px] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text)]"
+                        >
+                          <span>Open Sessions</span>
+                          <ChevronRight className="h-3 w-3" />
+                        </button>
+                      </div>
+                      <div className="max-h-64 overflow-y-auto py-1">
+                        {orderedChats.map((chat) => {
+                          const ChatIcon = getChatIcon(chat.agent);
+                          return (
+                            <div
+                              key={chat.id}
+                              className={`group flex cursor-pointer items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                                chat.id === activeChatId
+                                  ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text)]"
+                                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text)]"
+                              }`}
+                              onClick={() => switchChat(chat.id)}
+                            >
+                              <ChatIcon className="h-3.5 w-3.5 shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate">{chat.title}</div>
+                              </div>
+                              {chats.length > 1 && (
                                 <button
-                                  onClick={() => handleSendNow()}
-                                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--color-highlight)] transition-colors hover:bg-[var(--color-bg-tertiary)]"
-                                  title="Send Now"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteChat(chat.id);
+                                  }}
+                                  className="shrink-0 p-0.5 text-[var(--color-text-muted)] opacity-0 transition-all hover:text-[var(--color-error)] group-hover:opacity-100"
+                                  title="Delete chat"
                                 >
-                                  <Send className="h-3 w-3" />
-                                  <span>Now</span>
+                                  <Trash2 className="w-3 h-3" />
                                 </button>
                               )}
-                              <button
-                                onClick={() => handleEditPending(i)}
-                                className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)]"
-                                title="Edit"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </button>
-                              <button
-                                onClick={() => handleDeletePending(i)}
-                                className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-error)]"
-                                title="Delete"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
                             </div>
-                          </>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <span className="text-[var(--color-text-muted)]">
+                  {agentLabel}
+                </span>
+              )}
+
+              <div className="relative shrink-0" ref={headerAgentPickerRef}>
+                <button
+                  onClick={(e) => toggleAgentPicker(e.currentTarget)}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-highlight)]"
+                  title="New Session"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1.5 select-none">
+              <div
+                className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-[var(--color-success)] animate-pulse" : "bg-[var(--color-warning)]"}`}
+              />
+              <span className="text-xs text-[var(--color-text-muted)]">
+                {isConnected ? "Connected" : "Connecting..."}
+              </span>
+              {onToggleFullscreen && (
+                <button
+                  onClick={onToggleFullscreen}
+                  className="ml-1 rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]"
+                  title={fullscreen ? "Exit Fullscreen" : "Fullscreen"}
+                >
+                  {fullscreen ? (
+                    <Minimize2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
+              {onCollapse && (
+                <button
+                  onClick={onCollapse}
+                  className="ml-1 rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]"
+                  title="Minimize Chat"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        <div
+          className={`shrink-0 border-r border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_20%,transparent)] transition-all duration-200 ${sessionRailCollapsed ? "w-0 overflow-hidden border-r-transparent" : "w-[228px] overflow-hidden"}`}
+        >
+          <div className="flex h-full flex-col">
+            <div className="border-b border-[color-mix(in_srgb,var(--color-border)_68%,transparent)] p-2 space-y-1.5">
+              <div className="flex items-center gap-2 px-1">
+                <button
+                  onClick={() => setSessionRailCollapsed(true)}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)]"
+                  title="Back to compact mode"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <div
+                  className="min-w-0 flex items-center gap-2"
+                  onDoubleClick={() => {
+                    if (!activeChat) return;
+                    setEditTitleValue(activeChat.title);
+                    setEditingTitle({
+                      chatId: activeChat.id,
+                      surface: "sidebar-header",
+                    });
+                  }}
+                  title="Double-click to rename"
+                >
+                  {AgentIcon ? (
+                    <AgentIcon
+                      size={14}
+                      className="shrink-0 text-[var(--color-text-muted)]"
+                    />
+                  ) : (
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                  )}
+                  {activeChat &&
+                  editingTitle?.chatId === activeChat.id &&
+                  editingTitle.surface === "sidebar-header" ? (
+                    <InlineEditTitle
+                      value={editTitleValue}
+                      onChange={setEditTitleValue}
+                      onSave={handleTitleSave}
+                      onCancel={() => setEditingTitle(null)}
+                      className="min-w-0 flex-1 bg-transparent text-[13px] font-medium text-[var(--color-text)] outline-none"
+                    />
+                  ) : (
+                    <OverflowTitle
+                      text={activeChat?.title ?? "Chats"}
+                      className="text-[13px] font-medium text-[var(--color-text)]"
+                    />
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-2 px-1">
+                <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                  Sessions
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${isConnected ? "bg-[var(--color-success)]" : "bg-[var(--color-warning)]"}`}
+                  />
+                  <span>{isConnected ? "Connected" : "Connecting..."}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+              <div className="space-y-1">
+                <div className="relative" ref={sidebarAgentPickerRef}>
+                  <button
+                    onClick={(e) => toggleAgentPicker(e.currentTarget)}
+                    className="flex w-full items-center gap-2 rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-highlight)_34%,transparent)] bg-transparent px-1.5 py-1 text-[12px] text-[var(--color-highlight)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-bg-secondary)_72%,transparent)]"
+                    title="New Session"
+                  >
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-dashed border-[color-mix(in_srgb,var(--color-highlight)_34%,transparent)] text-[var(--color-highlight)]">
+                      <Plus className="h-3 w-3" />
+                    </div>
+                    <span className="font-medium">New Session</span>
+                  </button>
+                </div>
+                {orderedChats.map((chat) => {
+                  const ChatIcon = getChatIcon(chat.agent);
+                  const isActive = chat.id === activeChatId;
+                  return (
+                    <div
+                      key={chat.id}
+                      className={`group flex items-center gap-1.5 rounded-md border border-transparent px-1.5 py-1 transition-colors ${
+                        isActive
+                          ? "bg-[color-mix(in_srgb,var(--color-highlight)_9%,transparent)]"
+                          : "text-[var(--color-text-muted)] hover:bg-[color-mix(in_srgb,var(--color-bg-secondary)_72%,transparent)] hover:text-[var(--color-text)]"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => switchChat(chat.id)}
+                        onDoubleClick={() => {
+                          setEditTitleValue(chat.title);
+                          setEditingTitle({
+                            chatId: chat.id,
+                            surface: "sidebar-list",
+                          });
+                        }}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        title={chat.title}
+                      >
+                        <div
+                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border ${
+                            isActive
+                              ? "border-[color-mix(in_srgb,var(--color-highlight)_26%,transparent)] bg-[color-mix(in_srgb,var(--color-highlight)_10%,transparent)] text-[var(--color-highlight)]"
+                              : "border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] bg-transparent text-[var(--color-text-muted)]"
+                          }`}
+                        >
+                          <ChatIcon className="h-3 w-3" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          {editingTitle?.chatId === chat.id &&
+                          editingTitle.surface === "sidebar-list" ? (
+                            <InlineEditTitle
+                              value={editTitleValue}
+                              onChange={setEditTitleValue}
+                              onSave={handleTitleSave}
+                              onCancel={() => setEditingTitle(null)}
+                              className="w-full bg-transparent text-[12px] leading-5 text-[var(--color-text)] outline-none"
+                            />
+                          ) : (
+                            <OverflowTitle
+                              text={chat.title}
+                              className={`text-[12px] leading-5 ${isActive ? "font-medium text-[var(--color-text)]" : ""}`}
+                            />
+                          )}
+                        </div>
+                      </button>
+                      {chats.length > 1 &&
+                        !(
+                          editingTitle?.chatId === chat.id &&
+                          editingTitle.surface === "sidebar-list"
+                        ) && (
+                          <button
+                            onClick={() => handleDeleteChat(chat.id)}
+                            className="shrink-0 rounded p-0.5 text-[var(--color-text-muted)] opacity-0 transition-all hover:text-[var(--color-error)] group-hover:opacity-100"
+                            title="Delete chat"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
                         )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative min-h-0 min-w-0 flex-1">
+          {/* Messages */}
+          <div
+            ref={messagesViewportRef}
+            onScroll={updateScrollState}
+            className={`relative z-0 h-full min-h-0 flex-1 overflow-y-auto px-4 pt-4 ${messagesBottomPaddingClass}`}
+          >
+            <div className="flex w-full flex-col gap-3">
+              {renderItems.map((item) =>
+                item.kind === "single" ? (
+                  <MessageItem
+                    key={`m-${item.index}`}
+                    message={item.message}
+                    index={item.index}
+                    isBusy={isBusy}
+                    agentLabel={agentLabel}
+                    onToggleThinkingCollapse={toggleThinkingCollapse}
+                    onPermissionResponse={handlePermissionResponse}
+                    onFileClick={onNavigateToFile}
+                    onImageClick={setLightboxUrl}
+                  />
+                ) : (
+                  <ToolSectionView
+                    key={`ts-${item.sectionId}`}
+                    sectionId={item.sectionId}
+                    tools={item.tools}
+                    expanded={expandedSections.has(item.sectionId)}
+                    forceExpanded={false}
+                    onToggleSection={toggleSection}
+                    onFileClick={onNavigateToFile}
+                  />
+                ),
+              )}
+              {isBusy &&
+                messages[messages.length - 1]?.type !== "assistant" &&
+                messages[messages.length - 1]?.type !== "terminal_output" && (
+                  <div className="flex items-center gap-2 py-1 text-sm text-[var(--color-text-muted)]">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Thinking...</span>
+                  </div>
+                )}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+
+          {/* Input */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pb-4 pt-2">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-bg)_96%,transparent),transparent)]" />
+            <div className="pointer-events-auto relative mx-auto w-full max-w-[920px]">
+              {isRemoteSession && (
+                <div className="absolute inset-x-0 bottom-full z-20 mb-3">
+                  <div className="flex items-center justify-between gap-3 rounded-[22px] border border-[color-mix(in_srgb,var(--color-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-4 py-2.5 shadow-[0_10px_28px_rgba(0,0,0,0.12)] backdrop-blur-md">
+                    <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--color-warning)]">
+                      <Eye className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">
+                        Read-only — controlled by{" "}
+                        <strong>{remoteOwnerName}</strong>
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleTakeControl}
+                      disabled={isTakingControl}
+                      className="h-7 shrink-0 rounded-full px-3 text-xs text-[var(--color-warning)] hover:bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] hover:text-[var(--color-text)]"
+                    >
+                      {isTakingControl ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : null}
+                      Take Control
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <AnimatePresence initial={false}>
+                {composerPanelOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, height: 0 }}
+                    animate={{ opacity: 1, y: 0, height: "auto" }}
+                    exit={{ opacity: 0, y: 8, height: 0 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    className="mb-3 overflow-hidden rounded-[26px] border border-[color-mix(in_srgb,var(--color-border)_62%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_82%,transparent)] shadow-[0_16px_40px_rgba(0,0,0,0.14)] backdrop-blur-md"
+                  >
+                    <div className="max-h-72 overflow-y-auto px-3 py-3">
+                      {activeComposerPanel === "todo" && (
+                        <div className="space-y-1">
+                          {planEntries.map((entry, i) => (
+                            <div
+                              key={i}
+                              className="flex items-center gap-2 py-0.5 text-sm"
+                            >
+                              {entry.status === "completed" ? (
+                                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
+                              ) : entry.status === "in_progress" ? (
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--color-highlight)]" />
+                              ) : (
+                                <Circle className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                              )}
+                              <span
+                                className={
+                                  entry.status === "completed"
+                                    ? "text-[var(--color-text-muted)] line-through"
+                                    : "text-[var(--color-text)]"
+                                }
+                              >
+                                {entry.content}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {activeComposerPanel === "plan" && (
+                        <div className="space-y-2">
+                          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                            {planFilePath.split("/").pop()}
+                          </div>
+                          <MarkdownRenderer
+                            content={planFileContent}
+                            onFileClick={onNavigateToFile}
+                          />
+                        </div>
+                      )}
+
+                      {activeComposerPanel === "pending" && (
+                        <div className="space-y-1">
+                          {pendingMessages.map((msg, i) => (
+                            <div
+                              key={i}
+                              className="flex items-center gap-2 py-1 text-sm"
+                            >
+                              <span className="w-4 shrink-0 text-right text-xs text-[var(--color-text-muted)]">
+                                {i + 1}
+                              </span>
+                              {editingPendingIdx === i ? (
+                                <input
+                                  autoFocus
+                                  value={editingPendingValue}
+                                  onChange={(e) =>
+                                    setEditingPendingValue(e.target.value)
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.nativeEvent.isComposing ||
+                                      e.keyCode === 229
+                                    )
+                                      return;
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      handleSavePendingEdit();
+                                    }
+                                    if (e.key === "Escape")
+                                      handleCancelPendingEdit();
+                                  }}
+                                  onBlur={handleSavePendingEdit}
+                                  className="flex-1 min-w-0 rounded border border-[var(--color-highlight)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-sm text-[var(--color-text)] outline-none"
+                                />
+                              ) : (
+                                <>
+                                  <span className="flex-1 min-w-0 truncate text-[var(--color-text)]">
+                                    {msg}
+                                  </span>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {i === 0 && (
+                                      <button
+                                        onClick={() => handleSendNow()}
+                                        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--color-highlight)] transition-colors hover:bg-[var(--color-bg-tertiary)]"
+                                        title="Send Now"
+                                      >
+                                        <Send className="h-3 w-3" />
+                                        <span>Now</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => handleEditPending(i)}
+                                      className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)]"
+                                      title="Edit"
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeletePending(i)}
+                                      className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-error)]"
+                                      title="Delete"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {activeComposerPanel === "permission" &&
+                        activePermissionMessage && (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--color-warning)]" />
+                              <span className="text-sm font-medium text-[var(--color-text)]">
+                                {activePermissionMessage.description}
+                              </span>
+                            </div>
+                            <div className="space-y-2">
+                              {activePermissionMessage.options.map((opt) => (
+                                <button
+                                  key={opt.option_id}
+                                  onClick={() =>
+                                    handlePermissionResponse(opt.option_id)
+                                  }
+                                  className="flex w-full items-center justify-between rounded-xl border border-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_7%,transparent)] px-3 py-2.5 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)]"
+                                >
+                                  <span className="text-sm font-medium text-[var(--color-text)]">
+                                    {opt.name}
+                                  </span>
+                                  <ChevronRight className="h-4 w-4 text-[var(--color-warning)]" />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {showScrollToBottom && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.18, ease: "easeOut" }}
+                    className="absolute inset-x-0 top-0 z-20 -translate-y-[118%]"
+                  >
+                    <button
+                      onClick={() => {
+                        shouldStickToBottomRef.current = true;
+                        scrollMessagesToBottom("smooth");
+                        setShowScrollToBottom(false);
+                      }}
+                      className="group relative mx-auto flex items-center gap-2 rounded-full px-3 py-2 text-[15px] font-medium tracking-[0.01em] text-[color-mix(in_srgb,var(--color-highlight)_80%,white_4%)] transition-all duration-200 hover:text-[color-mix(in_srgb,var(--color-highlight)_96%,white_8%)] select-none"
+                    >
+                      <span className="pointer-events-none absolute inset-0 rounded-full bg-[color-mix(in_srgb,var(--color-highlight)_8%,transparent)] opacity-0 blur-md transition-all duration-200 group-hover:opacity-100" />
+                      <span className="relative flex items-center gap-2">
+                        <ArrowDown className="h-4 w-4" />
+                        <span>Scroll to bottom</span>
+                      </span>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Slash command autocomplete popover */}
+              <AnimatePresence>
+                {showSlashMenu && filteredSlashCommands.length > 0 && (
+                  <motion.div
+                    ref={slashMenuRef}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.12 }}
+                    className="absolute bottom-full left-3 right-3 mb-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg z-50"
+                  >
+                    {filteredSlashCommands.map((cmd, i) => (
+                      <button
+                        key={cmd.name}
+                        ref={(el) => {
+                          slashItemRefs.current[i] = el;
+                        }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => insertCommandAtCursor(cmd.name)}
+                        onMouseEnter={() => setSlashSelectedIdx(i)}
+                        className={`flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors ${
+                          i === slashSelectedIdx
+                            ? "bg-[var(--color-bg-tertiary)]"
+                            : "hover:bg-[var(--color-bg-secondary)]"
+                        }`}
+                      >
+                        <Slash className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-highlight)]" />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-[var(--color-text)]">
+                            /{cmd.name}
+                          </div>
+                          <div className="truncate text-xs text-[var(--color-text-muted)]">
+                            {cmd.description}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* File @ mention autocomplete popover */}
+              <FileMentionDropdown
+                items={filteredFiles}
+                selectedIdx={fileSelectedIdx}
+                onSelect={insertFileAtCursor}
+                onMouseEnter={setFileSelectedIdx}
+                visible={showFileMenu}
+                menuRef={fileMenuRef}
+              />
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFileSelect}
+              />
+
+              <div
+                className={`relative min-w-0 rounded-[30px] border bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,transparent)] px-3 pt-2 pb-3 shadow-[0_22px_60px_rgba(0,0,0,0.18)] backdrop-blur-md transition-all ${
+                  isBusy
+                    ? "chatbox-busy-border border-transparent focus-within:border-transparent"
+                    : isTerminalMode
+                      ? "focus-within:border-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-border)_62%,transparent)]"
+                      : "focus-within:border-[color-mix(in_srgb,var(--color-highlight)_82%,white_8%)] border-[color-mix(in_srgb,var(--color-border)_62%,transparent)]"
+                } select-none`}
+                style={{ transform: "translateY(-6px)" }}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2 pr-10 select-none">
+                  <div className="flex min-w-0 items-center gap-2 select-none">
+                    <div className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-bg)] px-2.5 py-1 text-[11px] text-[var(--color-text)] min-w-0 max-w-full">
+                      {AgentIcon ? (
+                        <AgentIcon
+                          size={12}
+                          className="shrink-0 text-[var(--color-highlight)]"
+                        />
+                      ) : (
+                        <Bot className="w-3 h-3 shrink-0 text-[var(--color-highlight)]" />
+                      )}
+                      <span className="text-[var(--color-text-muted)] shrink-0">
+                        Agent
+                      </span>
+                      <span className="truncate font-medium">{agentLabel}</span>
+                    </div>
+                    {isTerminalMode && (
+                      <div className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]">
+                        <Terminal className="w-3 h-3" />
+                        Shell
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 select-none">
+                    {hasTodoPanel && (
+                      <button
+                        onClick={() => {
+                          const next = !showPlan;
+                          setShowPlan(next);
+                          if (next) {
+                            setShowPermissionPanel(false);
+                            setShowPlanFile(false);
+                            setShowPendingQueue(false);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                          activeComposerPanel === "todo"
+                            ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                            : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        <ListTodo className="h-3 w-3" />
+                        <span>Todo</span>
+                        <span className="opacity-70">
+                          {
+                            planEntries.filter((e) => e.status === "completed")
+                              .length
+                          }
+                          /{planEntries.length}
+                        </span>
+                      </button>
+                    )}
+                    {hasPlanPanel && (
+                      <button
+                        onClick={() => {
+                          const next = !showPlanFile;
+                          setShowPlanFile(next);
+                          if (next) {
+                            setShowPermissionPanel(false);
+                            setShowPlan(false);
+                            setShowPendingQueue(false);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                          activeComposerPanel === "plan"
+                            ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                            : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        <BookOpen className="h-3 w-3" />
+                        <span>Plan</span>
+                      </button>
+                    )}
+                    {hasPendingPanel && (
+                      <button
+                        onClick={() => {
+                          const next = !showPendingQueue;
+                          setShowPendingQueue(next);
+                          if (next) {
+                            setShowPermissionPanel(false);
+                            setShowPlan(false);
+                            setShowPlanFile(false);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                          activeComposerPanel === "pending"
+                            ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                            : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        <ListPlus className="h-3 w-3" />
+                        <span>Pending</span>
+                      </button>
+                    )}
+                    {activePermissionMessage && (
+                      <button
+                        onClick={() => {
+                          const next = !showPermissionPanel;
+                          setShowPermissionPanel(next);
+                          if (next) {
+                            setShowPlan(false);
+                            setShowPlanFile(false);
+                            setShowPendingQueue(false);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                          activeComposerPanel === "permission"
+                            ? "bg-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] text-[var(--color-warning)]"
+                            : "border border-[color-mix(in_srgb,var(--color-warning)_24%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_6%,transparent)] text-[color-mix(in_srgb,var(--color-warning)_96%,white_8%)] hover:bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)]"
+                        }`}
+                      >
+                        <ShieldCheck className="h-3 w-3" />
+                        <span>Permission Request</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {attachments.length > 0 && (
+                  <div className="mb-2 flex gap-2 flex-wrap select-none">
+                    {attachments.map((att, i) => (
+                      <div
+                        key={i}
+                        className="group relative flex items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 pr-7 max-w-full"
+                      >
+                        {att.type === "image" && att.previewUrl ? (
+                          <img
+                            src={att.previewUrl}
+                            className="w-8 h-8 object-cover rounded-md border border-[var(--color-border)] shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                            alt={att.name}
+                            onClick={() => setLightboxUrl(att.previewUrl!)}
+                          />
+                        ) : att.type === "audio" ? (
+                          <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
+                            <Mic className="w-4 h-4 text-[var(--color-text-muted)]" />
+                          </div>
+                        ) : att.type === "resource" ? (
+                          <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
+                            <Paperclip className="w-4 h-4 text-[var(--color-text-muted)]" />
+                          </div>
+                        ) : null}
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-[var(--color-text)] truncate max-w-40">
+                            {att.name}
+                          </div>
+                          <div className="text-[10px] text-[var(--color-text-muted)] uppercase">
+                            {att.type}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeAttachment(i)}
+                          className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-[var(--color-error)] text-white flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          &times;
+                        </button>
                       </div>
                     ))}
                   </div>
                 )}
 
-                {activeComposerPanel === "permission" && activePermissionMessage && (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--color-warning)]" />
-                      <span className="text-sm font-medium text-[var(--color-text)]">{activePermissionMessage.description}</span>
-                    </div>
-                    <div className="space-y-2">
-                      {activePermissionMessage.options.map((opt) => (
-                        <button
-                          key={opt.option_id}
-                          onClick={() => handlePermissionResponse(opt.option_id)}
-                          className="flex w-full items-center justify-between rounded-xl border border-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_7%,transparent)] px-3 py-2.5 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)]"
-                        >
-                          <span className="text-sm font-medium text-[var(--color-text)]">{opt.name}</span>
-                          <ChevronRight className="h-4 w-4 text-[var(--color-warning)]" />
-                        </button>
-                      ))}
-                    </div>
+                {!hasContent && !isInputFocused && (
+                  <div
+                    className={`absolute ${attachments.length > 0 ? "top-[86px]" : "top-[42px]"} left-4 right-16 h-10 flex items-center text-sm text-[var(--color-text-muted)] pointer-events-none select-none`}
+                  >
+                    {activePermissionMessage
+                      ? "Handle permission above to continue"
+                      : !isConnected
+                        ? "Waiting for connection..."
+                        : isTerminalMode
+                          ? "Enter shell command\u2026"
+                          : isBusy
+                            ? "Queue a message\u2026"
+                            : "Ask anything… use @ for mentions, / for commands"}
                   </div>
                 )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
-        <AnimatePresence>
-          {showScrollToBottom && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              className="absolute inset-x-0 top-0 z-20 -translate-y-[118%]"
-            >
-              <button
-                onClick={() => {
-                  shouldStickToBottomRef.current = true;
-                  scrollMessagesToBottom("smooth");
-                  setShowScrollToBottom(false);
-                }}
-              className="group relative mx-auto flex items-center gap-2 rounded-full px-3 py-2 text-[15px] font-medium tracking-[0.01em] text-[color-mix(in_srgb,var(--color-highlight)_80%,white_4%)] transition-all duration-200 hover:text-[color-mix(in_srgb,var(--color-highlight)_96%,white_8%)] select-none"
-              >
-                <span className="pointer-events-none absolute inset-0 rounded-full bg-[color-mix(in_srgb,var(--color-highlight)_8%,transparent)] opacity-0 blur-md transition-all duration-200 group-hover:opacity-100" />
-                <span className="relative flex items-center gap-2">
-                  <ArrowDown className="h-4 w-4" />
-                  <span>Scroll to bottom</span>
-                </span>
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        {/* Slash command autocomplete popover */}
-        <AnimatePresence>
-          {showSlashMenu && filteredSlashCommands.length > 0 && (
-            <motion.div
-              ref={slashMenuRef}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              transition={{ duration: 0.12 }}
-              className="absolute bottom-full left-3 right-3 mb-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg z-50"
-            >
-              {filteredSlashCommands.map((cmd, i) => (
                 <button
-                  key={cmd.name}
-                  ref={(el) => { slashItemRefs.current[i] = el; }}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => insertCommandAtCursor(cmd.name)}
-                  onMouseEnter={() => setSlashSelectedIdx(i)}
-                  className={`w-full text-left px-3 py-2 flex items-start gap-2.5 transition-colors ${
-                    i === slashSelectedIdx ? "bg-[var(--color-bg-tertiary)]" : "hover:bg-[var(--color-bg-secondary)]"
-                  }`}
+                  onClick={() => {
+                    setIsInputExpanded((v) => {
+                      if (!v) {
+                        setShowPlan(false);
+                        setShowPlanFile(false);
+                      }
+                      return !v;
+                    });
+                    setTimeout(() => editableRef.current?.focus(), 0);
+                  }}
+                  className="absolute right-3 top-2.5 p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors z-10"
+                  title={
+                    isInputExpanded ? "Collapse input (Esc)" : "Expand input"
+                  }
                 >
-                  <Slash className="w-3.5 h-3.5 mt-0.5 text-[var(--color-highlight)] shrink-0" />
-                  <div className="min-w-0">
-                    <div className="text-sm text-[var(--color-text)] font-medium">/{cmd.name}</div>
-                    <div className="text-xs text-[var(--color-text-muted)] truncate">{cmd.description}</div>
-                  </div>
+                  {isInputExpanded ? (
+                    <Minimize2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  )}
                 </button>
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
 
-        {/* File @ mention autocomplete popover */}
-        <FileMentionDropdown
-          items={filteredFiles}
-          selectedIdx={fileSelectedIdx}
-          onSelect={insertFileAtCursor}
-          onMouseEnter={setFileSelectedIdx}
-          visible={showFileMenu}
-          menuRef={fileMenuRef}
-        />
-
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileSelect}
-        />
-
-        <div
-          className={`relative min-w-0 rounded-[30px] border bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,transparent)] px-3 pt-2 pb-3 shadow-[0_22px_60px_rgba(0,0,0,0.18)] backdrop-blur-md transition-all ${
-            isBusy
-              ? "chatbox-busy-border border-transparent focus-within:border-transparent"
-              : isTerminalMode
-                ? "focus-within:border-[var(--color-warning)]"
-                + " border-[color-mix(in_srgb,var(--color-border)_62%,transparent)]"
-              : "focus-within:border-[color-mix(in_srgb,var(--color-highlight)_82%,white_8%)] border-[color-mix(in_srgb,var(--color-border)_62%,transparent)]"
-          } select-none`}
-          style={{ transform: "translateY(-6px)" }}
-        >
-          <div className="mb-2 flex items-center justify-between gap-2 pr-10 select-none">
-            <div className="flex min-w-0 items-center gap-2 select-none">
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-bg)] px-2.5 py-1 text-[11px] text-[var(--color-text)] min-w-0 max-w-full">
-                {AgentIcon ? <AgentIcon size={12} className="shrink-0 text-[var(--color-highlight)]" /> : <Bot className="w-3 h-3 shrink-0 text-[var(--color-highlight)]" />}
-                <span className="text-[var(--color-text-muted)] shrink-0">Agent</span>
-                <span className="truncate font-medium">{agentLabel}</span>
-              </div>
-              {isTerminalMode && (
-                <div className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]">
-                  <Terminal className="w-3 h-3" />
-                  Shell
+                <div className={`flex ${isTerminalMode ? "items-start" : ""}`}>
+                  {isTerminalMode && (
+                    <span className="shrink-0 pl-4 pt-2 text-sm leading-7 font-mono text-[var(--color-text-muted)] select-none">
+                      $&nbsp;
+                    </span>
+                  )}
+                  <div
+                    ref={editableRef}
+                    contentEditable={
+                      isConnected &&
+                      !isRemoteSession &&
+                      !activePermissionMessage
+                    }
+                    suppressContentEditableWarning
+                    onInput={handleInput}
+                    onKeyDown={handleKeyDown}
+                    onMouseDown={handleEditableMouseDown}
+                    onFocus={() => setIsInputFocused(true)}
+                    onBlur={() => setIsInputFocused(false)}
+                    onPaste={handlePaste}
+                    onCompositionStart={() => {
+                      composingRef.current = true;
+                    }}
+                    onCompositionEnd={() => {
+                      composingRef.current = false;
+                      handleInput();
+                    }}
+                    className={`overflow-y-auto py-2 text-sm leading-7 text-[var(--color-text)] focus:outline-none flex-1 ${
+                      isTerminalMode ? "pr-4" : "px-4"
+                    } ${
+                      isInputExpanded
+                        ? "min-h-[32vh] max-h-[56vh]"
+                        : "min-h-[56px] max-h-32"
+                    } ${!isConnected || isRemoteSession || activePermissionMessage ? "opacity-50 cursor-not-allowed" : ""} ${
+                      isTerminalMode ? "font-mono" : ""
+                    }`}
+                    style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
+                  />
                 </div>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0 select-none">
-              {hasTodoPanel && (
-                <button
-                  onClick={() => {
-                    const next = !showPlan;
-                    setShowPlan(next);
-                    if (next) { setShowPermissionPanel(false); setShowPlanFile(false); setShowPendingQueue(false); }
-                  }}
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
-                    activeComposerPanel === "todo"
-                      ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
-                      : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                  }`}
-                >
-                  <ListTodo className="h-3 w-3" />
-                  <span>Todo</span>
-                  <span className="opacity-70">{planEntries.filter((e) => e.status === "completed").length}/{planEntries.length}</span>
-                </button>
-              )}
-              {hasPlanPanel && (
-                <button
-                  onClick={() => {
-                    const next = !showPlanFile;
-                    setShowPlanFile(next);
-                    if (next) { setShowPermissionPanel(false); setShowPlan(false); setShowPendingQueue(false); }
-                  }}
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
-                    activeComposerPanel === "plan"
-                      ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
-                      : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                  }`}
-                >
-                  <BookOpen className="h-3 w-3" />
-                  <span>Plan</span>
-                </button>
-              )}
-              {hasPendingPanel && (
-                <button
-                  onClick={() => {
-                    const next = !showPendingQueue;
-                    setShowPendingQueue(next);
-                    if (next) { setShowPermissionPanel(false); setShowPlan(false); setShowPlanFile(false); }
-                  }}
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
-                    activeComposerPanel === "pending"
-                      ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
-                      : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                  }`}
-                >
-                  <ListPlus className="h-3 w-3" />
-                  <span>Pending</span>
-                </button>
-              )}
-              {activePermissionMessage && (
-                <button
-                  onClick={() => {
-                    const next = !showPermissionPanel;
-                    setShowPermissionPanel(next);
-                    if (next) { setShowPlan(false); setShowPlanFile(false); setShowPendingQueue(false); }
-                  }}
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
-                    activeComposerPanel === "permission"
-                      ? "bg-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] text-[var(--color-warning)]"
-                      : "border border-[color-mix(in_srgb,var(--color-warning)_24%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_6%,transparent)] text-[color-mix(in_srgb,var(--color-warning)_96%,white_8%)] hover:bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)]"
-                  }`}
-                >
-                  <ShieldCheck className="h-3 w-3" />
-                  <span>Permission Request</span>
-                </button>
-              )}
-            </div>
-          </div>
 
-          {attachments.length > 0 && (
-            <div className="mb-2 flex gap-2 flex-wrap select-none">
-              {attachments.map((att, i) => (
-                <div key={i} className="group relative flex items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 pr-7 max-w-full">
-                  {att.type === "image" && att.previewUrl ? (
-                    <img src={att.previewUrl} className="w-8 h-8 object-cover rounded-md border border-[var(--color-border)] shrink-0 cursor-pointer hover:opacity-80 transition-opacity" alt={att.name}
-                      onClick={() => setLightboxUrl(att.previewUrl!)} />
-                  ) : att.type === "audio" ? (
-                    <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
-                      <Mic className="w-4 h-4 text-[var(--color-text-muted)]" />
-                    </div>
-                  ) : att.type === "resource" ? (
-                    <div className="w-8 h-8 rounded-md border border-[var(--color-border)] flex items-center justify-center bg-[var(--color-bg-tertiary)] shrink-0">
-                      <Paperclip className="w-4 h-4 text-[var(--color-text-muted)]" />
-                    </div>
-                  ) : null}
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-[var(--color-text)] truncate max-w-40">{att.name}</div>
-                    <div className="text-[10px] text-[var(--color-text-muted)] uppercase">{att.type}</div>
+                <div className="mt-2 flex items-center justify-between gap-2 select-none">
+                  <div className="flex items-center gap-2 min-w-0 select-none">
+                    {!activePermissionMessage &&
+                      (promptCaps.image || promptCaps.audio) && (
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="h-9 w-9 flex items-center justify-center rounded-xl bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
+                          title="Attach file"
+                        >
+                          <Paperclip className="w-4 h-4" />
+                        </button>
+                      )}
+                    <span className="truncate text-[10px] text-[var(--color-text-muted)]">
+                      {activePermissionMessage
+                        ? "Permission required"
+                        : !isConnected
+                          ? "Offline"
+                          : isBusy
+                            ? hasContent
+                              ? "Ready to queue"
+                              : pendingMessages.length > 0
+                                ? `${pendingMessages.length} queued`
+                                : "Agent running"
+                            : isInputExpanded
+                              ? "\u2318\u21A9 send \u00b7 \u21A9 newline"
+                              : "Enter send"}
+                    </span>
                   </div>
-                  <button onClick={() => removeAttachment(i)}
-                    className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-[var(--color-error)] text-white flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
-                    &times;
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0 select-none">
+                    {modelOptions.length > 0 && (
+                      <DropdownSelect
+                        ref={modelMenuRef}
+                        label="Model"
+                        options={modelOptions}
+                        value={selectedModel}
+                        open={showModelMenu}
+                        onToggle={() => {
+                          setShowModelMenu(!showModelMenu);
+                          setShowPermMenu(false);
+                        }}
+                        onSelect={(v) => {
+                          setSelectedModel(v);
+                          setShowModelMenu(false);
+                          if (wsRef.current?.readyState === WebSocket.OPEN) {
+                            wsRef.current.send(
+                              JSON.stringify({
+                                type: "set_model",
+                                model_id: v,
+                              }),
+                            );
+                          }
+                        }}
+                      />
+                    )}
+                    {modeOptions.length > 0 && (
+                      <DropdownSelect
+                        ref={permMenuRef}
+                        label="Mode"
+                        options={modeOptions}
+                        value={permissionLevel}
+                        open={showPermMenu}
+                        onToggle={() => {
+                          setShowPermMenu(!showPermMenu);
+                          setShowModelMenu(false);
+                        }}
+                        onSelect={(v) => {
+                          setPermissionLevel(v);
+                          setShowPermMenu(false);
+                          if (wsRef.current?.readyState === WebSocket.OPEN) {
+                            wsRef.current.send(
+                              JSON.stringify({ type: "set_mode", mode_id: v }),
+                            );
+                          }
+                        }}
+                      />
+                    )}
+                    {activePermissionMessage && isBusy ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="h-9 w-9 !p-0 rounded-xl"
+                        onClick={handleStopAgent}
+                      >
+                        <Square className="w-3.5 h-3.5" />
+                      </Button>
+                    ) : !activePermissionMessage && !isBusy && hasContent ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="h-9 w-9 !p-0 rounded-xl shadow-sm"
+                        onClick={handleSend}
+                        disabled={!isConnected}
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                      </Button>
+                    ) : !activePermissionMessage && isBusy && hasContent ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="h-9 w-9 !p-0 rounded-xl shadow-sm"
+                        onClick={handleSend}
+                      >
+                        <ListPlus className="w-3.5 h-3.5" />
+                      </Button>
+                    ) : !activePermissionMessage && isBusy && !hasContent ? (
+                      pendingMessages.length > 0 ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-9 w-9 !p-0 rounded-xl"
+                          onClick={handleSendNow}
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-9 w-9 !p-0 rounded-xl"
+                          onClick={handleStopAgent}
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                        </Button>
+                      )
+                    ) : (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="h-9 w-9 !p-0 rounded-xl shadow-sm"
+                        disabled
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
-
-          {!hasContent && !isInputFocused && (
-            <div className={`absolute ${attachments.length > 0 ? "top-[86px]" : "top-[42px]"} left-4 right-16 h-10 flex items-center text-sm text-[var(--color-text-muted)] pointer-events-none select-none`}>
-              {activePermissionMessage
-                ? "Handle permission above to continue"
-                : !isConnected
-                ? "Waiting for connection..."
-                : isTerminalMode
-                  ? "Enter shell command\u2026"
-                  : isBusy
-                    ? "Queue a message\u2026"
-                    : "Ask anything… use @ for mentions, / for commands"}
-            </div>
-          )}
-
-          <button
-            onClick={() => {
-              setIsInputExpanded(v => {
-                if (!v) { setShowPlan(false); setShowPlanFile(false); }
-                return !v;
-              });
-              setTimeout(() => editableRef.current?.focus(), 0);
-            }}
-            className="absolute right-3 top-2.5 p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors z-10"
-            title={isInputExpanded ? "Collapse input (Esc)" : "Expand input"}
-          >
-            {isInputExpanded
-              ? <Minimize2 className="w-3.5 h-3.5" />
-              : <Maximize2 className="w-3.5 h-3.5" />}
-          </button>
-
-          <div className={`flex ${isTerminalMode ? "items-start" : ""}`}>
-            {isTerminalMode && (
-              <span className="shrink-0 pl-4 pt-2 text-sm leading-7 font-mono text-[var(--color-text-muted)] select-none">$&nbsp;</span>
-            )}
-            <div
-              ref={editableRef}
-              contentEditable={isConnected && !isRemoteSession && !activePermissionMessage}
-              suppressContentEditableWarning
-              onInput={handleInput}
-              onKeyDown={handleKeyDown}
-              onMouseDown={handleEditableMouseDown}
-              onFocus={() => setIsInputFocused(true)}
-              onBlur={() => setIsInputFocused(false)}
-              onPaste={handlePaste}
-              onCompositionStart={() => { composingRef.current = true; }}
-              onCompositionEnd={() => { composingRef.current = false; handleInput(); }}
-              className={`overflow-y-auto py-2 text-sm leading-7 text-[var(--color-text)] focus:outline-none flex-1 ${
-                isTerminalMode ? "pr-4" : "px-4"
-              } ${
-                isInputExpanded ? "min-h-[32vh] max-h-[56vh]" : "min-h-[56px] max-h-32"
-              } ${!isConnected || isRemoteSession || activePermissionMessage ? "opacity-50 cursor-not-allowed" : ""} ${
-                isTerminalMode ? "font-mono" : ""
-              }`}
-              style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
-            />
-          </div>
-
-          <div className="mt-2 flex items-center justify-between gap-2 select-none">
-            <div className="flex items-center gap-2 min-w-0 select-none">
-              {!activePermissionMessage && (promptCaps.image || promptCaps.audio) && (
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-9 w-9 flex items-center justify-center rounded-xl bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
-                  title="Attach file"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </button>
-              )}
-              <span className="truncate text-[10px] text-[var(--color-text-muted)]">
-                {activePermissionMessage
-                  ? "Permission required"
-                  : !isConnected
-                  ? "Offline"
-                  : isBusy
-                    ? (hasContent ? "Ready to queue" : (pendingMessages.length > 0 ? `${pendingMessages.length} queued` : "Agent running"))
-                    : isInputExpanded
-                      ? "\u2318\u21A9 send \u00b7 \u21A9 newline"
-                      : "Enter send"}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 select-none">
-              {modelOptions.length > 0 && (
-                <DropdownSelect ref={modelMenuRef} label="Model" options={modelOptions} value={selectedModel}
-                  open={showModelMenu} onToggle={() => { setShowModelMenu(!showModelMenu); setShowPermMenu(false); }}
-                  onSelect={(v) => { setSelectedModel(v); setShowModelMenu(false); if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: "set_model", model_id: v })); } }} />
-              )}
-              {modeOptions.length > 0 && (
-                <DropdownSelect ref={permMenuRef} label="Mode" options={modeOptions} value={permissionLevel}
-                  open={showPermMenu} onToggle={() => { setShowPermMenu(!showPermMenu); setShowModelMenu(false); }}
-                  onSelect={(v) => { setPermissionLevel(v); setShowPermMenu(false); if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: "set_mode", mode_id: v })); } }} />
-              )}
-              {activePermissionMessage && isBusy ? (
-                <Button variant="secondary" size="sm" className="h-9 w-9 !p-0 rounded-xl" onClick={handleStopAgent}>
-                  <Square className="w-3.5 h-3.5" />
-                </Button>
-              ) : !activePermissionMessage && !isBusy && hasContent ? (
-                <Button variant="primary" size="sm" className="h-9 w-9 !p-0 rounded-xl shadow-sm" onClick={handleSend} disabled={!isConnected}>
-                  <Send className="w-3.5 h-3.5" />
-                </Button>
-              ) : !activePermissionMessage && isBusy && hasContent ? (
-                <Button variant="primary" size="sm" className="h-9 w-9 !p-0 rounded-xl shadow-sm" onClick={handleSend}>
-                  <ListPlus className="w-3.5 h-3.5" />
-                </Button>
-              ) : !activePermissionMessage && isBusy && !hasContent ? (
-                pendingMessages.length > 0 ? (
-                  <Button variant="secondary" size="sm" className="h-9 w-9 !p-0 rounded-xl" onClick={handleSendNow}>
-                    <Send className="w-3.5 h-3.5" />
-                  </Button>
-                ) : (
-                  <Button variant="secondary" size="sm" className="h-9 w-9 !p-0 rounded-xl" onClick={handleStopAgent}>
-                    <Square className="w-3.5 h-3.5" />
-                  </Button>
-                )
-              ) : (
-                <Button variant="primary" size="sm" className="h-9 w-9 !p-0 rounded-xl shadow-sm" disabled>
-                  <Send className="w-3.5 h-3.5" />
-                </Button>
-              )}
+              </div>
             </div>
           </div>
-        </div>
         </div>
       </div>
       {/* Image Lightbox */}
@@ -2725,7 +3818,10 @@ export function TaskChat({
             onClick={() => setLightboxUrl(null)}
           >
             <button
-              onClick={(e) => { e.stopPropagation(); setLightboxUrl(null); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightboxUrl(null);
+              }}
               className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/50 text-white/80 hover:text-white hover:bg-black/70 flex items-center justify-center transition-colors"
             >
               <X className="w-5 h-5" />
@@ -2743,6 +3839,74 @@ export function TaskChat({
           </motion.div>
         )}
       </AnimatePresence>
+      {showAgentPicker &&
+        agentPickerAnchor &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={agentPickerMenuRef}
+            style={{
+              position: "fixed",
+              top: agentPickerAnchor.top,
+              left: agentPickerAnchor.left,
+              zIndex: 1000,
+            }}
+            className="min-w-48 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1"
+          >
+            {!acpAvailabilityLoaded && (
+              <div className="flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-text-muted)]">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking...
+              </div>
+            )}
+            {acpAvailabilityLoaded &&
+              acpAgentOptions
+                .filter((opt) => !opt.disabled)
+                .map((opt) => {
+                  const Icon = opt.icon;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => handleNewChatWithAgent(opt.value)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+                    >
+                      <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                        {Icon ? (
+                          <Icon size={14} />
+                        ) : (
+                          <Bot className="w-3.5 h-3.5" />
+                        )}
+                      </div>
+                      <span className="truncate">{opt.label}</span>
+                    </button>
+                  );
+                })}
+            {acpAvailabilityLoaded && customAgents.length > 0 && (
+              <>
+                <div className="my-1 border-t border-[var(--color-border)]" />
+                <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Custom
+                </div>
+                {customAgents.map((agent) => (
+                  <button
+                    key={agent.id}
+                    onClick={() => handleNewChatWithAgent(agent.id)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+                  >
+                    <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                      {agent.type === "remote" ? (
+                        <Globe className="w-3.5 h-3.5 text-[var(--color-info)]" />
+                      ) : (
+                        <Terminal className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                      )}
+                    </div>
+                    <span className="truncate">{agent.name}</span>
+                  </button>
+                ))}
+              </>
+            )}
+          </div>,
+          document.body,
+        )}
     </motion.div>
   );
 }
@@ -2750,7 +3914,15 @@ export function TaskChat({
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 /** Reusable dropdown selector for bottom toolbar */
-const DropdownSelect = ({ ref, label, options, value, open, onToggle, onSelect }: {
+const DropdownSelect = ({
+  ref,
+  label,
+  options,
+  value,
+  open,
+  onToggle,
+  onSelect,
+}: {
   ref: React.RefObject<HTMLDivElement | null>;
   label: string;
   options: { label: string; value: string }[];
@@ -2760,20 +3932,32 @@ const DropdownSelect = ({ ref, label, options, value, open, onToggle, onSelect }
   onSelect: (value: string) => void;
 }) => (
   <div className="relative" ref={ref}>
-    <button onClick={onToggle}
-      className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--color-bg)] px-2.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
+    <button
+      onClick={onToggle}
+      className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--color-bg)] px-2.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+    >
       <span className="opacity-70">{label}</span>
-      <span className="max-w-40 truncate text-[var(--color-text)]">{options.find((o) => o.value === value)?.label ?? "Default"}</span>
+      <span className="max-w-40 truncate text-[var(--color-text)]">
+        {options.find((o) => o.value === value)?.label ?? "Default"}
+      </span>
       <ChevronDown className="w-3 h-3 opacity-70" />
     </button>
     {open && (
       <div className="absolute bottom-full right-0 mb-1 min-w-44 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 z-50">
         {options.map((opt) => (
-          <button key={opt.value} onClick={() => onSelect(opt.value)}
+          <button
+            key={opt.value}
+            onClick={() => onSelect(opt.value)}
             className={`w-full text-left px-3 py-1.5 text-sm flex items-center justify-between hover:bg-[var(--color-bg-tertiary)] transition-colors ${
-              value === opt.value ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"}`}>
+              value === opt.value
+                ? "text-[var(--color-text)]"
+                : "text-[var(--color-text-muted)]"
+            }`}
+          >
             <span>{opt.label}</span>
-            {value === opt.value && <span className="text-[var(--color-highlight)]">✓</span>}
+            {value === opt.value && (
+              <span className="text-[var(--color-highlight)]">✓</span>
+            )}
           </button>
         ))}
       </div>
@@ -2782,8 +3966,20 @@ const DropdownSelect = ({ ref, label, options, value, open, onToggle, onSelect }
 );
 
 /** Individual message rendering */
-function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingCollapse, onPermissionResponse, onFileClick, onImageClick }: {
-  message: ChatMessage; index: number; isBusy: boolean; agentLabel?: string;
+function MessageItem({
+  message,
+  index,
+  isBusy,
+  agentLabel,
+  onToggleThinkingCollapse,
+  onPermissionResponse,
+  onFileClick,
+  onImageClick,
+}: {
+  message: ChatMessage;
+  index: number;
+  isBusy: boolean;
+  agentLabel?: string;
   onToggleThinkingCollapse: (index: number) => void;
   onPermissionResponse?: (optionId: string) => void;
   onFileClick?: (filePath: string, line?: number) => void;
@@ -2801,8 +3997,12 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
             <div className="max-w-[85%]">
               <div className="rounded-xl px-3.5 py-2 bg-[var(--color-bg-tertiary)] border border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
                 <code className="text-[13px] font-mono whitespace-pre-wrap">
-                  <span className="text-[var(--color-text-muted)] select-none">$ </span>
-                  <span className="text-[var(--color-accent)] font-semibold">{cmd}</span>
+                  <span className="text-[var(--color-text-muted)] select-none">
+                    ${" "}
+                  </span>
+                  <span className="text-[var(--color-accent)] font-semibold">
+                    {cmd}
+                  </span>
                   <span className="text-[var(--color-text)]">{args}</span>
                 </code>
               </div>
@@ -2820,12 +4020,22 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
               </div>
             )}
             <div className="rounded-2xl px-3.5 py-2.5 bg-[color-mix(in_srgb,var(--color-bg-tertiary)_78%,transparent)] border border-[color-mix(in_srgb,var(--color-border)_72%,transparent)] text-sm text-[var(--color-text)] shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-              {message.attachments?.map((att, i) => (
+              {message.attachments?.map((att, i) =>
                 att.type === "image" && att.previewUrl ? (
-                  <img key={i} src={att.previewUrl} className="max-w-full max-h-48 rounded mb-2 cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() => onImageClick?.(att.previewUrl!)} alt="" />
+                  <img
+                    key={i}
+                    src={att.previewUrl}
+                    className="max-w-full max-h-48 rounded mb-2 cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => onImageClick?.(att.previewUrl!)}
+                    alt=""
+                  />
                 ) : att.type === "audio" ? (
-                  <audio key={i} controls src={`data:${att.mimeType};base64,${att.data}`} className="max-w-full mb-2" />
+                  <audio
+                    key={i}
+                    controls
+                    src={`data:${att.mimeType};base64,${att.data}`}
+                    className="max-w-full mb-2"
+                  />
                 ) : att.type === "resource" ? (
                   <button
                     key={i}
@@ -2838,16 +4048,22 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
                       <Paperclip className="h-4 w-4 text-[var(--color-text-muted)]" />
                     </div>
                     <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-[var(--color-text)]">{att.name}</div>
+                      <div className="truncate text-xs font-medium text-[var(--color-text)]">
+                        {att.name}
+                      </div>
                       <div className="text-[10px] uppercase text-[var(--color-text-muted)]">
                         {att.mimeType || "file"}
-                        {typeof att.size === "number" ? ` • ${Math.max(1, Math.round(att.size / 1024))} KB` : ""}
+                        {typeof att.size === "number"
+                          ? ` • ${Math.max(1, Math.round(att.size / 1024))} KB`
+                          : ""}
                       </div>
                     </div>
                   </button>
-                ) : null
-              ))}
-              {message.content && <div className="whitespace-pre-wrap">{message.content}</div>}
+                ) : null,
+              )}
+              {message.content && (
+                <div className="whitespace-pre-wrap">{message.content}</div>
+              )}
             </div>
           </div>
         </div>
@@ -2858,7 +4074,10 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
       return (
         <div className="flex justify-start">
           <div className="max-w-[82%] text-sm text-[var(--color-text)]">
-            <MarkdownRenderer content={message.content} onFileClick={onFileClick} />
+            <MarkdownRenderer
+              content={message.content}
+              onFileClick={onFileClick}
+            />
             {!message.complete && isBusy && (
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-[var(--color-text-muted)] animate-pulse rounded-sm" />
             )}
@@ -2869,11 +4088,19 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
       return (
         <div className="flex justify-start">
           <div className="max-w-[82%] w-full">
-            <button onClick={() => onToggleThinkingCollapse(index)}
-              className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors mb-1">
+            <button
+              onClick={() => onToggleThinkingCollapse(index)}
+              className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors mb-1"
+            >
               <Brain className="w-3 h-3" />
-              {message.collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              <span className="italic">{message.complete ? "Thought" : "Thinking"}</span>
+              {message.collapsed ? (
+                <ChevronRight className="w-3 h-3" />
+              ) : (
+                <ChevronDown className="w-3 h-3" />
+              )}
+              <span className="italic">
+                {message.complete ? "Thought" : "Thinking"}
+              </span>
             </button>
             {!message.collapsed && (
               <div className="ml-5 rounded-lg px-3 py-2 bg-[var(--color-bg-tertiary)] text-xs text-[var(--color-text-muted)] italic whitespace-pre-wrap max-h-40 overflow-y-auto">
@@ -2884,16 +4111,21 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
         </div>
       );
     case "permission":
-      return message.resolved ? <PermissionCard message={message} onRespond={onPermissionResponse} /> : null;
+      return message.resolved ? (
+        <PermissionCard message={message} onRespond={onPermissionResponse} />
+      ) : null;
     case "tool":
       // Tools are rendered via ToolSectionView; skip here
       return null;
     case "system": {
-      const displayContent = message.content === "$$CONNECTED$$"
-        ? `Connected to ${agentLabel || "Agent"}`
-        : message.content;
+      const displayContent =
+        message.content === "$$CONNECTED$$"
+          ? `Connected to ${agentLabel || "Agent"}`
+          : message.content;
       return (
-        <div className="text-center text-xs text-[var(--color-text-muted)] py-1">{displayContent}</div>
+        <div className="text-center text-xs text-[var(--color-text-muted)] py-1">
+          {displayContent}
+        </div>
       );
     }
     case "terminal_output": {
@@ -2903,22 +4135,26 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
       return (
         <div className="flex justify-start">
           <div className="max-w-[90%] w-full">
-            <div className={`rounded-xl border overflow-hidden ${
-              isError
-                ? "border-[color-mix(in_srgb,var(--color-error)_40%,transparent)]"
-                : "border-[color-mix(in_srgb,var(--color-border)_72%,transparent)]"
-            } bg-[var(--color-bg-secondary)]`}>
+            <div
+              className={`rounded-xl border overflow-hidden ${
+                isError
+                  ? "border-[color-mix(in_srgb,var(--color-error)_40%,transparent)]"
+                  : "border-[color-mix(in_srgb,var(--color-border)_72%,transparent)]"
+              } bg-[var(--color-bg-secondary)]`}
+            >
               {output && (
                 <pre className="px-3 py-2 text-[12px] font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap overflow-x-auto max-h-[300px] overflow-y-auto">
                   {output}
                 </pre>
               )}
               {hasExited && (
-                <div className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium border-t ${
-                  isError
-                    ? "border-[color-mix(in_srgb,var(--color-error)_30%,transparent)] text-[var(--color-error)] bg-[color-mix(in_srgb,var(--color-error)_8%,transparent)]"
-                    : "border-[color-mix(in_srgb,var(--color-border)_50%,transparent)] text-[var(--color-text-muted)] bg-[var(--color-bg-tertiary)]"
-                }`}>
+                <div
+                  className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-medium border-t ${
+                    isError
+                      ? "border-[color-mix(in_srgb,var(--color-error)_30%,transparent)] text-[var(--color-error)] bg-[color-mix(in_srgb,var(--color-error)_8%,transparent)]"
+                      : "border-[color-mix(in_srgb,var(--color-border)_50%,transparent)] text-[var(--color-text-muted)] bg-[var(--color-bg-tertiary)]"
+                  }`}
+                >
                   <Terminal className="w-3 h-3" />
                   exit {message.exitCode}
                 </div>
@@ -2938,13 +4174,20 @@ function MessageItem({ message, index, isBusy, agentLabel, onToggleThinkingColla
 }
 
 /** Permission request card with action buttons */
-function PermissionCard({ message, onRespond }: {
+function PermissionCard({
+  message,
+  onRespond,
+}: {
   message: PermissionMessage;
   onRespond?: (optionId: string) => void;
 }) {
   const isResolved = !!message.resolved;
-  const isCancelled = isResolved && message.resolved!.toLowerCase() === "cancelled";
-  const isAllowed = isResolved && (message.resolved!.toLowerCase().includes("allow") || message.resolved!.toLowerCase().includes("yes"));
+  const isCancelled =
+    isResolved && message.resolved!.toLowerCase() === "cancelled";
+  const isAllowed =
+    isResolved &&
+    (message.resolved!.toLowerCase().includes("allow") ||
+      message.resolved!.toLowerCase().includes("yes"));
 
   if (isResolved) {
     return (
@@ -2962,39 +4205,66 @@ function PermissionCard({ message, onRespond }: {
         ) : (
           <ShieldX className="w-3.5 h-3.5 text-[var(--color-error)] shrink-0" />
         )}
-        <span className={isCancelled ? "text-[color-mix(in_srgb,var(--color-warning)_92%,white_6%)]" : "text-[var(--color-text-muted)]"}>
+        <span
+          className={
+            isCancelled
+              ? "text-[color-mix(in_srgb,var(--color-warning)_92%,white_6%)]"
+              : "text-[var(--color-text-muted)]"
+          }
+        >
           {message.description}
         </span>
-        <span className={`ml-auto text-[10px] ${isCancelled ? "text-[var(--color-warning)]" : "text-[var(--color-text-muted)] opacity-70"}`}>
+        <span
+          className={`ml-auto text-[10px] ${isCancelled ? "text-[var(--color-warning)]" : "text-[var(--color-text-muted)] opacity-70"}`}
+        >
           {message.resolved}
         </span>
       </div>
     );
   }
 
-  const allowOptions = message.options.filter((o) => o.kind.startsWith("allow"));
-  const rejectOptions = message.options.filter((o) => o.kind.startsWith("reject"));
+  const allowOptions = message.options.filter((o) =>
+    o.kind.startsWith("allow"),
+  );
+  const rejectOptions = message.options.filter((o) =>
+    o.kind.startsWith("reject"),
+  );
 
   return (
-    <div className="rounded-lg border-l-3 border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] overflow-hidden"
-      style={{ borderLeftColor: "var(--color-warning)", borderLeftWidth: 3 }}>
+    <div
+      className="rounded-lg border-l-3 border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] overflow-hidden"
+      style={{ borderLeftColor: "var(--color-warning)", borderLeftWidth: 3 }}
+    >
       <div className="px-3 py-2.5">
         <div className="flex items-center gap-2 mb-2">
           <ShieldCheck className="w-4 h-4 text-[var(--color-warning)] shrink-0" />
-          <span className="text-sm text-[var(--color-text)]">Permission Required</span>
+          <span className="text-sm text-[var(--color-text)]">
+            Permission Required
+          </span>
         </div>
-        <p className="text-xs text-[var(--color-text-muted)] mb-3 ml-6">{message.description}</p>
+        <p className="text-xs text-[var(--color-text-muted)] mb-3 ml-6">
+          {message.description}
+        </p>
         <div className="flex items-center gap-2 ml-6 flex-wrap">
           {allowOptions.map((opt) => (
-            <button key={opt.option_id} onClick={() => onRespond?.(opt.option_id)}
+            <button
+              key={opt.option_id}
+              onClick={() => onRespond?.(opt.option_id)}
               className="px-3 py-1 rounded-md text-xs font-medium transition-colors bg-[var(--color-success)] text-white hover:opacity-80"
-              style={{ backgroundColor: "color-mix(in srgb, var(--color-success) 85%, white)" }}>
+              style={{
+                backgroundColor:
+                  "color-mix(in srgb, var(--color-success) 85%, white)",
+              }}
+            >
               {opt.name}
             </button>
           ))}
           {rejectOptions.map((opt) => (
-            <button key={opt.option_id} onClick={() => onRespond?.(opt.option_id)}
-              className="px-3 py-1 rounded-md text-xs font-medium transition-colors border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-error)]">
+            <button
+              key={opt.option_id}
+              onClick={() => onRespond?.(opt.option_id)}
+              className="px-3 py-1 rounded-md text-xs font-medium transition-colors border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-error)]"
+            >
               {opt.name}
             </button>
           ))}
@@ -3008,10 +4278,24 @@ function normalizeToolVerb(title: string): string {
   const lower = title.toLowerCase();
   if (lower.startsWith("read")) return "read";
   if (lower.startsWith("edit") || lower.startsWith("write")) return "edit";
-  if (lower.startsWith("run") || lower === "terminal" || lower === "exec_command" || lower === "write_stdin") return "run";
-  if (lower.startsWith("search") || lower === "grep" || lower.startsWith("find") || lower === "glob" || lower === "toolsearch") return "search";
+  if (
+    lower.startsWith("run") ||
+    lower === "terminal" ||
+    lower === "exec_command" ||
+    lower === "write_stdin"
+  )
+    return "run";
+  if (
+    lower.startsWith("search") ||
+    lower === "grep" ||
+    lower.startsWith("find") ||
+    lower === "glob" ||
+    lower === "toolsearch"
+  )
+    return "search";
   if (lower.startsWith("list") || lower.startsWith("ls")) return "list";
-  if (lower.startsWith("task") || lower.startsWith("update_plan")) return "plan";
+  if (lower.startsWith("task") || lower.startsWith("update_plan"))
+    return "plan";
   if (lower.includes("permission")) return "permission";
   return "other";
 }
@@ -3025,11 +4309,16 @@ function isBackgroundAction(message: ToolMessage): boolean {
   // Generic "Terminal" events often lack the actual command text and only provide
   // broad shell output. Treat them as background exploration instead of a primary
   // action so the UI does not surface a low-signal "Terminal" action chip.
-  return verb === "read" || verb === "search" || verb === "list" || message.title.toLowerCase() === "terminal";
+  return (
+    verb === "read" ||
+    verb === "search" ||
+    verb === "list" ||
+    message.title.toLowerCase() === "terminal"
+  );
 }
 
-function getToolNavMode(message: ToolMessage): 'diff' | 'full' {
-  return isEditTool(message) ? 'diff' : 'full';
+function getToolNavMode(message: ToolMessage): "diff" | "full" {
+  return isEditTool(message) ? "diff" : "full";
 }
 
 type ToolLocationChip = {
@@ -3039,7 +4328,7 @@ type ToolLocationChip = {
   line?: number;
   isDirectory: boolean;
   status?: string;
-  mode: 'diff' | 'full';
+  mode: "diff" | "full";
 };
 
 const KNOWN_FILE_BASENAMES = new Set([
@@ -3084,7 +4373,10 @@ function looksLikeFileLabel(label: string): boolean {
   return false;
 }
 
-function isDirectoryLocation(message: ToolMessage, location: NonNullable<ToolMessage["locations"]>[number]): boolean {
+function isDirectoryLocation(
+  message: ToolMessage,
+  location: NonNullable<ToolMessage["locations"]>[number],
+): boolean {
   const label = getLocationLabel(location.path);
   if (isIgnorableLocationLabel(label)) return true;
   if (location.line != null) return false;
@@ -3096,7 +4388,10 @@ function isDirectoryLocation(message: ToolMessage, location: NonNullable<ToolMes
   return verb === "search" || verb === "list" || verb === "run";
 }
 
-function collectLocationChips(tools: ToolSectionItem[], predicate: (message: ToolMessage) => boolean): ToolLocationChip[] {
+function collectLocationChips(
+  tools: ToolSectionItem[],
+  predicate: (message: ToolMessage) => boolean,
+): ToolLocationChip[] {
   const seen = new Set<string>();
   const chips: ToolLocationChip[] = [];
 
@@ -3124,15 +4419,18 @@ function collectLocationChips(tools: ToolSectionItem[], predicate: (message: Too
   return chips;
 }
 
-function parseDiffStat(content?: string): { additions: number; deletions: number } | null {
+function parseDiffStat(
+  content?: string,
+): { additions: number; deletions: number } | null {
   if (!content) return null;
   const lines = content.split("\n");
-  const looksLikeDiff = lines.some((line) =>
-    line.startsWith("@@ ") ||
-    line.startsWith("@@") ||
-    line.startsWith("diff --git ") ||
-    line.startsWith("+++ ") ||
-    line.startsWith("--- "),
+  const looksLikeDiff = lines.some(
+    (line) =>
+      line.startsWith("@@ ") ||
+      line.startsWith("@@") ||
+      line.startsWith("diff --git ") ||
+      line.startsWith("+++ ") ||
+      line.startsWith("--- "),
   );
   if (!looksLikeDiff) return null;
   let additions = 0;
@@ -3144,7 +4442,8 @@ function parseDiffStat(content?: string): { additions: number; deletions: number
       line.startsWith("@@") ||
       line.startsWith("diff --git ") ||
       line.startsWith("index ")
-    ) continue;
+    )
+      continue;
     if (line.startsWith("+")) additions += 1;
     else if (line.startsWith("-")) deletions += 1;
   }
@@ -3208,23 +4507,44 @@ function extractFailureReason(tools: ToolSectionItem[]): string | null {
 
 function summarizeToolSection(tools: ToolSectionItem[]) {
   const running = tools.filter((t) => t.message.status === "running").length;
-  const failed = tools.filter((t) => t.message.status === "error" || t.message.status === "failed").length;
-  const cancelled = tools.filter((t) => t.message.status === "cancelled").length;
-  const statusLabel = running > 0 ? "running" : failed > 0 ? "failed" : cancelled > 0 ? "cancelled" : "done";
+  const failed = tools.filter(
+    (t) => t.message.status === "error" || t.message.status === "failed",
+  ).length;
+  const cancelled = tools.filter(
+    (t) => t.message.status === "cancelled",
+  ).length;
+  const statusLabel =
+    running > 0
+      ? "running"
+      : failed > 0
+        ? "failed"
+        : cancelled > 0
+          ? "cancelled"
+          : "done";
   const edits = tools.filter((t) => isEditTool(t.message));
-  const foregroundActions = tools.filter((t) => !isEditTool(t.message) && !isBackgroundAction(t.message));
+  const foregroundActions = tools.filter(
+    (t) => !isEditTool(t.message) && !isBackgroundAction(t.message),
+  );
   const backgroundActions = tools.filter((t) => isBackgroundAction(t.message));
 
   let title = "Working";
   if (failed > 0) title = "Action failed";
-  else if (tools.some((t) => normalizeToolVerb(t.message.title) === "permission")) title = "Waiting for permission";
-  else if (edits.length > 0) title = running > 0 ? "Editing files" : "Edits applied";
-  else if (foregroundActions.length > 0) title = running > 0 ? "Running actions" : "Actions complete";
-  else if (backgroundActions.length > 0) title = running > 0 ? "Inspecting code" : "Inspection complete";
+  else if (
+    tools.some((t) => normalizeToolVerb(t.message.title) === "permission")
+  )
+    title = "Waiting for permission";
+  else if (edits.length > 0)
+    title = running > 0 ? "Editing files" : "Edits applied";
+  else if (foregroundActions.length > 0)
+    title = running > 0 ? "Running actions" : "Actions complete";
+  else if (backgroundActions.length > 0)
+    title = running > 0 ? "Inspecting code" : "Inspection complete";
 
   const editItems = edits.map((tool) => {
     const loc = tool.message.locations?.[0];
-    const path = loc?.path?.split("/").pop() || tool.message.title.replace(/^(Edit|Write)\s+/i, "");
+    const path =
+      loc?.path?.split("/").pop() ||
+      tool.message.title.replace(/^(Edit|Write)\s+/i, "");
     const stat = parseDiffStat(tool.message.content);
     return {
       key: `${tool.message.id}:${path}`,
@@ -3244,20 +4564,31 @@ function summarizeToolSection(tools: ToolSectionItem[]) {
   }));
 
   const inspectionEntries = collectLocationChips(tools, isBackgroundAction);
-  const inspectionFiles = inspectionEntries.filter((entry) => !entry.isDirectory);
-  const actionEntries = collectLocationChips(tools, (message) => !isBackgroundAction(message));
+  const inspectionFiles = inspectionEntries.filter(
+    (entry) => !entry.isDirectory,
+  );
+  const actionEntries = collectLocationChips(
+    tools,
+    (message) => !isBackgroundAction(message),
+  );
   const actionFiles = actionEntries.map((entry) => entry.label);
 
   const totalActionCount = edits.length + actionItems.length;
-  const inspectionSectionSummary = inspectionFiles.length > 0
-    ? `Reviewed ${inspectionFiles.length} file${inspectionFiles.length > 1 ? "s" : ""}`
-    : null;
-  const actionSectionSummary = actionFiles.length > 0
-    ? `Action on ${actionFiles.length} file${actionFiles.length > 1 ? "s" : ""}`
-    : formatActionCount(totalActionCount);
-  const headerSummary = backgroundActions.length > 0 && edits.length === 0 && foregroundActions.length === 0
-    ? (inspectionSectionSummary ?? formatInspectionCount(backgroundActions.length))
-    : (actionSectionSummary ?? formatActionCount(totalActionCount));
+  const inspectionSectionSummary =
+    inspectionFiles.length > 0
+      ? `Reviewed ${inspectionFiles.length} file${inspectionFiles.length > 1 ? "s" : ""}`
+      : null;
+  const actionSectionSummary =
+    actionFiles.length > 0
+      ? `Action on ${actionFiles.length} file${actionFiles.length > 1 ? "s" : ""}`
+      : formatActionCount(totalActionCount);
+  const headerSummary =
+    backgroundActions.length > 0 &&
+    edits.length === 0 &&
+    foregroundActions.length === 0
+      ? (inspectionSectionSummary ??
+        formatInspectionCount(backgroundActions.length))
+      : (actionSectionSummary ?? formatActionCount(totalActionCount));
 
   return {
     title,
@@ -3315,7 +4646,11 @@ function ExpandableFileChipGroup({
   allEntries: ToolLocationChip[];
   expanded: boolean;
   onToggleExpanded: () => void;
-  onFileClick?: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
+  onFileClick?: (
+    filePath: string,
+    line?: number,
+    mode?: "diff" | "full",
+  ) => void;
   muted?: boolean;
 }) {
   const overflow = Math.max(0, allEntries.length - visibleEntries.length);
@@ -3325,7 +4660,8 @@ function ExpandableFileChipGroup({
       type="button"
       disabled={entry.isDirectory}
       onClick={() => {
-        if (!entry.isDirectory) onFileClick?.(entry.path, entry.line, entry.mode);
+        if (!entry.isDirectory)
+          onFileClick?.(entry.path, entry.line, entry.mode);
       }}
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${
         entry.isDirectory
@@ -3333,7 +4669,11 @@ function ExpandableFileChipGroup({
           : getStatusChipClasses(entry.status ?? "completed", muted)
       }`}
     >
-      <VSCodeIcon filename={entry.label} size={13} isFolder={entry.isDirectory} />
+      <VSCodeIcon
+        filename={entry.label}
+        size={13}
+        isFolder={entry.isDirectory}
+      />
       {entry.label}
     </button>
   );
@@ -3342,7 +4682,11 @@ function ExpandableFileChipGroup({
     <div className="space-y-2">
       <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
         {title}
-        {summary ? <span className="ml-2 normal-case tracking-normal text-[11px] opacity-80">{summary}</span> : null}
+        {summary ? (
+          <span className="ml-2 normal-case tracking-normal text-[11px] opacity-80">
+            {summary}
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {visibleEntries.map(renderEntry)}
@@ -3366,24 +4710,42 @@ function ExpandableFileChipGroup({
 }
 
 /** Collapsible section that groups consecutive tool calls */
-function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSection, onFileClick }: {
+function ToolSectionView({
+  sectionId,
+  tools,
+  expanded,
+  forceExpanded,
+  onToggleSection,
+  onFileClick,
+}: {
   sectionId: string;
   tools: ToolSectionItem[];
   expanded: boolean;
   forceExpanded: boolean;
   onToggleSection: (sectionId: string) => void;
-  onFileClick?: (filePath: string, line?: number, mode?: 'diff' | 'full') => void;
+  onFileClick?: (
+    filePath: string,
+    line?: number,
+    mode?: "diff" | "full",
+  ) => void;
 }) {
   const sectionExpanded = forceExpanded || expanded;
   const summary = useMemo(() => summarizeToolSection(tools), [tools]);
   const [inspectionExpanded, setInspectionExpanded] = useState(false);
   const [actionExpanded, setActionExpanded] = useState(false);
-  const hasDetails = summary.inspectionEntries.length > 0 || summary.editItems.length > 0 || summary.actionItems.length > 0 || summary.actionEntries.length > 0;
-  const summaryIcon = summary.running > 0
-    ? <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
-    : summary.failed > 0 || summary.cancelled > 0
-      ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
-      : <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />;
+  const hasDetails =
+    summary.inspectionEntries.length > 0 ||
+    summary.editItems.length > 0 ||
+    summary.actionItems.length > 0 ||
+    summary.actionEntries.length > 0;
+  const summaryIcon =
+    summary.running > 0 ? (
+      <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
+    ) : summary.failed > 0 || summary.cancelled > 0 ? (
+      <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
+    ) : (
+      <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />
+    );
   const collapsedSecondaryText = summary.failureReason ?? summary.headerSummary;
   return (
     <motion.div
@@ -3404,8 +4766,12 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
         <div className="min-w-0 flex-1">
           {!sectionExpanded ? (
             <div className="flex min-w-0 items-center gap-2">
-              <span className="shrink-0 text-sm font-medium text-[var(--color-text)]">{summary.title}</span>
-              <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{summary.statusLabel}</span>
+              <span className="shrink-0 text-sm font-medium text-[var(--color-text)]">
+                {summary.title}
+              </span>
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                {summary.statusLabel}
+              </span>
               {collapsedSecondaryText ? (
                 <span
                   className={`min-w-0 truncate text-xs ${summary.failureReason ? "text-[color-mix(in_srgb,var(--color-warning)_95%,white_4%)]" : "text-[var(--color-text-muted)]"}`}
@@ -3419,8 +4785,12 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
           ) : (
             <>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-[var(--color-text)]">{summary.title}</span>
-                <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{summary.statusLabel}</span>
+                <span className="text-sm font-medium text-[var(--color-text)]">
+                  {summary.title}
+                </span>
+                <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                  {summary.statusLabel}
+                </span>
               </div>
               {summary.failureReason && (
                 <div className="mt-1 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-2.5 py-2 text-xs text-[color-mix(in_srgb,var(--color-warning)_95%,white_4%)]">
@@ -3428,7 +4798,9 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
                 </div>
               )}
               {!summary.failureReason && (
-                <div className="mt-1 text-xs text-[var(--color-text-muted)]">{summary.headerSummary}</div>
+                <div className="mt-1 text-xs text-[var(--color-text-muted)]">
+                  {summary.headerSummary}
+                </div>
               )}
             </>
           )}
@@ -3470,16 +4842,25 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
 
               {summary.editItems.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">Edit</div>
+                  <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                    Edit
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
                     {summary.editItems.map((item) => (
                       <button
                         key={item.key}
                         type="button"
                         onClick={() => {
-                          const tool = tools.find((t) => t.message.id === item.toolId)?.message;
+                          const tool = tools.find(
+                            (t) => t.message.id === item.toolId,
+                          )?.message;
                           const loc = tool?.locations?.[0];
-                          if (loc?.path && tool) onFileClick?.(loc.path, loc.line, getToolNavMode(tool));
+                          if (loc?.path && tool)
+                            onFileClick?.(
+                              loc.path,
+                              loc.line,
+                              getToolNavMode(tool),
+                            );
                         }}
                         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${getStatusChipClasses(item.status)}`}
                       >
@@ -3487,9 +4868,15 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
                         <span>{item.label}</span>
                         {(item.additions > 0 || item.deletions > 0) && (
                           <span className="text-[10px]">
-                            <span className="text-[var(--color-success)]">+{item.additions}</span>
-                            <span className="mx-0.5 text-[var(--color-text-muted)]">/</span>
-                            <span className="text-[var(--color-error)]">-{item.deletions}</span>
+                            <span className="text-[var(--color-success)]">
+                              +{item.additions}
+                            </span>
+                            <span className="mx-0.5 text-[var(--color-text-muted)]">
+                              /
+                            </span>
+                            <span className="text-[var(--color-error)]">
+                              -{item.deletions}
+                            </span>
                           </span>
                         )}
                       </button>
@@ -3498,7 +4885,8 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
                 </div>
               )}
 
-              {(summary.actionItems.length > 0 || summary.actionEntries.length > 0) && (
+              {(summary.actionItems.length > 0 ||
+                summary.actionEntries.length > 0) && (
                 <div className="space-y-2">
                   {summary.actionEntries.length > 0 && (
                     <ExpandableFileChipGroup
@@ -3512,15 +4900,18 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
                       muted
                     />
                   )}
-                  {(summary.visibleActionItems.length > 0 || summary.actionItemOverflow > 0) && (
+                  {(summary.visibleActionItems.length > 0 ||
+                    summary.actionItemOverflow > 0) && (
                     <div className="flex flex-wrap gap-1.5">
-                      {summary.visibleActionItems.map((item) => (
+                      {summary.visibleActionItems.map((item) =>
                         item.fullLabel !== item.label ? (
                           <Tooltip key={item.key} content={item.fullLabel}>
                             <span
                               className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${getStatusChipClasses(item.status)}`}
                             >
-                              {item.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-[var(--color-highlight)]" /> : null}
+                              {item.status === "running" ? (
+                                <Loader2 className="h-3 w-3 animate-spin text-[var(--color-highlight)]" />
+                              ) : null}
                               <span>{item.label}</span>
                             </span>
                           </Tooltip>
@@ -3529,11 +4920,13 @@ function ToolSectionView({ sectionId, tools, expanded, forceExpanded, onToggleSe
                             key={item.key}
                             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${getStatusChipClasses(item.status)}`}
                           >
-                            {item.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-[var(--color-highlight)]" /> : null}
+                            {item.status === "running" ? (
+                              <Loader2 className="h-3 w-3 animate-spin text-[var(--color-highlight)]" />
+                            ) : null}
                             <span>{item.label}</span>
                           </span>
-                        )
-                      ))}
+                        ),
+                      )}
                       {summary.actionItemOverflow > 0 && (
                         <span className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_80%,var(--color-bg))] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)]">
                           +{summary.actionItemOverflow} more actions
