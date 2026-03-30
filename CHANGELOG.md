@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-30
+
+### Added
+
+- **AI settings page** — new settings page with audio transcription configuration and AI provider management
+- **Bulk comment cleanup** — review comments can now be bulk-resolved with status and author filters
+
+### Improved
+
+- **ACP chat session management** — refined session management UI with optimized chat history loading and prevention of load_session replay duplication
+- **ACP chat tool display** — improved tool call rendering UX in chat conversations
+- **ACP chat stability** — fixed message state drift, review resolve behavior, observer mode, and overall chat UI stability
+- **MCP upgrade** — upgraded rmcp to 1.3 with inlined nested schemas for better agent compatibility
+
+### Fixed
+
+- **Weekly activity chart** — corrected bar rendering in the weekly activity chart
+
 ## [0.7.14] - 2026-03-26
 
 ### Added
