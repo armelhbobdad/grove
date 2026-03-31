@@ -426,13 +426,15 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
     // For existing sessions, construct SessionReady from metadata so frontend can interact.
     // History is already loaded via HTTP.
     if is_existing {
-        let meta_msg = (|| {
+        let meta = (|| {
             let (persist_proj, persist_tsk, persist_cid) = handle.persist_info();
             let cid = persist_cid?;
-            let meta = acp::read_session_metadata(&persist_proj, &persist_tsk, &cid)?;
+            acp::read_session_metadata(&persist_proj, &persist_tsk, &cid)
+        })();
+        let meta_msg = meta.clone().map(|meta| {
             let info = handle.agent_info.read().ok().and_then(|i| i.clone());
             let (sid, _name, _ver) = info.unwrap_or_default();
-            Some(ServerMessage::SessionReady {
+            ServerMessage::SessionReady {
                 session_id: sid,
                 agent_name: meta.agent_name,
                 agent_version: meta.agent_version,
@@ -449,9 +451,8 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                     .collect(),
                 current_model_id: meta.current_model_id,
                 prompt_capabilities: meta.prompt_capabilities,
-            })
-        })()
-        .unwrap_or_else(|| {
+            }
+        }).unwrap_or_else(|| {
             // Fallback: metadata missing or corrupt — send minimal SessionReady with defaults
             let info = handle.agent_info.read().ok().and_then(|i| i.clone());
             let (sid, name, ver) = info.unwrap_or_default();
@@ -468,6 +469,22 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
         });
         if let Ok(json) = serde_json::to_string(&meta_msg) {
             let _ = ws_sender.send(Message::Text(json.into())).await;
+        }
+        if let Some(meta) = meta.filter(|meta| !meta.available_commands.is_empty()) {
+            let msg = ServerMessage::AvailableCommands {
+                commands: meta
+                    .available_commands
+                    .into_iter()
+                    .map(|c| CommandMsg {
+                        name: c.name,
+                        description: c.description,
+                        input_hint: c.input_hint,
+                    })
+                    .collect(),
+            };
+            if let Ok(json) = serde_json::to_string(&msg) {
+                let _ = ws_sender.send(Message::Text(json.into())).await;
+            }
         }
     }
 

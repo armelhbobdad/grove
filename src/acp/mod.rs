@@ -240,6 +240,8 @@ pub struct SessionMetadata {
     pub current_model_id: Option<String>,
     #[serde(default)]
     pub prompt_capabilities: PromptCapabilitiesData,
+    #[serde(default)]
+    pub available_commands: Vec<CommandInfo>,
 }
 
 /// Unix socket 命令（JSONL，每连接一条）
@@ -1547,42 +1549,56 @@ impl AcpSessionHandle {
 
     /// 发送更新并记录到 history buffer（带磁盘持久化）
     pub fn emit(&self, update: AcpUpdate) {
-        // load_session 期间抑制所有 emit（agent 回放的通知不转发）
+        // load_session 期间抑制大部分 emit；保留 available_commands 以恢复 slash commands
         if self
             .suppress_emit
             .load(std::sync::atomic::Ordering::Relaxed)
+            && !matches!(update, AcpUpdate::AvailableCommands { .. })
         {
             return;
         }
 
-        // SessionReady 时写 session.json（供其他进程发现）
-        if let AcpUpdate::SessionReady {
-            ref agent_name,
-            ref agent_version,
-            ref available_modes,
-            ref current_mode_id,
-            ref available_models,
-            ref current_model_id,
-            ref prompt_capabilities,
-            ..
-        } = update
-        {
-            if let Some(ref chat_id) = self.chat_id {
-                write_session_metadata(
-                    &self.project_key,
-                    &self.task_id,
-                    chat_id,
-                    &SessionMetadata {
-                        pid: std::process::id(),
-                        agent_name: agent_name.clone(),
-                        agent_version: agent_version.clone(),
-                        available_modes: available_modes.clone(),
-                        current_mode_id: current_mode_id.clone(),
-                        available_models: available_models.clone(),
-                        current_model_id: current_model_id.clone(),
-                        prompt_capabilities: prompt_capabilities.clone(),
-                    },
-                );
+        if let Some(ref chat_id) = self.chat_id {
+            match &update {
+                AcpUpdate::SessionReady {
+                    agent_name,
+                    agent_version,
+                    available_modes,
+                    current_mode_id,
+                    available_models,
+                    current_model_id,
+                    prompt_capabilities,
+                    ..
+                } => {
+                    let existing = read_session_metadata(&self.project_key, &self.task_id, chat_id);
+                    write_session_metadata(
+                        &self.project_key,
+                        &self.task_id,
+                        chat_id,
+                        &SessionMetadata {
+                            pid: std::process::id(),
+                            agent_name: agent_name.clone(),
+                            agent_version: agent_version.clone(),
+                            available_modes: available_modes.clone(),
+                            current_mode_id: current_mode_id.clone(),
+                            available_models: available_models.clone(),
+                            current_model_id: current_model_id.clone(),
+                            prompt_capabilities: prompt_capabilities.clone(),
+                            available_commands: existing
+                                .map(|meta| meta.available_commands)
+                                .unwrap_or_default(),
+                        },
+                    );
+                }
+                AcpUpdate::AvailableCommands { commands } => {
+                    if let Some(mut meta) =
+                        read_session_metadata(&self.project_key, &self.task_id, chat_id)
+                    {
+                        meta.available_commands = commands.clone();
+                        write_session_metadata(&self.project_key, &self.task_id, chat_id, &meta);
+                    }
+                }
+                _ => {}
             }
         }
 

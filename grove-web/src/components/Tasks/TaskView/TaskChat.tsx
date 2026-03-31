@@ -256,6 +256,30 @@ function buildRenderItems(messages: ChatMessage[]): RenderItem[] {
   return items;
 }
 
+function getAutoScrollTailSignature(messages: ChatMessage[]): string {
+  const tail = messages.slice(-2);
+  return tail
+    .map((message) => {
+      switch (message.type) {
+        case "assistant":
+          return `assistant:${message.complete ? 1 : 0}:${message.content}`;
+        case "thinking":
+          return `thinking:${message.complete ? 1 : 0}:${message.content}`;
+        case "tool":
+          return `tool:${message.id}:${message.status}:${message.content ?? ""}`;
+        case "system":
+          return `system:${message.content}`;
+        case "permission":
+          return `permission:${message.description}:${message.resolved ?? ""}`;
+        case "terminal_output":
+          return `terminal_output:${message.exitCode ?? ""}:${message.chunks.join("")}`;
+        case "user":
+          return `user:${message.content}:${message.attachments?.length ?? 0}:${message.terminal ? 1 : 0}`;
+      }
+    })
+    .join("|");
+}
+
 /** Mark all incomplete thinking messages as complete and auto-collapse them */
 function completeThinking(messages: ChatMessage[]): ChatMessage[] {
   let changed = false;
@@ -856,8 +880,10 @@ export function TaskChat({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const planFilePathRef = useRef("");
   const planFileToolIdsRef = useRef<Set<string>>(new Set());
-  const shouldStickToBottomRef = useRef(true);
+  const autoStickToBottomRef = useRef(true);
   const suppressNextSmoothScrollRef = useRef(false);
+  const messagesCountRef = useRef(messages.length);
+  messagesCountRef.current = messages.length;
 
   // ─── Read-only observation mode state ──────────────────────────────────
   const [isRemoteSession, setIsRemoteSession] = useState(false);
@@ -1019,17 +1045,6 @@ export function TaskChat({
       .catch(() => {});
   }, [projectId, task.id]);
 
-  // Auto-scroll to bottom — only when new messages arrive, not on collapse toggle
-  const updateScrollState = useCallback(() => {
-    const viewport = messagesViewportRef.current;
-    if (!viewport) return;
-    const distanceFromBottom =
-      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    const isAtBottom = distanceFromBottom < 40;
-    shouldStickToBottomRef.current = isAtBottom;
-    setShowScrollToBottom(!isAtBottom && messages.length > 0);
-  }, [messages.length]);
-
   const scrollMessagesToBottom = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
       const viewport = messagesViewportRef.current;
@@ -1039,32 +1054,67 @@ export function TaskChat({
     [],
   );
 
-  const prevMsgCountRef = useRef(0);
-  const messagesLengthRef = useRef(messages.length);
-  messagesLengthRef.current = messages.length;
+  const enableAutoStickToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      autoStickToBottomRef.current = true;
+      scrollMessagesToBottom(behavior);
+      requestAnimationFrame(() => setShowScrollToBottom(false));
+    },
+    [scrollMessagesToBottom],
+  );
+
   useEffect(() => {
-    if (
-      messages.length > prevMsgCountRef.current &&
-      shouldStickToBottomRef.current
-    ) {
+    const viewport = messagesViewportRef.current;
+    const bottomMarker = messagesEndRef.current;
+    if (!viewport || !bottomMarker || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const isAtBottom = entry?.isIntersecting ?? false;
+        autoStickToBottomRef.current = isAtBottom;
+        setShowScrollToBottom(!isAtBottom && messagesCountRef.current > 0);
+      },
+      {
+        root: viewport,
+        threshold: 0,
+        rootMargin: "0px 0px 48px 0px",
+      },
+    );
+
+    observer.observe(bottomMarker);
+    return () => observer.disconnect();
+  }, [activeChatId]);
+
+  const autoScrollTailSignature = useMemo(
+    () => getAutoScrollTailSignature(messages),
+    [messages],
+  );
+  const prevAutoScrollTailRef = useRef(autoScrollTailSignature);
+  const autoScrollTailSignatureRef = useRef(autoScrollTailSignature);
+  autoScrollTailSignatureRef.current = autoScrollTailSignature;
+  useEffect(() => {
+    const previousTail = prevAutoScrollTailRef.current;
+    const tailChanged = autoScrollTailSignature !== previousTail;
+    if (tailChanged && autoStickToBottomRef.current) {
       scrollMessagesToBottom(
         suppressNextSmoothScrollRef.current ? "auto" : "smooth",
       );
     }
     suppressNextSmoothScrollRef.current = false;
-    prevMsgCountRef.current = messages.length;
-    requestAnimationFrame(updateScrollState);
-  }, [messages, scrollMessagesToBottom, updateScrollState]);
+    prevAutoScrollTailRef.current = autoScrollTailSignature;
+  }, [autoScrollTailSignature, scrollMessagesToBottom]);
 
   useEffect(() => {
     suppressNextSmoothScrollRef.current = true;
-    prevMsgCountRef.current = messagesLengthRef.current;
+    prevAutoScrollTailRef.current = autoScrollTailSignatureRef.current;
     requestAnimationFrame(() => {
-      shouldStickToBottomRef.current = true;
+      autoStickToBottomRef.current = true;
       scrollMessagesToBottom("auto");
-      updateScrollState();
+      setShowScrollToBottom(false);
     });
-  }, [activeChatId, scrollMessagesToBottom, updateScrollState]);
+  }, [activeChatId, scrollMessagesToBottom]);
 
   // Auto-scroll slash menu to keep selected item visible
   useEffect(() => {
@@ -2080,6 +2130,7 @@ export function TaskChat({
     // Shell mode → send terminal_execute directly (bypasses AI)
     if (isTerminalMode) {
       if (!prompt || isBusy) return;
+      enableAutoStickToBottom("auto");
       wsRef.current.send(
         JSON.stringify({ type: "terminal_execute", command: prompt }),
       );
@@ -2113,6 +2164,7 @@ export function TaskChat({
 
     if (isBusy) {
       // Queue message on server when agent is busy
+      enableAutoStickToBottom("auto");
       wsRef.current.send(
         JSON.stringify({
           type: "queue_message",
@@ -2132,6 +2184,7 @@ export function TaskChat({
       setShowPlanFile(false);
       el.focus();
     } else {
+      enableAutoStickToBottom("auto");
       wsRef.current.send(
         JSON.stringify({
           type: "prompt",
@@ -2149,7 +2202,7 @@ export function TaskChat({
       setIsBusy(true);
       el.focus();
     }
-  }, [isTerminalMode, isBusy, attachments]);
+  }, [isTerminalMode, isBusy, attachments, enableAutoStickToBottom]);
 
   /** Cancel current agent work — server auto-sends next queued message after Complete */
   const handleSendNow = useCallback(() => {
@@ -3197,7 +3250,6 @@ export function TaskChat({
           {/* Messages */}
           <div
             ref={messagesViewportRef}
-            onScroll={updateScrollState}
             className={`relative z-0 h-full min-h-0 flex-1 overflow-y-auto px-4 pt-4 ${messagesBottomPaddingClass}`}
           >
             <div className="flex w-full flex-col gap-3">
@@ -3234,7 +3286,7 @@ export function TaskChat({
                     <span>Thinking...</span>
                   </div>
                 )}
-              <div ref={messagesEndRef} />
+              <div ref={messagesEndRef} className="h-px w-full shrink-0" />
             </div>
           </div>
 
@@ -3431,8 +3483,7 @@ export function TaskChat({
                   >
                     <button
                       onClick={() => {
-                        shouldStickToBottomRef.current = true;
-                        scrollMessagesToBottom("smooth");
+                        enableAutoStickToBottom("smooth");
                         setShowScrollToBottom(false);
                       }}
                       className="group relative mx-auto flex items-center gap-2 rounded-full px-3 py-2 text-[15px] font-medium tracking-[0.01em] text-[color-mix(in_srgb,var(--color-highlight)_80%,white_4%)] transition-all duration-200 hover:text-[color-mix(in_srgb,var(--color-highlight)_96%,white_8%)] select-none"
@@ -4604,14 +4655,20 @@ function summarizeToolSection(tools: ToolSectionItem[]) {
   const cancelled = tools.filter(
     (t) => t.message.status === "cancelled",
   ).length;
+  const total = tools.length;
+  const succeeded = total - running - failed - cancelled;
+  const allFailed = failed > 0 && succeeded === 0 && running === 0;
+  const partialFailed = failed > 0 && !allFailed;
+
+  // statusLabel: only show when it adds info beyond the title
   const statusLabel =
     running > 0
-      ? "running"
-      : failed > 0
-        ? "failed"
-        : cancelled > 0
-          ? "cancelled"
-          : "done";
+      ? ""
+      : partialFailed
+        ? `${failed} failed`
+        : cancelled > 0 && succeeded > 0
+          ? `${cancelled} cancelled`
+          : "";
   const edits = tools.filter((t) => isEditTool(t.message));
   const foregroundActions = tools.filter(
     (t) => !isEditTool(t.message) && !isBackgroundAction(t.message),
@@ -4619,7 +4676,8 @@ function summarizeToolSection(tools: ToolSectionItem[]) {
   const backgroundActions = tools.filter((t) => isBackgroundAction(t.message));
 
   let title = "Working";
-  if (failed > 0) title = "Action failed";
+  if (allFailed) title = "Action failed";
+  else if (partialFailed) title = "Completed with errors";
   else if (
     tools.some((t) => normalizeToolVerb(t.message.title) === "permission")
   )
@@ -4681,9 +4739,19 @@ function summarizeToolSection(tools: ToolSectionItem[]) {
         formatInspectionCount(backgroundActions.length))
       : (actionSectionSummary ?? formatActionCount(totalActionCount));
 
+  // Determine dominant section type for icon selection
+  const sectionType: "inspection" | "edit" | "action" =
+    edits.length > 0
+      ? "edit"
+      : backgroundActions.length > 0 &&
+          foregroundActions.length === 0
+        ? "inspection"
+        : "action";
+
   return {
     title,
     statusLabel,
+    sectionType,
     headerSummary,
     actionSectionSummary,
     editItems,
@@ -4829,13 +4897,19 @@ function ToolSectionView({
     summary.editItems.length > 0 ||
     summary.actionItems.length > 0 ||
     summary.actionEntries.length > 0;
+  const DoneIcon =
+    summary.sectionType === "edit"
+      ? Pencil
+      : summary.sectionType === "inspection"
+        ? Eye
+        : Terminal;
   const summaryIcon =
     summary.running > 0 ? (
       <Loader2 className="w-3.5 h-3.5 text-[var(--color-highlight)] animate-spin shrink-0" />
     ) : summary.failed > 0 || summary.cancelled > 0 ? (
-      <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
+      <DoneIcon className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
     ) : (
-      <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />
+      <DoneIcon className="w-3.5 h-3.5 text-[var(--color-success)] shrink-0" />
     );
   const collapsedSecondaryText = summary.failureReason ?? summary.headerSummary;
   return (
@@ -4860,9 +4934,11 @@ function ToolSectionView({
               <span className="shrink-0 text-sm font-medium text-[var(--color-text)]">
                 {summary.title}
               </span>
-              <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-                {summary.statusLabel}
-              </span>
+              {summary.statusLabel ? (
+                <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                  {summary.statusLabel}
+                </span>
+              ) : null}
               {collapsedSecondaryText ? (
                 <span
                   className={`min-w-0 truncate text-xs ${summary.failureReason ? "text-[color-mix(in_srgb,var(--color-warning)_95%,white_4%)]" : "text-[var(--color-text-muted)]"}`}
@@ -4879,9 +4955,11 @@ function ToolSectionView({
                 <span className="text-sm font-medium text-[var(--color-text)]">
                   {summary.title}
                 </span>
-                <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-                  {summary.statusLabel}
-                </span>
+                {summary.statusLabel ? (
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                    {summary.statusLabel}
+                  </span>
+                ) : null}
               </div>
               {summary.failureReason && (
                 <div className="mt-1 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-2.5 py-2 text-xs text-[color-mix(in_srgb,var(--color-warning)_95%,white_4%)]">

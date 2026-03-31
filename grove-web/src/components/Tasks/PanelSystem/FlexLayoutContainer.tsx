@@ -264,10 +264,11 @@ export const FlexLayoutContainer = forwardRef<
     };
   }, [getPanelLabel]);
 
+  const layoutStorageKey = `grove-flexlayout-${projectId}-${task.id}`;
   // Load saved layout from localStorage
   const loadSavedLayout = (): IJsonModel | null => {
     try {
-      const saved = localStorage.getItem(`grove-flexlayout-${task.id}`);
+      const saved = localStorage.getItem(layoutStorageKey);
       if (saved) {
         const json = JSON.parse(saved) as IJsonModel;
         // Restore instance counters from saved layout
@@ -764,13 +765,13 @@ export const FlexLayoutContainer = forwardRef<
   const handleModelChange = useCallback((m: Model) => {
     try {
       const json = m.toJson();
-      localStorage.setItem(`grove-flexlayout-${task.id}`, JSON.stringify(json));
+      localStorage.setItem(layoutStorageKey, JSON.stringify(json));
       onLayoutChange?.(json);
     } catch (error) {
       console.error('Failed to save layout:', error);
     }
     setIsEmpty(getAllTabs().length === 0);
-  }, [task.id, onLayoutChange, getAllTabs]);
+  }, [layoutStorageKey, onLayoutChange, getAllTabs]);
 
   // Fullscreen: maximize panel to fill entire container
   if (fullscreenPanelId && fullscreen) {

@@ -55,7 +55,7 @@ function insertTextIntoContentEditable(el: HTMLElement, text: string) {
 }
 
 /** How long the PTT key must be held before recording starts (ms) */
-const PTT_ACTIVATION_DELAY_MS = 500;
+const PTT_ACTIVATION_DELAY_MS = 300;
 
 export type IndicatorStatus = "idle" | "warming" | "recording" | "processing" | "error";
 
