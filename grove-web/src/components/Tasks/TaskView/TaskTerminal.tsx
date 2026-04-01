@@ -22,6 +22,8 @@ interface TaskTerminalProps {
   onToggleFullscreen?: () => void;
   /** Hide the terminal header (for FlexLayout tabs) */
   hideHeader?: boolean;
+  /** Unique instance ID for terminal caching (e.g. FlexLayout tab node id) */
+  instanceId?: string;
 }
 
 export function TaskTerminal({
@@ -34,6 +36,7 @@ export function TaskTerminal({
   fullscreen = false,
   onToggleFullscreen,
   hideHeader = false,
+  instanceId,
 }: TaskTerminalProps) {
   const { terminalTheme } = useTerminalTheme();
   const [isConnected, setIsConnected] = useState(false);
@@ -124,6 +127,7 @@ export function TaskTerminal({
           taskId={task.id}
           onConnected={handleConnected}
           onDisconnected={() => { setIsConnected(false); onDisconnectedProp?.(); }}
+          instanceId={instanceId}
         />
       </div>
     </motion.div>

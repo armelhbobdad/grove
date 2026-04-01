@@ -703,6 +703,7 @@ export const FlexLayoutContainer = forwardRef<
               hideHeader={true}
               fullscreen={true}
               onDisconnected={() => closeTabById(node.getId())}
+              instanceId={node.getId()}
             />
           </div>
         );

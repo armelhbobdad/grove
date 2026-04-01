@@ -1,0 +1,96 @@
+/**
+ * Terminal instance cache — keeps xterm.js + WebSocket alive across task switches.
+ *
+ * Lifecycle:
+ *   mount   → getCached() hit? reattach : create new + setCached()
+ *   unmount → detachTerminal()  (moves container to hidden holder, WS stays open)
+ *   page unload → disposeAllTerminals()
+ */
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { IDisposable } from "@xterm/xterm";
+
+export interface CachedTerminal {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  ws: WebSocket | null;
+  container: HTMLDivElement;
+  dataDisposable: IDisposable;
+  /** Whether this terminal is currently attached to a visible component */
+  active: boolean;
+  /** Callback to fire when WS disconnects while active */
+  onDisconnected: (() => void) | null;
+}
+
+const cache = new Map<string, CachedTerminal>();
+
+// Off-screen holder keeps detached terminal DOM alive so xterm state is preserved
+let holder: HTMLDivElement | null = null;
+
+function getHolder(): HTMLDivElement {
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.style.cssText =
+      "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;pointer-events:none";
+    document.body.appendChild(holder);
+  }
+  return holder;
+}
+
+export function getCached(key: string): CachedTerminal | undefined {
+  return cache.get(key);
+}
+
+export function setCached(key: string, entry: CachedTerminal): void {
+  cache.set(key, entry);
+}
+
+/** Move terminal container to hidden holder. WS stays open, output accumulates. */
+export function detachTerminal(key: string): void {
+  const entry = cache.get(key);
+  if (!entry) return;
+  entry.active = false;
+  entry.onDisconnected = null;
+  if (entry.container.parentElement) {
+    getHolder().appendChild(entry.container);
+  }
+}
+
+/** Fully dispose terminal, close WS, remove from cache. */
+export function disposeTerminal(key: string): void {
+  const entry = cache.get(key);
+  if (!entry) return;
+  entry.active = false;
+  entry.onDisconnected = null;
+  entry.dataDisposable.dispose();
+  if (entry.ws && entry.ws.readyState <= WebSocket.OPEN) {
+    entry.ws.close();
+  }
+  entry.terminal.dispose();
+  entry.container.remove();
+  cache.delete(key);
+}
+
+/** Dispose every cached terminal (page unload). */
+export function disposeAllTerminals(): void {
+  for (const key of [...cache.keys()]) {
+    disposeTerminal(key);
+  }
+  if (holder) {
+    holder.remove();
+    holder = null;
+  }
+}
+
+/** Build a deterministic cache key from connection parameters + instance id. */
+export function makeTerminalCacheKey(
+  connectionKey: string,
+  instanceId: string,
+): string {
+  return `${connectionKey}|${instanceId}`;
+}
+
+// Clean up all terminals when page unloads
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", disposeAllTerminals);
+}
