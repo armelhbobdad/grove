@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-04-01
+
+### Added
+
+- **CLI project management commands** — new `grove register` and `grove remove` commands for managing projects directly from the command line
+- **Dashboard redesign** — redesigned Dashboard with Hero section, Pulse activity view, Repo Control panel, and onboarding guidance
+- **Work sidebar tab** — split Local task into a dedicated Work tab in the sidebar for better task organization
+
+### Improved
+
+- **Terminal instance caching** — terminal instances are now cached across task switches, preserving session state and avoiding unnecessary re-creation
+- **Settings redesign** — redesigned Terminal and Chat settings pages with unified session creation flow
+- **Chat session recovery** — refined chat session recovery and workspace UX improvements
+
 ## [0.8.0] - 2026-03-30
 
 ### Added
