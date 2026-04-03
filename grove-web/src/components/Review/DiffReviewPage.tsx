@@ -428,17 +428,34 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
   const [refreshing, setRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
+    requestQueue.current = [];
+    activeRequests.current.clear();
+    setLoadingFiles(new Set());
+    setFullFileContents(new Map());
+
     const fromOpt = versions.find((v) => v.id === fromVersion);
     const toOpt = versions.find((v) => v.id === toVersion);
-    await Promise.all([
-      refetchDiff(fromOpt?.ref, toOpt?.ref, true),
-      getReviewComments(projectId, taskId).then((result) => {
-        setComments(result.comments);
-        if (result.git_user_name) gitUserNameRef.current = result.git_user_name;
-      }).catch(() => null),
-    ]);
-    setRefreshing(false);
+
+    try {
+      await Promise.all([
+        refetchDiff(fromOpt?.ref, toOpt?.ref, true),
+        getReviewComments(projectId, taskId).then((result) => {
+          setComments(result.comments);
+          if (result.git_user_name) gitUserNameRef.current = result.git_user_name;
+        }).catch(() => null),
+        getTaskFiles(projectId, taskId).then((result) => {
+          setAllFiles(result.files);
+        }).catch(() => null),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
   }, [versions, fromVersion, toVersion, refetchDiff, projectId, taskId]);
+
+  const handleSetViewMode = useCallback(async (nextMode: 'diff' | 'full') => {
+    setViewMode(nextMode);
+    await handleRefresh();
+  }, [handleRefresh]);
 
   // Initial load: diff + comments + commits (builds version list)
   useEffect(() => {
@@ -749,8 +766,9 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
 
   // Toggle Changes / All Files mode
   const handleToggleViewMode = useCallback(() => {
-    setViewMode((prev) => (prev === 'diff' ? 'full' : 'diff'));
-  }, []);
+    const nextMode = viewMode === 'diff' ? 'full' : 'diff';
+    void handleSetViewMode(nextMode);
+  }, [viewMode, handleSetViewMode]);
 
   // Review panel keyboard shortcuts
   useHotkeys(
@@ -1054,14 +1072,14 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
         <div className="diff-mode-selector">
           <button
             className={viewMode === 'diff' ? 'active' : ''}
-            onClick={() => setViewMode('diff')}
+            onClick={() => void handleSetViewMode('diff')}
           >
             <GitCompare size={14} />
             <span>Changes</span>
           </button>
           <button
             className={viewMode === 'full' ? 'active' : ''}
-            onClick={() => setViewMode('full')}
+            onClick={() => void handleSetViewMode('full')}
           >
             <FileText size={14} />
             <span>All Files</span>

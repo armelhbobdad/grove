@@ -1772,13 +1772,28 @@ export function TaskChat({
         case "busy":
           setIsBusy(msg.value);
           break;
-        case "error":
-          setMessages((prev) => [
-            ...prev,
-            { type: "system", content: `Error: ${msg.message}` },
-          ]);
-          setIsBusy(false);
+        case "error": {
+          const isStalePermission = msg.message?.includes("No pending permission");
+          if (isStalePermission) {
+            // The permission we tried to respond to no longer exists on the backend.
+            // Resolve all unresolved permissions as cancelled so the UI unblocks.
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.type === "permission" && !m.resolved
+                  ? { ...m, resolved: "Cancelled" }
+                  : m,
+              ),
+            );
+            setShowPermissionPanel(false);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { type: "system", content: `Error: ${msg.message}` },
+            ]);
+            setIsBusy(false);
+          }
           break;
+        }
         case "user_message": {
           setMessages((prev) => reduceHistoryMessages(prev, msg));
           break;
@@ -3421,7 +3436,7 @@ export function TaskChat({
             style={{ paddingBottom: inputAreaHeight > 0 ? inputAreaHeight + 16 : undefined }}
           >
             <div className="flex w-full flex-col gap-3">
-              {renderItems.map((item) =>
+              {renderItems.map((item, idx) =>
                 item.kind === "single" ? (
                   <MessageItem
                     key={`m-${item.index}`}
@@ -3442,6 +3457,7 @@ export function TaskChat({
                     tools={item.tools}
                     expanded={expandedSections.has(item.sectionId)}
                     forceExpanded={false}
+                    sectionFinished={idx < renderItems.length - 1 || !isBusy}
                     onToggleSection={toggleSection}
                     onFileClick={onNavigateToFile}
                   />
@@ -4856,7 +4872,7 @@ function extractFailureReason(tools: ToolSectionItem[]): string | null {
   return null;
 }
 
-function summarizeToolSection(tools: ToolSectionItem[]) {
+function summarizeToolSection(tools: ToolSectionItem[], sectionFinished: boolean) {
   const running = tools.filter((t) => t.message.status === "running").length;
   const failed = tools.filter(
     (t) => t.message.status === "error" || t.message.status === "failed",
@@ -4866,12 +4882,15 @@ function summarizeToolSection(tools: ToolSectionItem[]) {
   ).length;
   const total = tools.length;
   const succeeded = total - running - failed - cancelled;
-  const allFailed = failed > 0 && succeeded === 0 && running === 0;
-  const partialFailed = failed > 0 && !allFailed;
+  // Only compute terminal statuses when the section is truly finished
+  // (i.e. a new message/thinking/turn-end appeared after this tool section, or chat is idle)
+  const settled = sectionFinished && running === 0;
+  const allFailed = settled && failed > 0 && succeeded === 0;
+  const partialFailed = settled && failed > 0 && !allFailed;
 
   // statusLabel: only show when it adds info beyond the title
   const statusLabel =
-    running > 0
+    !settled
       ? ""
       : partialFailed
         ? `${failed} failed`
@@ -4892,11 +4911,11 @@ function summarizeToolSection(tools: ToolSectionItem[]) {
   )
     title = "Waiting for permission";
   else if (edits.length > 0)
-    title = running > 0 ? "Editing files" : "Edits applied";
+    title = running > 0 || !settled ? "Editing files" : "Edits applied";
   else if (foregroundActions.length > 0)
-    title = running > 0 ? "Running actions" : "Actions complete";
+    title = running > 0 || !settled ? "Running actions" : "Actions complete";
   else if (backgroundActions.length > 0)
-    title = running > 0 ? "Inspecting code" : "Inspection complete";
+    title = running > 0 || !settled ? "Inspecting code" : "Inspection complete";
 
   // Merge edits on the same file: accumulate +/- and keep the latest tool id/status
   const editItems = (() => {
@@ -5101,6 +5120,7 @@ function ToolSectionView({
   tools,
   expanded,
   forceExpanded,
+  sectionFinished,
   onToggleSection,
   onFileClick,
 }: {
@@ -5108,6 +5128,7 @@ function ToolSectionView({
   tools: ToolSectionItem[];
   expanded: boolean;
   forceExpanded: boolean;
+  sectionFinished: boolean;
   onToggleSection: (sectionId: string) => void;
   onFileClick?: (
     filePath: string,
@@ -5116,9 +5137,10 @@ function ToolSectionView({
   ) => void;
 }) {
   const sectionExpanded = forceExpanded || expanded;
-  const summary = useMemo(() => summarizeToolSection(tools), [tools]);
+  const summary = useMemo(() => summarizeToolSection(tools, sectionFinished), [tools, sectionFinished]);
   const [inspectionExpanded, setInspectionExpanded] = useState(false);
   const [actionExpanded, setActionExpanded] = useState(false);
+  const [actionItemsExpanded, setActionItemsExpanded] = useState(false);
   const hasDetails =
     summary.inspectionEntries.length > 0 ||
     summary.editItems.length > 0 ||
@@ -5299,7 +5321,7 @@ function ToolSectionView({
                   {(summary.visibleActionItems.length > 0 ||
                     summary.actionItemOverflow > 0) && (
                     <div className="flex flex-wrap gap-1.5">
-                      {summary.visibleActionItems.map((item) =>
+                      {(actionItemsExpanded ? summary.actionItems : summary.visibleActionItems).map((item) =>
                         item.fullLabel !== item.label ? (
                           <Tooltip key={item.key} content={item.fullLabel}>
                             <span
@@ -5323,10 +5345,13 @@ function ToolSectionView({
                           </span>
                         ),
                       )}
-                      {summary.actionItemOverflow > 0 && (
-                        <span className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_80%,var(--color-bg))] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)]">
+                      {summary.actionItemOverflow > 0 && !actionItemsExpanded && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setActionItemsExpanded(true); }}
+                          className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-border)_65%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_80%,var(--color-bg))] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)] hover:bg-[color-mix(in_srgb,var(--color-bg-secondary)_95%,var(--color-bg))] hover:text-[var(--color-text)] cursor-pointer transition-colors"
+                        >
                           +{summary.actionItemOverflow} more actions
-                        </span>
+                        </button>
                       )}
                     </div>
                   )}

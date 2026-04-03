@@ -30,6 +30,8 @@ pub struct AcpSessionHandle {
     pub agent_info: std::sync::RwLock<Option<(String, String, String)>>,
     /// 待处理的权限请求响应 channel
     pending_permission: Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
+    /// 序列化权限请求：同一时刻只能有一个 permission 等待用户响应
+    permission_lock: tokio::sync::Mutex<()>,
     /// 项目 key（用于磁盘持久化路径）
     project_key: String,
     /// 任务 ID（用于磁盘持久化路径）
@@ -377,6 +379,11 @@ impl acp::Client for GroveAcpClient {
         &self,
         args: acp::RequestPermissionRequest,
     ) -> acp::Result<acp::RequestPermissionResponse> {
+        // 序列化：同一时刻只能有一个 permission 等待用户响应。
+        // 如果 Agent 并行调用多个 tool 且各自需要 permission，后来的请求会排队
+        // 等前一个 permission 被用户回答后才发给前端。
+        let _guard = self.handle.permission_lock.lock().await;
+
         let desc = args.tool_call.fields.title.clone().unwrap_or_default();
         let options: Vec<PermOptionData> = args
             .options
@@ -983,6 +990,7 @@ pub async fn get_or_start_session(
                     cmd_tx,
                     agent_info: std::sync::RwLock::new(None),
                     pending_permission: Mutex::new(None),
+                    permission_lock: tokio::sync::Mutex::new(()),
                     project_key: config.project_key.clone(),
                     task_id: config.task_id.clone(),
                     chat_id: config.chat_id.clone(),
@@ -1579,6 +1587,11 @@ async fn connect_remote_agent(
 // === 公开 API ===
 
 impl AcpSessionHandle {
+    /// 是否有待处理的权限请求
+    pub fn has_pending_permission(&self) -> bool {
+        self.pending_permission.lock().unwrap().is_some()
+    }
+
     /// 响应待处理的权限请求
     pub fn respond_permission(&self, option_id: String) -> bool {
         if let Some(tx) = self.pending_permission.lock().unwrap().take() {

@@ -491,6 +491,18 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
         }
     }
 
+    // Sync permission state on reconnect: if the frontend has stale unresolved
+    // permission messages from history but the backend has no actual pending
+    // permission, send a synthetic PermissionResponse to clear them.
+    if is_existing && !handle.has_pending_permission() {
+        let msg = ServerMessage::PermissionResponse {
+            option_id: "Cancelled".to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = ws_sender.send(Message::Text(json.into())).await;
+        }
+    }
+
     // Send current pending queue state on (re)connect
     let queue = handle.get_queue();
     if !queue.is_empty() {
