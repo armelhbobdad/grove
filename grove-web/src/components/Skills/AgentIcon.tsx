@@ -1,5 +1,5 @@
 import { Bot } from "lucide-react";
-import { Claude, Gemini, Copilot, Cursor, Trae, Qwen, Kimi, OpenAI, Windsurf, OpenCode, Junie } from "@lobehub/icons";
+import { Claude, Gemini, Copilot, Cursor, Trae, Qwen, Kimi, OpenAI, Windsurf, OpenCode, Junie } from "../ui/AgentIcons";
 
 const ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   claude: Claude.Color,

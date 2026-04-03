@@ -343,7 +343,7 @@ pub fn abort_rebase(repo_path: &str) -> Result<()> {
 /// 执行: git diff --name-only --diff-filter=U
 pub fn get_conflict_files(repo_path: &str) -> Result<Vec<String>> {
     let output = git_cmd(repo_path, &["diff", "--name-only", "--diff-filter=U"])?;
-    Ok(output.lines().map(|s| s.to_string()).collect())
+    Ok(output.lines().map(git_unquote).collect())
 }
 
 /// 切换分支
@@ -442,6 +442,48 @@ pub fn build_commit_message(title: &str, notes: Option<&str>) -> String {
 
 /// 获取 git 跟踪的文件列表
 /// 执行: git ls-files
+/// Unquote a git-quoted path.
+/// Git wraps paths containing non-ASCII chars in double quotes with octal escapes,
+/// e.g. `"docs/\344\276\233\347\273\231.md"` → `docs/供给.md`
+pub(crate) fn git_unquote(s: &str) -> String {
+    if !(s.starts_with('"') && s.ends_with('"')) {
+        return s.to_string();
+    }
+    let inner = &s[1..s.len() - 1];
+    let mut bytes: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(d @ '0'..='3') => {
+                    // Octal escape: \NNN (3 digits)
+                    let mut val = d as u8 - b'0';
+                    for _ in 0..2 {
+                        if let Some(od @ '0'..='7') = chars.next() {
+                            val = val * 8 + (od as u8 - b'0');
+                        }
+                    }
+                    bytes.push(val);
+                }
+                Some('\\') => bytes.push(b'\\'),
+                Some('n') => bytes.push(b'\n'),
+                Some('t') => bytes.push(b'\t'),
+                Some('"') => bytes.push(b'"'),
+                Some(other) => {
+                    bytes.push(b'\\');
+                    let mut buf = [0u8; 4];
+                    bytes.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                }
+                None => bytes.push(b'\\'),
+            }
+        } else {
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).to_string())
+}
+
 pub fn list_files(repo_path: &str) -> Result<Vec<String>> {
     // List tracked files
     let tracked = git_cmd(repo_path, &["ls-files"])?;
@@ -450,11 +492,11 @@ pub fn list_files(repo_path: &str) -> Result<Vec<String>> {
     let untracked =
         git_cmd(repo_path, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
 
-    // Combine and deduplicate
+    // Combine and deduplicate, unquoting git's octal-escaped paths
     let mut all_files: Vec<String> = tracked
         .lines()
         .chain(untracked.lines())
-        .map(|s| s.to_string())
+        .map(git_unquote)
         .collect();
 
     // Remove duplicates (shouldn't happen, but just in case)
@@ -712,20 +754,23 @@ pub fn diff_stat(worktree_path: &str, target: &str) -> Result<Vec<DiffStatEntry>
 
     // 撤销 intent-to-add
     if has_untracked {
-        for path in untracked.lines() {
-            let path = path.trim();
+        for line in untracked.lines() {
+            let path = git_unquote(line.trim());
             if !path.is_empty() {
-                let _ = git_cmd_unit(worktree_path, &["reset", "HEAD", "--", path]);
+                let _ = git_cmd_unit(worktree_path, &["reset", "HEAD", "--", &path]);
             }
         }
     }
 
-    let status_map: std::collections::HashMap<&str, char> = name_status
+    let status_map: std::collections::HashMap<String, char> = name_status
         .lines()
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 2 {
-                Some((parts[1], parts[0].chars().next().unwrap_or('M')))
+                Some((
+                    git_unquote(parts[1]),
+                    parts[0].chars().next().unwrap_or('M'),
+                ))
             } else {
                 None
             }
@@ -739,12 +784,12 @@ pub fn diff_stat(worktree_path: &str, target: &str) -> Result<Vec<DiffStatEntry>
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 3 {
-                let path = parts[2].to_string();
+                let path = git_unquote(parts[2]);
                 // Skip symlinks (autolink creates symlinks to main repo)
                 if wt_base.join(&path).is_symlink() {
                     return None;
                 }
-                let status = status_map.get(path.as_str()).copied().unwrap_or('M');
+                let status = status_map.get(&path).copied().unwrap_or('M');
                 Some(DiffStatEntry {
                     status,
                     path,
@@ -787,10 +832,10 @@ pub fn get_raw_diff(worktree_path: &str, target: &str) -> Result<String> {
     if has_untracked {
         // git reset 只影响 index，不影响工作区
         // 只 reset 那些是 intent-to-add 的文件（即之前 untracked 的）
-        for path in untracked.lines() {
-            let path = path.trim();
+        for line in untracked.lines() {
+            let path = git_unquote(line.trim());
             if !path.is_empty() {
-                let _ = git_cmd_unit(worktree_path, &["reset", "HEAD", "--", path]);
+                let _ = git_cmd_unit(worktree_path, &["reset", "HEAD", "--", &path]);
             }
         }
     }
@@ -927,7 +972,7 @@ pub fn create_worktree_symlinks(
     // 解析 git 输出,获取所有被 ignore 的路径
     let ignored_paths: Vec<String> = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .map(|s| s.trim_end_matches('/').to_string()) // 去除末尾的 /
+        .map(|s| git_unquote(s.trim_end_matches('/'))) // 去除末尾的 / 并解码转义路径
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -1139,5 +1184,28 @@ mod tests {
     fn test_build_commit_message_trims_notes() {
         let msg = build_commit_message("Title", Some("\n  content here  \n\n"));
         assert_eq!(msg, "Title\n\n## Notes\n\ncontent here");
+    }
+
+    #[test]
+    fn test_git_unquote_plain() {
+        assert_eq!(git_unquote("README.md"), "README.md");
+    }
+
+    #[test]
+    fn test_git_unquote_chinese() {
+        // "docs/01-\344\276\233\347\273\231.md" → "docs/01-供给.md"
+        assert_eq!(
+            git_unquote(r#""docs/01-\344\276\233\347\273\231.md""#),
+            "docs/01-供给.md"
+        );
+    }
+
+    #[test]
+    fn test_git_unquote_mixed() {
+        // "03-Proxy\345\261\202\350\256\276\350\256\241.md" → "03-Proxy层设计.md"
+        assert_eq!(
+            git_unquote(r#""03-Proxy\345\261\202\350\256\276\350\256\241.md""#),
+            "03-Proxy层设计.md"
+        );
     }
 }

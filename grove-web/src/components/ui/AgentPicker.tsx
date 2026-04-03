@@ -4,8 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, Check, Bot, Globe, Terminal, Settings } from "lucide-react";
 import type { CustomAgent } from "../../api/config";
 
-// Import Lobe icons for AI agents
-import { Claude, Gemini, Copilot, Cursor, Trae, Qwen, Kimi, OpenAI, Junie, OpenCode } from "@lobehub/icons";
+import { Claude, Gemini, Copilot, Cursor, Trae, Qwen, Kimi, OpenAI, Junie, OpenCode } from "./AgentIcons";
 
 interface AgentOption {
   id: string;

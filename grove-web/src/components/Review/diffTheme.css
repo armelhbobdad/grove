@@ -1301,7 +1301,7 @@ td.diff-code.diff-line-highlighted::before {
 /* File body — flex layout for drawer */
 .diff-file-body {
   display: flex;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .diff-file-body-main {
@@ -1322,10 +1322,8 @@ td.diff-code.diff-line-highlighted::before {
   position: relative;
   width: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   border-left: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
   background: var(--color-bg);
   transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
               min-width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
@@ -1381,8 +1379,6 @@ td.diff-code.diff-line-highlighted::before {
 }
 
 .preview-drawer-content {
-  flex: 1;
-  overflow: auto;
   padding: 12px;
 }
 

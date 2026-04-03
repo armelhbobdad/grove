@@ -40,7 +40,7 @@ fn get_git_tracked_files(worktree_path: &Path) -> HashSet<PathBuf> {
             let stdout = String::from_utf8_lossy(&output.stdout);
             stdout
                 .lines()
-                .map(|line| PathBuf::from(line.trim()))
+                .map(|line| PathBuf::from(crate::git::git_unquote(line.trim())))
                 .collect()
         }
         _ => HashSet::new(),

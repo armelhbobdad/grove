@@ -21,7 +21,7 @@ import { FileTreeSidebar } from './FileTreeSidebar';
 import { DiffFileView, resetGlobalMatchIndex } from './DiffFileView';
 import { ConversationSidebar } from './ConversationSidebar';
 import { CodeSearchBar } from './CodeSearchBar';
-import { MessageSquare, ChevronUp, ChevronDown, PanelLeftClose, PanelLeftOpen, Crosshair, GitCompare, FileText, RefreshCw } from 'lucide-react';
+import { MessageSquare, ChevronUp, ChevronDown, PanelLeftClose, PanelLeftOpen, Crosshair, GitCompare, FileText, RefreshCw, Code, Columns2, Eye } from 'lucide-react';
 import { VersionSelector } from './VersionSelector';
 import { useIsMobile } from '../../hooks';
 import { useHotkeys } from '../../hooks/useHotkeys';
@@ -44,11 +44,8 @@ interface DiffReviewPageProps {
   navigateToFile?: FileNavRequest | null;
 }
 
-function isMarkdownPath(path: string | null | undefined): boolean {
-  if (!path) return false;
-  const lower = path.toLowerCase();
-  return lower.endsWith('.md') || lower.endsWith('.markdown');
-}
+import { getPreviewRenderer } from './previewRenderers';
+
 
 export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: DiffReviewPageProps) {
   const { isMobile } = useIsMobile();
@@ -57,7 +54,8 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [viewType, setViewType] = useState<'unified' | 'split'>('unified');
   const [viewMode, setViewMode] = useState<'diff' | 'full'>('diff');
-  const [previewOpenFiles, setPreviewOpenFiles] = useState<Set<string>>(new Set());
+  // Track per-file user overrides: true = force open, false = force closed, absent = follow displayMode
+  const [previewOverrides, setPreviewOverrides] = useState<Map<string, boolean>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [comments, setComments] = useState<ReviewCommentEntry[]>([]);
@@ -100,6 +98,7 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
     }
   }, [isMobile]);
   const [focusMode, setFocusMode] = useState(true); // Default to true for better performance
+  const [displayMode, setDisplayMode] = useState<'code' | 'split' | 'preview'>('code');
   const [fromVersion, setFromVersion] = useState('target');
   const [toVersion, setToVersion] = useState('latest');
   const [collapsedCommentIds, setCollapsedCommentIds] = useState<Set<number>>(new Set());
@@ -634,16 +633,23 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
   }, [isMobile]);
 
   const handleTogglePreview = useCallback((path: string) => {
-    setPreviewOpenFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+    setPreviewOverrides((prev) => {
+      const next = new Map(prev);
+      const renderer = getPreviewRenderer(path);
+      const defaultOpen = displayMode !== 'code' && !!renderer;
+      const currentlyOpen = prev.has(path) ? prev.get(path)! : defaultOpen;
+      if (!currentlyOpen === defaultOpen) {
+        // Toggling back to default — remove override
+        next.delete(path);
+      } else {
+        next.set(path, !currentlyOpen);
+      }
       return next;
     });
-  }, []);
+  }, [displayMode]);
 
   const handleToggleActivePreview = useCallback(() => {
-    if (!activeFilePath || !isMarkdownPath(activeFilePath)) return;
+    if (!activeFilePath || !getPreviewRenderer(activeFilePath)) return;
     handleTogglePreview(activeFilePath);
   }, [activeFilePath, handleTogglePreview]);
 
@@ -1093,6 +1099,20 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
             <Crosshair style={{ width: 12, height: 12 }} />
             Focus
           </button>
+          <button
+            className="diff-toggle-pill"
+            onClick={() => setDisplayMode((v) => v === 'code' ? 'split' : v === 'split' ? 'preview' : 'code')}
+            title={`Display: ${displayMode === 'code' ? 'Code' : displayMode === 'split' ? 'Split' : 'Preview'} — click to cycle`}
+          >
+            {displayMode === 'code' ? (
+              <Code style={{ width: 12, height: 12 }} />
+            ) : displayMode === 'split' ? (
+              <Columns2 style={{ width: 12, height: 12 }} />
+            ) : (
+              <Eye style={{ width: 12, height: 12 }} />
+            )}
+            {displayMode === 'code' ? 'Code' : displayMode === 'split' ? 'Split' : 'Preview'}
+          </button>
           {viewMode === 'diff' && (
             <div className="diff-view-toggle">
               <button
@@ -1204,15 +1224,21 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile }: 
                   ? displayFiles.filter((f) => f.new_path === validSelectedFile)
                   : displayFiles
                 ).map((file) => {
-                  const isMarkdownFile = isMarkdownPath(file.new_path);
+                  const renderer = getPreviewRenderer(file.new_path);
+                  const defaultOpen = displayMode !== 'code' && !!renderer;
+                  const isPreviewOpen = previewOverrides.has(file.new_path)
+                    ? previewOverrides.get(file.new_path)!
+                    : defaultOpen;
                   return (
                     <DiffFileView
                       key={file.new_path}
                       file={file}
                       viewType={viewType}
                       isActive={validSelectedFile === file.new_path}
-                      isPreviewOpen={previewOpenFiles.has(file.new_path)}
-                      onTogglePreview={isMarkdownFile ? handleTogglePreview : undefined}
+                      isPreviewOpen={isPreviewOpen}
+                      onTogglePreview={renderer ? handleTogglePreview : undefined}
+                      previewRenderer={renderer}
+                      defaultExpanded={displayMode === 'preview'}
                       projectId={projectId}
                       taskId={taskId}
                       comments={getFileComments(file.new_path)}

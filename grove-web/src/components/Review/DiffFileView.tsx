@@ -9,7 +9,8 @@ import { detectLanguage, highlightLines } from './syntaxHighlight';
 import { GutterAvatar } from './AgentAvatar';
 import { useFileMention } from '../../hooks';
 import { FileMentionDropdown } from '../ui';
-import { MarkdownRenderer } from '../ui/MarkdownRenderer';
+import { MarkdownRenderer, MermaidBlock } from '../ui/MarkdownRenderer';
+import { ImagePreview, type PreviewRenderer } from './previewRenderers';
 
 // ============================================================================
 // Types for context line expansion
@@ -209,6 +210,8 @@ interface DiffFileViewProps {
   codeSearchCaseSensitive?: boolean;
   scrollToLine?: { line: number; seq?: number }; // Line number to scroll to and expand if in collapsed gap
   mentionItems?: import('../../utils/fileMention').MentionItem[] | null;
+  previewRenderer?: PreviewRenderer;
+  defaultExpanded?: boolean;
 }
 
 export function DiffFileView({
@@ -255,6 +258,8 @@ export function DiffFileView({
   codeSearchCaseSensitive = false,
   scrollToLine,
   mentionItems,
+  previewRenderer,
+  defaultExpanded = false,
 }: DiffFileViewProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
@@ -405,11 +410,16 @@ export function DiffFileView({
   }, [file.hunks, language]);
 
   // Drawer expand state
-  const [drawerExpanded, setDrawerExpanded] = useState(false);
+  const [drawerExpanded, setDrawerExpanded] = useState(defaultExpanded);
   // Drawer width as fraction (0..1), null = default 50%
   const [drawerWidthFraction, setDrawerWidthFraction] = useState<number | null>(null);
   const draggingRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Sync expanded state with defaultExpanded prop
+  useEffect(() => {
+    setDrawerExpanded(defaultExpanded);
+  }, [defaultExpanded]);
 
   // Reset drawer state when preview closes
   useEffect(() => {
@@ -865,7 +875,7 @@ export function DiffFileView({
             <button
               className={`diff-file-preview-btn${isPreviewOpen ? ' active' : ''}`}
               onClick={() => onTogglePreview(file.new_path)}
-              title={isPreviewOpen ? 'Close preview' : 'Preview markdown'}
+              title={isPreviewOpen ? 'Close preview' : (previewRenderer?.label ?? 'Preview')}
             >
               <Eye style={{ width: 14, height: 14 }} />
             </button>
@@ -1129,11 +1139,22 @@ export function DiffFileView({
                   </button>
                 </div>
                 <div className="preview-drawer-content">
-                  {viewMode === 'full' ? (
+                  {previewRenderer && previewRenderer.id === 'image' ? (
+                    <ImagePreview projectId={projectId} taskId={taskId} file={file} />
+                  ) : previewRenderer && !previewRenderer.supportsDiffSegments ? (
+                    (() => {
+                      const content = viewMode === 'full' && fullFileContent != null
+                        ? fullFileContent
+                        : file.hunks.flatMap(h => h.lines.filter(l => l.line_type !== 'delete').map(l => l.content)).join('\n');
+                      return content.trim()
+                        ? previewRenderer.renderFull({ content })
+                        : <div className="preview-loading">No content to render</div>;
+                    })()
+                  ) : viewMode === 'full' ? (
                     isLoadingFullFile ? (
                       <div className="preview-loading">Loading content...</div>
                     ) : fullFileContent != null ? (
-                      <MarkdownRenderer content={fullFileContent} />
+                      (previewRenderer ?? { renderFull: ({ content }: { content: string }) => <MarkdownRenderer content={content} /> }).renderFull({ content: fullFileContent })
                     ) : (
                       <div className="preview-loading">Failed to load file content</div>
                     )
@@ -1143,6 +1164,8 @@ export function DiffFileView({
                         <div key={seg.id} className={`preview-block-${seg.kind}`}>
                           <MarkdownRenderer content={seg.content} />
                         </div>
+                      ) : seg.language === 'mermaid' ? (
+                        <MermaidBlock key={seg.id} code={seg.lines.map(l => l.content).join('\n')} />
                       ) : (
                         <pre key={seg.id} className="preview-code-block">
                           <code>

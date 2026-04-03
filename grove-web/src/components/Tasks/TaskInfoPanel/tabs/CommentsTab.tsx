@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { MessageSquare, CheckCircle, Clock, FileCode, Loader2 } from "lucide-react";
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MarkdownRenderer } from "../../../ui";
 import type { Task } from "../../../../data/types";
 import { useProject } from "../../../../context/ProjectContext";
 import { getReviewComments, type ReviewCommentEntry } from "../../../../api";
@@ -115,9 +114,7 @@ function ReviewCommentCard({ comment }: { comment: ReviewCommentEntry }) {
           <span className="text-xs text-[var(--color-text-muted)]">{formatTimestamp(comment.timestamp)}</span>
         </div>
         <div className="text-sm text-[var(--color-text)] pl-[26px] markdown-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {comment.content}
-          </ReactMarkdown>
+          <MarkdownRenderer content={comment.content} />
         </div>
 
         {/* Replies */}
@@ -129,9 +126,7 @@ function ReviewCommentCard({ comment }: { comment: ReviewCommentEntry }) {
               <span className="text-xs text-[var(--color-text-muted)]">{formatTimestamp(reply.timestamp)}</span>
             </div>
             <div className="text-sm text-[var(--color-text-muted)] pl-[24px] markdown-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {reply.content}
-              </ReactMarkdown>
+              <MarkdownRenderer content={reply.content} />
             </div>
           </div>
         ))}

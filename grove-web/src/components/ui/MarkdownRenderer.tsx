@@ -1,6 +1,7 @@
-import { Children, isValidElement } from "react";
+import { Children, isValidElement, useState, useEffect, useRef, useId } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import mermaid from "mermaid";
 import { VSCodeIcon } from "./VSCodeIcon";
 
 // Match file paths like `path/to/file.ext` or `path/to/file.ext:123`
@@ -10,6 +11,69 @@ const FILE_PATH_RE = /^([\w./-]+\/[\w./-]+\.[\w]+)(?::(\d+))?[,.]?$/;
 // Match href that looks like a file path (possibly with #L<line> anchor)
 // e.g. "service/foo.go", "service/foo.go:505", or ends with "#L505"
 const FILE_HREF_RE = /^(?!https?:\/\/|mailto:)([\w./@-]+\/[\w./@-]+\.[\w]+)(?:[:#]L?(\d+))?$/;
+
+// Initialize mermaid once
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "dark",
+  themeVariables: {
+    darkMode: true,
+    background: "transparent",
+    primaryColor: "#3b82f6",
+    primaryTextColor: "#e2e8f0",
+    primaryBorderColor: "#475569",
+    lineColor: "#64748b",
+    secondaryColor: "#1e293b",
+    tertiaryColor: "#0f172a",
+    fontFamily: "inherit",
+  },
+});
+
+export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const uniqueId = useId();
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const id = `mermaid-${uniqueId.replace(/:/g, "")}`;
+    mermaid
+      .render(id, code)
+      .then(({ svg: rendered }) => {
+        if (!cancelled) setSvg(rendered);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => { cancelled = true; };
+  }, [code, uniqueId]);
+
+  if (error) {
+    return (
+      <pre className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-3 my-2 whitespace-pre-wrap break-words text-xs font-mono text-[var(--color-danger)]">
+        Mermaid error: {error}
+      </pre>
+    );
+  }
+
+  if (!svg) {
+    return (
+      <div className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-4 my-2 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+        Rendering diagram...
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-3 my-2 overflow-x-auto flex justify-center [&_svg]:max-w-full"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+MermaidBlock.displayName = 'MermaidBlock';
 
 interface MarkdownRendererProps {
   content: string;
@@ -152,6 +216,10 @@ export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps
         code: ({ className, children }) => {
           const isBlock = className?.startsWith("language-");
           if (isBlock) {
+            if (className === "language-mermaid") {
+              const text = extractText(children);
+              return <MermaidBlock code={text} />;
+            }
             return (
               <code className="block text-xs font-mono">{children}</code>
             );
@@ -178,11 +246,18 @@ export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps
             </code>
           );
         },
-        pre: ({ children }) => (
-          <pre className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-3 my-2 whitespace-pre-wrap break-words text-xs font-mono text-[var(--color-text)]">
-            {children}
-          </pre>
-        ),
+        pre: ({ children }) => {
+          // If the child is a component (e.g. MermaidBlock) rather than a native <code>, pass through
+          const child = Children.toArray(children)[0];
+          if (isValidElement(child) && typeof child.type !== 'string') {
+            return <>{children}</>;
+          }
+          return (
+            <pre className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-3 my-2 whitespace-pre-wrap break-words text-xs font-mono text-[var(--color-text)]">
+              {children}
+            </pre>
+          );
+        },
         hr: () => (
           <hr className="border-[var(--color-border)] my-3" />
         ),
