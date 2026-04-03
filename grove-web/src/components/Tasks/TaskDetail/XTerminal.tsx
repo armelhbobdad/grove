@@ -106,9 +106,15 @@ export function XTerminal({
     };
 
     // --- Try cache reattach ---
-    const cached: CachedTerminal | undefined = currentCacheKey
+    let cached: CachedTerminal | undefined = currentCacheKey
       ? getCached(currentCacheKey)
       : undefined;
+
+    // If cached WebSocket is dead, dispose stale cache so a fresh terminal is created below
+    if (cached && cached.ws?.readyState !== WebSocket.OPEN) {
+      disposeTerminal(currentCacheKey!);
+      cached = undefined;
+    }
 
     if (cached) {
       // Move cached container back into the visible mount point
@@ -152,7 +158,7 @@ export function XTerminal({
           );
           onConnectedRef.current?.();
         } else {
-          // WS died while terminal was cached
+          // WS died while terminal was cached (shouldn't reach here due to pre-check above)
           onDisconnectedRef.current?.();
         }
       });
