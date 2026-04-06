@@ -5,6 +5,7 @@ pub mod comments;
 pub mod config;
 pub mod notes;
 pub mod skills;
+pub mod taskgroups;
 pub mod tasks;
 pub mod workspace;
 

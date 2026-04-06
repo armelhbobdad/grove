@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, ArrowLeft, ChevronRight, Laptop } from "lucide-react";
+import { Search, ArrowLeft, ChevronRight, Laptop, Radio, Plus, Folder } from "lucide-react";
 import { TaskInfoPanel } from "../Tasks/TaskInfoPanel";
 import { TaskView, type TaskViewHandle } from "../Tasks/TaskView";
 import { CommitDialog, ConfirmDialog, DirtyBranchDialog, MergeDialog } from "../Dialogs";
@@ -16,8 +16,11 @@ import {
   useTaskNavigation,
   usePostMergeArchive,
   useTaskOperations,
+  useTaskGroups,
+  useRadioEvents,
   buildCommands,
 } from "../../hooks";
+import { RadioConnectDialog } from "./RadioConnectDialog";
 import { useBlitzTasks } from "./useBlitzTasks";
 import { BlitzTaskListItem } from "./BlitzTaskListItem";
 import type { BlitzTask } from "../../data/types";
@@ -35,22 +38,56 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
   const { getTaskNotification, dismissNotification } = useNotifications();
   const { isMobile } = useIsMobile();
 
+  // TaskGroup state (folder-based)
+  const {
+    groups: taskGroups,
+    createGroup: createTaskGroup,
+    updateGroup: updateTaskGroup,
+    deleteGroup: deleteTaskGroup,
+    assignTask: assignTaskToGroup,
+    removeTask: removeTaskFromGroup,
+  } = useTaskGroups();
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [showNewGroupInput, setShowNewGroupInput] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const newGroupInputRef = useRef<HTMLInputElement | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState("");
+  const editGroupInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<{ id: string; name: string } | null>(null);
+  const [groupFolderContextMenu, setGroupFolderContextMenu] = useState<{ id: string; name: string; position: { x: number; y: number } } | null>(null);
+
+  // Radio connect dialog
+  const [showRadioConnect, setShowRadioConnect] = useState(false);
+
   // Blitz-specific state
   const [selectedBlitzTask, setSelectedBlitzTask] = useState<BlitzTask | null>(null);
   const [mobileShowDetail, setMobileShowDetail] = useState(false);
-  // Drag state — refs for synchronous access across DnD event handlers,
-  // state copies for rendering (isDragging/isDragOver visuals)
-  const dragSourceRef = useRef<"main" | "local" | null>(null);
-  const draggedIndexRef = useRef<number | null>(null);
-  const dragOverIndexRef = useRef<number | null>(null);
-  const draggedLocalKeyRef = useRef<string | null>(null);
-  const localDraggedIndexRef = useRef<number | null>(null);
-  const localDragOverIndexRef = useRef<number | null>(null);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [localDraggedIndex, setLocalDraggedIndex] = useState<number | null>(null);
-  const [localDragOverIndex, setLocalDragOverIndex] = useState<number | null>(null);
-  const [dragSource, setDragSource] = useState<"main" | "local" | null>(null);
+
+  // ── Unified drag-and-drop state ──────────────────────────────────────────
+  // Single ref tracks the drag source; render state tracks visual feedback
+  interface DragInfo {
+    source: "main" | "group" | "local";
+    taskKey: string;           // `${projectId}:${taskId}`
+    index: number;             // index in source list
+    groupId?: string;          // only if source === "group"
+  }
+  const dragInfoRef = useRef<DragInfo | null>(null);
+  const dropTargetRef = useRef<{ zone: "main" | "group" | "local"; index?: number; groupId?: string } | null>(null);
+  const [dragState, setDragState] = useState<{
+    source: "main" | "group" | "local" | null;
+    taskKey: string | null;
+    overZone: "main" | "group" | "local" | null;
+    overIndex: number | null;
+    overGroupId: string | null;
+  }>({ source: null, taskKey: null, overZone: null, overIndex: null, overGroupId: null });
+
+  const clearDrag = useCallback(() => {
+    dragInfoRef.current = null;
+    dropTargetRef.current = null;
+    setDragState({ source: null, taskKey: null, overZone: null, overIndex: null, overGroupId: null });
+  }, []);
+
   const [taskOrder, setTaskOrder] = useState<string[]>([]);
   const [localTasksExpanded, setLocalTasksExpanded] = useState(false);
   const [promotedLocalKeys, setPromotedLocalKeys] = useState<Set<string>>(new Set());
@@ -99,8 +136,42 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     setPendingArchiveConfirm,
   });
 
+  // Radio events: desktop receives focus/prompt events from Radio phone
+  const blitzTasksRef = useRef(blitzTasks);
+  blitzTasksRef.current = blitzTasks;
+  const radioFocusedTaskRef = useRef<string | null>(null);
+
+  const { radioClients } = useRadioEvents({
+    onFocusTask: useCallback((projectId: string, taskId: string) => {
+      const taskKey = `${projectId}:${taskId}`;
+      const bt = blitzTasksRef.current.find(
+        (t) => t.projectId === projectId && t.task.id === taskId,
+      );
+      if (!bt || bt.task.status === "archived") return;
+
+      setSelectedBlitzTask(bt);
+      pageHandlers.setInWorkspace(true);
+
+      // Only open chat panel on first focus for this task
+      if (radioFocusedTaskRef.current !== taskKey) {
+        radioFocusedTaskRef.current = taskKey;
+        setTimeout(() => {
+          taskViewRef.current?.ensurePanel("chat");
+        }, 200);
+      }
+    }, [pageHandlers]),
+  });
+  const radioConnected = radioClients > 0;
+
+  // Auto-close Radio connect dialog when a phone connects
+  useEffect(() => {
+    if (radioConnected && showRadioConnect) {
+      setShowRadioConnect(false);
+    }
+  }, [radioConnected, showRadioConnect]);
+
   // Filter tasks by search query (match task name, branch, or project name)
-  const filteredTasks = useMemo(() => {
+  const searchFilteredTasks = useMemo(() => {
     if (!pageState.searchQuery) return blitzTasks;
     const q = pageState.searchQuery.toLowerCase();
     return blitzTasks.filter(
@@ -111,20 +182,64 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     );
   }, [blitzTasks, pageState.searchQuery]);
 
+  const filteredTasks = searchFilteredTasks;
+
+  // Compute which tasks are in any TaskGroup (grouped vs ungrouped)
+  const groupedTaskKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const group of taskGroups) {
+      for (const slot of group.slots) {
+        keys.add(`${slot.project_id}:${slot.task_id}`);
+      }
+    }
+    return keys;
+  }, [taskGroups]);
+
+  // Get tasks for a specific group
+  const getGroupTasks = useCallback((group: { slots: { project_id: string; task_id: string }[] }) => {
+    const slotKeys = new Set(group.slots.map(s => `${s.project_id}:${s.task_id}`));
+    return filteredTasks.filter(bt => slotKeys.has(`${bt.projectId}:${bt.task.id}`));
+  }, [filteredTasks]);
+
+  // Stale slot cleanup: remove slots that don't match any task in blitzTasks
+  useEffect(() => {
+    if (taskGroups.length === 0 || blitzTasks.length === 0) return;
+    const allTaskKeys = new Set(blitzTasks.map(bt => `${bt.projectId}:${bt.task.id}`));
+    for (const group of taskGroups) {
+      for (const slot of group.slots) {
+        if (!allTaskKeys.has(`${slot.project_id}:${slot.task_id}`)) {
+          removeTaskFromGroup(group.id, slot.position);
+        }
+      }
+    }
+    // Only run when blitzTasks or taskGroups identity changes, not on every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blitzTasks, taskGroups]);
+
   // Keep selectedBlitzTask in sync with refreshed data
   const currentSelected = useMemo(() => {
     if (!selectedBlitzTask) return null;
     return filteredTasks.find((bt) => bt.task.id === selectedBlitzTask.task.id && bt.projectId === selectedBlitzTask.projectId) ?? null;
   }, [filteredTasks, selectedBlitzTask]);
 
-  // Separate filtered tasks into main-eligible and folder-local
-  const mainEligibleTasks = useMemo(() => filteredTasks.filter(bt =>
-    !bt.task.isLocal || promotedLocalKeys.has(`${bt.projectId}:${bt.task.id}`)
-  ), [filteredTasks, promotedLocalKeys]);
+  // Main-eligible tasks: ungrouped non-local + promoted local tasks
+  const mainEligibleTasks = useMemo(() => {
+    return filteredTasks.filter(bt => {
+      // promoted local tasks go to main list
+      if (bt.task.isLocal && promotedLocalKeys.has(`${bt.projectId}:${bt.task.id}`)) return true;
+      // local tasks go to local folder
+      if (bt.task.isLocal) return false;
+      // grouped tasks go to their group folder
+      if (groupedTaskKeys.has(`${bt.projectId}:${bt.task.id}`)) return false;
+      return true;
+    });
+  }, [filteredTasks, promotedLocalKeys, groupedTaskKeys]);
 
   const allFolderLocalTasks = useMemo(() => filteredTasks.filter(bt =>
-    bt.task.isLocal && !promotedLocalKeys.has(`${bt.projectId}:${bt.task.id}`)
-  ), [filteredTasks, promotedLocalKeys]);
+    bt.task.isLocal
+    && !promotedLocalKeys.has(`${bt.projectId}:${bt.task.id}`)
+    && !groupedTaskKeys.has(`${bt.projectId}:${bt.task.id}`)
+  ), [filteredTasks, promotedLocalKeys, groupedTaskKeys]);
 
   // Initialize main task order (only main-eligible tasks)
   useEffect(() => {
@@ -161,8 +276,18 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     return [...ordered, ...newOnes];
   }, [allFolderLocalTasks, localTaskOrder]);
 
-  // Combined for navigation (main + visible folder locals)
-  const displayTasks = useMemo(() => [...mainListTasks, ...folderLocalTasks], [mainListTasks, folderLocalTasks]);
+  // Combined for navigation: main + group folder tasks (if expanded) + local folder tasks
+  const expandedGroupTasks = useMemo(() => {
+    const tasks: BlitzTask[] = [];
+    for (const group of taskGroups) {
+      if (expandedGroups.has(group.id)) {
+        tasks.push(...getGroupTasks(group));
+      }
+    }
+    return tasks;
+  }, [taskGroups, expandedGroups, getGroupTasks]);
+
+  const displayTasks = useMemo(() => [...mainListTasks, ...expandedGroupTasks, ...folderLocalTasks], [mainListTasks, expandedGroupTasks, folderLocalTasks]);
 
   // Task selection handlers (Blitz-specific: handle BlitzTask)
   const handleSelectTask = useCallback((bt: BlitzTask) => {
@@ -226,94 +351,6 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     };
   }, [displayTasks, mainListTasks, handleSelectTask, getTaskNotification, dismissNotification]);
 
-  // Helper: set drag ref + state together
-  const setDrag = (source: "main" | "local" | null, idx: number | null, overIdx: number | null, localKey: string | null) => {
-    dragSourceRef.current = source;
-    draggedIndexRef.current = source === "main" ? idx : null;
-    dragOverIndexRef.current = source === "main" ? overIdx : null;
-    draggedLocalKeyRef.current = localKey;
-    localDraggedIndexRef.current = source === "local" ? idx : null;
-    localDragOverIndexRef.current = source === "local" ? overIdx : null;
-    setDragSource(source);
-    setDraggedIndex(source === "main" ? idx : null);
-    setDragOverIndex(source === "main" ? overIdx : null);
-    setLocalDraggedIndex(source === "local" ? idx : null);
-    setLocalDragOverIndex(source === "local" ? overIdx : null);
-  };
-
-  // Drag and drop handlers — main list
-  const handleDragStart = (index: number) => {
-    dragSourceRef.current = "main";
-    draggedIndexRef.current = index;
-    dragOverIndexRef.current = null;
-    setDraggedIndex(index);
-    setDragSource("main");
-  };
-
-  const handleDragOver = (index: number) => {
-    if (dragSourceRef.current !== "main") return;
-    if (draggedIndexRef.current === null || draggedIndexRef.current === index) return;
-    dragOverIndexRef.current = index;
-    setDragOverIndex(index);
-  };
-
-  const handleDragEnd = () => {
-    const src = dragSourceRef.current;
-    const from = draggedIndexRef.current;
-    const to = dragOverIndexRef.current;
-    if (src === "main" && from !== null && to !== null && from !== to) {
-      const keys = mainListTasks.map(bt => `${bt.projectId}:${bt.task.id}`);
-      const [movedItem] = keys.splice(from, 1);
-      keys.splice(to, 0, movedItem);
-      setTaskOrder(keys);
-    }
-    setDrag(null, null, null, null);
-  };
-
-  const handleDragLeave = () => {
-    dragOverIndexRef.current = null;
-    setDragOverIndex(null);
-  };
-
-  // Drag and drop handlers — local folder
-  const handleLocalDragStart = (index: number, bt: BlitzTask) => {
-    dragSourceRef.current = "local";
-    localDraggedIndexRef.current = index;
-    localDragOverIndexRef.current = null;
-    draggedLocalKeyRef.current = `${bt.projectId}:${bt.task.id}`;
-    setLocalDraggedIndex(index);
-    setDragSource("local");
-  };
-
-  const handleLocalDragOver = (index: number) => {
-    if (dragSourceRef.current !== "local") return;
-    if (localDraggedIndexRef.current === null || localDraggedIndexRef.current === index) return;
-    localDragOverIndexRef.current = index;
-    setLocalDragOverIndex(index);
-  };
-
-  const handleLocalDragEnd = () => {
-    const src = dragSourceRef.current;
-    const from = localDraggedIndexRef.current;
-    const to = localDragOverIndexRef.current;
-    if (src === "local" && from !== null && to !== null && from !== to) {
-      const currentOrder = localTaskOrder.length > 0
-        ? [...localTaskOrder]
-        : folderLocalTasks.map(bt => `${bt.projectId}:${bt.task.id}`);
-      if (from < currentOrder.length && to < currentOrder.length) {
-        const [movedItem] = currentOrder.splice(from, 1);
-        currentOrder.splice(to, 0, movedItem);
-        setLocalTaskOrder(currentOrder);
-      }
-    }
-    setDrag(null, null, null, null);
-  };
-
-  const handleLocalDragLeave = () => {
-    localDragOverIndexRef.current = null;
-    setLocalDragOverIndex(null);
-  };
-
   // Demote a promoted local task back to folder
   const handleDemoteLocal = useCallback((bt: BlitzTask) => {
     const key = `${bt.projectId}:${bt.task.id}`;
@@ -328,55 +365,156 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     );
   }, []);
 
-  // Handle drop on main list area (promote local task from folder)
-  const handleMainListDragOver = useCallback((e: React.DragEvent) => {
-    if (dragSourceRef.current === "local") {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-    }
+  // ── Unified drag handlers ───────────────────────────────────────────────
+
+  const startDrag = useCallback((source: "main" | "group" | "local", index: number, taskKey: string, groupId?: string) => {
+    dragInfoRef.current = { source, taskKey, index, groupId };
+    setDragState({ source, taskKey, overZone: null, overIndex: null, overGroupId: null });
   }, []);
 
-  const handleMainListDrop = useCallback((e: React.DragEvent) => {
-    if (dragSourceRef.current !== "local") return;
+  const handleItemDragOver = useCallback((zone: "main" | "group" | "local", index: number, groupId?: string) => {
+    if (!dragInfoRef.current) return;
+    dropTargetRef.current = { zone, index, groupId };
+    setDragState(prev => ({ ...prev, overZone: zone, overIndex: index, overGroupId: groupId ?? null }));
+  }, []);
+
+  const handleZoneDragOver = useCallback((e: React.DragEvent, zone: "main" | "group" | "local", groupId?: string) => {
+    if (!dragInfoRef.current) return;
+    // Don't accept drop from same group to same group header (only to items within)
     e.preventDefault();
-    const key = draggedLocalKeyRef.current;
-    if (key) {
-      setPromotedLocalKeys(prev => new Set([...prev, key]));
-      setTaskOrder(prev => prev.includes(key) ? prev : [...prev, key]);
-      setLocalTaskOrder(prev => prev.filter(k => k !== key));
-    }
-    setDrag(null, null, null, null);
+    e.dataTransfer.dropEffect = "move";
+    dropTargetRef.current = { zone, index: -1, groupId };
+    setDragState(prev => ({ ...prev, overZone: zone, overIndex: null, overGroupId: groupId ?? null }));
   }, []);
 
-  // Handle drop on local folder (demote promoted local task from main list)
-  const [localFolderDragOver, setLocalFolderDragOver] = useState(false);
-  const handleLocalFolderDragOver = useCallback((e: React.DragEvent) => {
-    if (dragSourceRef.current === "main" && draggedIndexRef.current !== null) {
-      const bt = mainListTasks[draggedIndexRef.current];
-      if (bt?.task.isLocal) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        setLocalFolderDragOver(true);
+  const handleDragLeave = useCallback(() => {
+    dropTargetRef.current = null;
+    setDragState(prev => ({ ...prev, overZone: null, overIndex: null, overGroupId: null }));
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const info = dragInfoRef.current;
+    const target = dropTargetRef.current;
+    if (!info || !target) { clearDrag(); return; }
+
+    const { source, taskKey, groupId: srcGroupId } = info;
+    const { zone: targetZone, groupId: tgtGroupId } = target;
+    const targetIndex = target.index ?? -1;
+
+    // Find the BlitzTask
+    const bt = blitzTasks.find(b => `${b.projectId}:${b.task.id}` === taskKey);
+    if (!bt) { clearDrag(); return; }
+
+    const [projectId, taskId] = [bt.projectId, bt.task.id];
+
+    // ── Same zone reorder ──
+    if (source === targetZone && targetIndex >= 0) {
+      if (source === "main" && info.index !== targetIndex) {
+        const keys = mainListTasks.map(b => `${b.projectId}:${b.task.id}`);
+        const [moved] = keys.splice(info.index, 1);
+        keys.splice(targetIndex, 0, moved);
+        setTaskOrder(keys);
+      } else if (source === "local" && info.index !== targetIndex) {
+        const currentOrder = localTaskOrder.length > 0
+          ? [...localTaskOrder]
+          : folderLocalTasks.map(b => `${b.projectId}:${b.task.id}`);
+        if (info.index < currentOrder.length && targetIndex < currentOrder.length) {
+          const [moved] = currentOrder.splice(info.index, 1);
+          currentOrder.splice(targetIndex, 0, moved);
+          setLocalTaskOrder(currentOrder);
+        }
+      } else if (source === "group" && srcGroupId === tgtGroupId && srcGroupId && info.index !== targetIndex) {
+        // Reorder within same group: swap slot positions
+        const group = taskGroups.find(g => g.id === srcGroupId);
+        if (group) {
+          const groupTaskList = getGroupTasks(group);
+          if (info.index < groupTaskList.length && targetIndex < groupTaskList.length) {
+            const srcBt = groupTaskList[info.index];
+            const tgtBt = groupTaskList[targetIndex];
+            const srcSlot = group.slots.find(s => s.project_id === srcBt.projectId && s.task_id === srcBt.task.id);
+            const tgtSlot = group.slots.find(s => s.project_id === tgtBt.projectId && s.task_id === tgtBt.task.id);
+            if (srcSlot && tgtSlot) {
+              // Swap by removing both then re-adding with swapped positions
+              const srcPos = srcSlot.position;
+              const tgtPos = tgtSlot.position;
+              removeTaskFromGroup(srcGroupId, srcPos);
+              removeTaskFromGroup(srcGroupId, tgtPos);
+              setTimeout(() => {
+                assignTaskToGroup(srcGroupId, tgtPos, srcBt.projectId, srcBt.task.id);
+                assignTaskToGroup(srcGroupId, srcPos, tgtBt.projectId, tgtBt.task.id);
+              }, 50);
+            }
+          }
+        }
       }
+      clearDrag();
+      return;
     }
-  }, [mainListTasks]);
 
-  const handleLocalFolderDrop = useCallback((e: React.DragEvent) => {
-    if (dragSourceRef.current !== "main") return;
-    e.preventDefault();
-    const idx = draggedIndexRef.current;
-    if (idx !== null) {
-      const bt = mainListTasks[idx];
-      if (bt?.task.isLocal) {
+    // ── Cross-zone transfers ──
+
+    // Remove from source
+    if (source === "group" && srcGroupId) {
+      const group = taskGroups.find(g => g.id === srcGroupId);
+      const slot = group?.slots.find(s => s.project_id === projectId && s.task_id === taskId);
+      if (slot) removeTaskFromGroup(srcGroupId, slot.position);
+    } else if (source === "main" && bt.task.isLocal) {
+      // Was a promoted local in main list
+      handleDemoteLocal(bt);
+    } else if (source === "main") {
+      // Non-local from main — just remove from order (it'll stay ungrouped unless added to group)
+    }
+
+    // Add to target
+    if (targetZone === "group" && tgtGroupId) {
+      const group = taskGroups.find(g => g.id === tgtGroupId);
+      if (group) {
+        const usedPositions = new Set(group.slots.map(s => s.position));
+        let nextPos = 0;
+        for (let p = 1; p <= 9; p++) {
+          if (!usedPositions.has(p)) { nextPos = p; break; }
+        }
+        if (nextPos > 0) {
+          assignTaskToGroup(tgtGroupId, nextPos, projectId, taskId);
+          // If local task was in main, clean up promotion
+          if (bt.task.isLocal) {
+            const key = `${projectId}:${taskId}`;
+            setPromotedLocalKeys(prev => { const n = new Set(prev); n.delete(key); return n; });
+            setTaskOrder(prev => prev.filter(k => k !== key));
+          }
+        }
+      }
+    } else if (targetZone === "main") {
+      // Moving to main list (promote if local, ungroup if from group)
+      if (bt.task.isLocal && source === "local") {
+        setPromotedLocalKeys(prev => new Set([...prev, taskKey]));
+        setTaskOrder(prev => prev.includes(taskKey) ? prev : [...prev, taskKey]);
+        setLocalTaskOrder(prev => prev.filter(k => k !== taskKey));
+      }
+      // If from group, it'll naturally appear in ungrouped main list after removal
+    } else if (targetZone === "local") {
+      // Moving to local folder (only local tasks)
+      if (bt.task.isLocal && source === "main") {
         handleDemoteLocal(bt);
       }
     }
-    setDrag(null, null, null, null);
-    setLocalFolderDragOver(false);
-  }, [mainListTasks, handleDemoteLocal]);
 
-  const handleLocalFolderDragLeave = useCallback(() => {
-    setLocalFolderDragOver(false);
+    clearDrag();
+  }, [blitzTasks, mainListTasks, folderLocalTasks, localTaskOrder, taskGroups, getGroupTasks, assignTaskToGroup, removeTaskFromGroup, handleDemoteLocal, clearDrag]);
+
+
+  // Toggle group folder expansion
+  const toggleGroupExpanded = useCallback((groupId: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
   }, []);
 
   // Mobile: manual move up/down (replaces drag on touch devices)
@@ -474,8 +612,62 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
         }
       }
     }
+    // Add "Move to group" / "Remove from group" options
+    if (!task.isLocal) {
+      const bt = blitzTasks.find(b => b.task.id === task.id);
+      if (bt) {
+        const taskKey = `${bt.projectId}:${task.id}`;
+        // Check if task is in any group
+        const currentGroup = taskGroups.find(g => g.slots.some(s => `${s.project_id}:${s.task_id}` === taskKey));
+        if (currentGroup) {
+          const slot = currentGroup.slots.find(s => `${s.project_id}:${s.task_id}` === taskKey);
+          if (slot) {
+            items.push(
+              { id: "div-group", label: "", divider: true, onClick: () => {} },
+              {
+                id: "remove-from-group",
+                label: `Remove from ${currentGroup.name}`,
+                icon: Folder,
+                variant: "default" as const,
+                onClick: () => removeTaskFromGroup(currentGroup.id, slot.position),
+              },
+            );
+          }
+        }
+        // Show "Move to" options for groups the task is NOT in
+        const availableGroups = taskGroups.filter(g => !g.slots.some(s => `${s.project_id}:${s.task_id}` === taskKey));
+        if (availableGroups.length > 0) {
+          if (!currentGroup) {
+            items.push({ id: "div-group", label: "", divider: true, onClick: () => {} });
+          }
+          for (const group of availableGroups) {
+            const usedPositions = new Set(group.slots.map(s => s.position));
+            let nextPos = 0;
+            for (let p = 1; p <= 9; p++) {
+              if (!usedPositions.has(p)) { nextPos = p; break; }
+            }
+            if (nextPos > 0) {
+              items.push({
+                id: `move-to-group-${group.id}`,
+                label: `Move to ${group.name}`,
+                icon: Folder,
+                variant: "default" as const,
+                onClick: () => {
+                  // Remove from current group first if needed
+                  if (currentGroup) {
+                    const slot = currentGroup.slots.find(s => `${s.project_id}:${s.task_id}` === taskKey);
+                    if (slot) removeTaskFromGroup(currentGroup.id, slot.position);
+                  }
+                  assignTaskToGroup(group.id, nextPos, bt.projectId, task.id);
+                },
+              });
+            }
+          }
+        }
+      }
+    }
     return items;
-  }, [pageState.contextMenu, mainListTasks, promotedLocalKeys, opsHandlers, handleDoubleClickTask, handleDemoteLocal, currentSelected]);
+  }, [pageState.contextMenu, mainListTasks, promotedLocalKeys, opsHandlers, handleDoubleClickTask, handleDemoteLocal, currentSelected, taskGroups, blitzTasks, assignTaskToGroup, removeTaskFromGroup]);
 
   const hasTask = !!selectedTask;
   const isActive = hasTask && selectedTask.status !== "archived";
@@ -572,7 +764,7 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
     };
   }, [pageState.inWorkspace, setContextInWorkspace, setPageContext]);
   const pageOptionsRef = useRef<Parameters<typeof buildCommands>[0]>(null!);
-  // eslint-disable-next-line react-hooks/refs
+   
   pageOptionsRef.current = {
     taskActions: {
       selectedTask: selectedTask ?? null,
@@ -603,12 +795,27 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
       {/* Blitz Sidebar — replaces the normal app sidebar */}
       <aside className={`${isMobile ? (mobileShowDetail ? "hidden" : "w-full h-full") : "w-72 h-screen"} bg-[var(--color-bg)] ${isMobile ? "" : "border-r border-[var(--color-border)]"} flex flex-col flex-shrink-0`}>
         {/* Logo + Mode Brand */}
-        <div className="p-4">
+        <div className="p-4 flex items-center justify-between">
           <LogoBrand mode="blitz" onToggle={onSwitchToZen} />
+          <button
+            onClick={() => setShowRadioConnect(true)}
+            className={`relative flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded-lg transition-colors ${
+              radioConnected
+                ? "text-[#22c55e] border-[#22c55e]/30 bg-[#22c55e]/10 hover:bg-[#22c55e]/20"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-tertiary)] border-[var(--color-border)]"
+            }`}
+            title={radioConnected ? `Radio Connected (${radioClients} device${radioClients > 1 ? "s" : ""})` : "Connect Radio (Walkie-Talkie)"}
+          >
+            <Radio className="w-3.5 h-3.5" />
+            Radio
+            {radioConnected && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] animate-pulse" />
+            )}
+          </button>
         </div>
 
         {/* Search */}
-        <div className="p-3 border-b border-[var(--color-border)]">
+        <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-text-muted)]" />
             <input
@@ -630,6 +837,7 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
                 transition-all duration-200"
             />
           </div>
+
         </div>
 
         {/* Task List */}
@@ -674,17 +882,19 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
             </div>
           ) : (
             <div className="flex flex-col gap-1.5 px-2 py-1">
-              {/* Main task list (regular + promoted local tasks) — drop zone for local drag-out */}
+              {/* Main task list — universal drop zone */}
               <div
                 ref={mainListRef}
-                onDragOver={handleMainListDragOver}
-                onDrop={handleMainListDrop}
+                onDragOver={(e) => handleZoneDragOver(e, "main")}
+                onDrop={handleDrop}
+                onDragLeave={handleDragLeave}
                 className={`flex flex-col gap-1.5 rounded-lg transition-colors ${
-                  dragSource === "local" ? "bg-[var(--color-accent)]/5 ring-1 ring-[var(--color-accent)]/20 p-1" : ""
+                  dragState.source && dragState.source !== "main" && dragState.overZone === "main" ? "bg-[var(--color-accent)]/5 ring-1 ring-[var(--color-accent)]/20 p-1" : ""
                 }`}
               >
                 {mainListTasks.map((bt, index) => {
                   const notif = getTaskNotification(bt.task.id);
+                  const taskKey = `${bt.projectId}:${bt.task.id}`;
                   const isThisSelected =
                     currentSelected?.task.id === bt.task.id &&
                     currentSelected?.projectId === bt.projectId;
@@ -711,12 +921,12 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
                         onContextMenu={(e) => handleContextMenu(bt, e)}
                         notification={notif ? { level: notif.level } : undefined}
                         shortcutNumber={index < 10 ? (index === 9 ? 0 : index + 1) : undefined}
-                        onDragStart={() => handleDragStart(index)}
-                        onDragOver={() => handleDragOver(index)}
-                        onDragEnd={handleDragEnd}
+                        onDragStart={() => startDrag("main", index, taskKey)}
+                        onDragOver={() => handleItemDragOver("main", index)}
+                        onDragEnd={clearDrag}
                         onDragLeave={handleDragLeave}
-                        isDragging={draggedIndex === index}
-                        isDragOver={dragOverIndex === index}
+                        isDragging={dragState.taskKey === taskKey && dragState.source === "main"}
+                        isDragOver={dragState.overZone === "main" && dragState.overIndex === index}
                         onMoveUp={() => handleMoveTask(index, "up")}
                         onMoveDown={() => handleMoveTask(index, "down")}
                         isFirst={index === 0}
@@ -727,15 +937,188 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
                 })}
               </div>
 
+              {/* TaskGroup Folders */}
+              {taskGroups.map((group) => {
+                const groupTasks = getGroupTasks(group);
+                const isExpanded = expandedGroups.has(group.id);
+                const isDragOverThis = dragState.overZone === "group" && dragState.overGroupId === group.id;
+                return (
+                  <div
+                    key={group.id}
+                    className={`mt-1 rounded-lg transition-colors ${
+                      isDragOverThis ? "bg-[var(--color-highlight)]/10 ring-1 ring-[var(--color-highlight)]/30" : ""
+                    }`}
+                    onDragOver={(e) => handleZoneDragOver(e, "group", group.id)}
+                    onDrop={handleDrop}
+                    onDragLeave={handleDragLeave}
+                  >
+                    {editingGroupId === group.id ? (
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <Folder className="w-3.5 h-3.5 text-[var(--color-highlight)]" />
+                        <input
+                          ref={editGroupInputRef}
+                          type="text"
+                          value={editingGroupName}
+                          onChange={(e) => setEditingGroupName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && editingGroupName.trim()) {
+                              updateTaskGroup(group.id, { name: editingGroupName.trim() });
+                              setEditingGroupId(null);
+                            } else if (e.key === "Escape") {
+                              setEditingGroupId(null);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (editingGroupName.trim() && editingGroupName.trim() !== group.name) {
+                              updateTaskGroup(group.id, { name: editingGroupName.trim() });
+                            }
+                            setEditingGroupId(null);
+                          }}
+                          autoFocus
+                          className="flex-1 min-w-0 px-2 py-0.5 rounded-md text-xs bg-[var(--color-bg)] border border-[var(--color-highlight)] text-[var(--color-text)] outline-none"
+                        />
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => toggleGroupExpanded(group.id)}
+                        onDoubleClick={() => {
+                          setEditingGroupId(group.id);
+                          setEditingGroupName(group.name);
+                          setTimeout(() => editGroupInputRef.current?.select(), 50);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setGroupFolderContextMenu({
+                            id: group.id,
+                            name: group.name,
+                            position: { x: e.clientX, y: e.clientY },
+                          });
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+                        title="Double-click to rename, right-click for options"
+                      >
+                        <motion.span
+                          animate={{ rotate: isExpanded ? 90 : 0 }}
+                          transition={{ duration: 0.15 }}
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </motion.span>
+                        <Folder className="w-3.5 h-3.5 text-[var(--color-highlight)]" />
+                        <span>{group.name}</span>
+                        <span className="ml-auto px-1.5 py-0.5 rounded-full bg-[var(--color-bg-tertiary)] text-[10px]">
+                          {groupTasks.length}
+                        </span>
+                      </button>
+                    )}
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                          className="overflow-hidden"
+                        >
+                          <div className="flex flex-col gap-1.5 pt-1.5 pl-2">
+                            {groupTasks.length === 0 ? (
+                              <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] italic">
+                                Drop tasks here to add them to this group
+                              </div>
+                            ) : (
+                              groupTasks.map((bt, gIdx) => {
+                                const notif = getTaskNotification(bt.task.id);
+                                const isThisSelected =
+                                  currentSelected?.task.id === bt.task.id &&
+                                  currentSelected?.projectId === bt.projectId;
+                                const taskKey = `${bt.projectId}:${bt.task.id}`;
+                                return (
+                                  <BlitzTaskListItem
+                                    key={`group-${group.id}-${bt.projectId}-${bt.task.id}`}
+                                    blitzTask={bt}
+                                    isSelected={isThisSelected}
+                                    onClick={() => {
+                                      if (notif) {
+                                        dismissNotification(notif.project_id, notif.task_id);
+                                      }
+                                      handleSelectTask(bt);
+                                    }}
+                                    onDoubleClick={() => handleDoubleClickTask(bt)}
+                                    onContextMenu={(e) => handleContextMenu(bt, e)}
+                                    notification={notif ? { level: notif.level } : undefined}
+                                    onDragStart={() => startDrag("group", gIdx, taskKey, group.id)}
+                                    onDragOver={() => handleItemDragOver("group", gIdx, group.id)}
+                                    onDragEnd={clearDrag}
+                                    onDragLeave={handleDragLeave}
+                                    isDragging={dragState.taskKey === taskKey && dragState.source === "group"}
+                                    isDragOver={dragState.overZone === "group" && dragState.overGroupId === group.id && dragState.overIndex === gIdx}
+                                  />
+                                );
+                              })
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })}
+
+              {/* New group button / input */}
+              <div className="mt-1">
+                {showNewGroupInput ? (
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <Folder className="w-3.5 h-3.5 text-[var(--color-highlight)]" />
+                    <input
+                      ref={newGroupInputRef}
+                      type="text"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newGroupName.trim()) {
+                          createTaskGroup(newGroupName.trim());
+                          setNewGroupName("");
+                          setShowNewGroupInput(false);
+                        } else if (e.key === "Escape") {
+                          setNewGroupName("");
+                          setShowNewGroupInput(false);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (newGroupName.trim()) {
+                          createTaskGroup(newGroupName.trim());
+                        }
+                        setNewGroupName("");
+                        setShowNewGroupInput(false);
+                      }}
+                      placeholder="Group name..."
+                      autoFocus
+                      className="flex-1 min-w-0 px-2 py-0.5 rounded-md text-xs bg-[var(--color-bg)] border border-[var(--color-highlight)] text-[var(--color-text)] outline-none"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setShowNewGroupInput(true);
+                      setTimeout(() => newGroupInputRef.current?.focus(), 50);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-highlight)] hover:bg-[var(--color-bg-tertiary)] border border-dashed border-transparent hover:border-[var(--color-highlight)]/30 transition-all"
+                    title="Create new group"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>New group</span>
+                  </button>
+                )}
+              </div>
+
               {/* Collapsible Local Tasks folder — also shown when there are promoted locals (drop target) */}
               {(folderLocalTasks.length > 0 || promotedLocalKeys.size > 0) && (
                 <div
                   className={`mt-1 rounded-lg transition-colors ${
-                    localFolderDragOver ? "bg-[var(--color-accent)]/10 ring-1 ring-[var(--color-accent)]/30" : ""
+                    dragState.overZone === "local" ? "bg-[var(--color-accent)]/10 ring-1 ring-[var(--color-accent)]/30" : ""
                   }`}
-                  onDragOver={handleLocalFolderDragOver}
-                  onDrop={handleLocalFolderDrop}
-                  onDragLeave={handleLocalFolderDragLeave}
+                  onDragOver={(e) => handleZoneDragOver(e, "local")}
+                  onDrop={handleDrop}
+                  onDragLeave={handleDragLeave}
                 >
                   <button
                     onClick={() => setLocalTasksExpanded(!localTasksExpanded)}
@@ -765,6 +1148,7 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
                         <div className="flex flex-col gap-1.5 pt-1.5">
                           {folderLocalTasks.map((bt, index) => {
                             const notif = getTaskNotification(bt.task.id);
+                            const taskKey = `${bt.projectId}:${bt.task.id}`;
                             const isThisSelected =
                               currentSelected?.task.id === bt.task.id &&
                               currentSelected?.projectId === bt.projectId;
@@ -782,12 +1166,12 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
                                 onDoubleClick={() => handleDoubleClickTask(bt)}
                                 onContextMenu={(e) => handleContextMenu(bt, e)}
                                 notification={notif ? { level: notif.level } : undefined}
-                                onDragStart={() => handleLocalDragStart(index, bt)}
-                                onDragOver={() => handleLocalDragOver(index)}
-                                onDragEnd={handleLocalDragEnd}
-                                onDragLeave={handleLocalDragLeave}
-                                isDragging={localDraggedIndex === index}
-                                isDragOver={localDragOverIndex === index}
+                                onDragStart={() => startDrag("local", index, taskKey)}
+                                onDragOver={() => handleItemDragOver("local", index)}
+                                onDragEnd={clearDrag}
+                                onDragLeave={handleDragLeave}
+                                isDragging={dragState.taskKey === taskKey && dragState.source === "local"}
+                                isDragOver={dragState.overZone === "local" && dragState.overIndex === index}
                               />
                             );
                           })}
@@ -1037,6 +1421,52 @@ export function BlitzPage({ onSwitchToZen }: BlitzPageProps) {
       />
 
       <HelpOverlay isOpen={pageState.showHelp} onClose={() => pageHandlers.setShowHelp(false)} />
+
+      <RadioConnectDialog open={showRadioConnect} onClose={() => setShowRadioConnect(false)} />
+
+      {/* TaskGroup folder context menu */}
+      <ContextMenu
+        items={groupFolderContextMenu ? [
+          {
+            id: "rename-group",
+            label: "Rename",
+            variant: "default" as const,
+            onClick: () => {
+              setEditingGroupId(groupFolderContextMenu.id);
+              setEditingGroupName(groupFolderContextMenu.name);
+              setTimeout(() => editGroupInputRef.current?.select(), 50);
+              setGroupFolderContextMenu(null);
+            },
+          },
+          {
+            id: "delete-group",
+            label: "Delete",
+            variant: "danger" as const,
+            onClick: () => {
+              setPendingDeleteGroup({ id: groupFolderContextMenu.id, name: groupFolderContextMenu.name });
+              setGroupFolderContextMenu(null);
+            },
+          },
+        ] : []}
+        position={groupFolderContextMenu?.position ?? null}
+        onClose={() => setGroupFolderContextMenu(null)}
+      />
+
+      {/* TaskGroup delete confirmation */}
+      <ConfirmDialog
+        isOpen={!!pendingDeleteGroup}
+        title="Delete Group"
+        message={`Delete group "${pendingDeleteGroup?.name}"? Tasks in this group will not be deleted.`}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => {
+          if (pendingDeleteGroup) {
+            deleteTaskGroup(pendingDeleteGroup.id);
+          }
+          setPendingDeleteGroup(null);
+        }}
+        onCancel={() => setPendingDeleteGroup(null)}
+      />
     </>
   );
 }

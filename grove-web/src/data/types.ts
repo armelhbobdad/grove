@@ -115,3 +115,41 @@ export interface BlitzTask {
   projectId: string;
   projectName: string;
 }
+
+// ─── TaskGroup (Walkie-Talkie) ───────────────────────────────────────────────
+
+export interface TaskSlot {
+  position: number;
+  project_id: string;
+  task_id: string;
+  target_chat_id?: string;
+}
+
+export interface TaskGroup {
+  id: string;
+  name: string;
+  color?: string;
+  slots: TaskSlot[];
+  created_at: string;
+}
+
+export interface SlotStatus {
+  agent_status: "idle" | "busy" | "disconnected";
+  task_name: string;
+  project_name: string;
+}
+
+export interface GroupSnapshot {
+  id: string;
+  name: string;
+  color?: string;
+  slots: TaskSlot[];
+  created_at: string;
+  slot_statuses: Record<number, SlotStatus>;
+}
+
+export interface ChatRef {
+  id: string;
+  agent: string;
+  title: string;
+}

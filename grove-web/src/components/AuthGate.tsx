@@ -1,9 +1,13 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import {
   extractSkFromUrl,
+  extractPageFromUrl,
+  extractRadioTokenFromUrl,
   getSecretKey,
   setSecretKey,
   clearSecretKey,
+  setPageIntent,
+  setRadioToken,
   computeHmac,
 } from "../api/client";
 
@@ -37,10 +41,20 @@ export function AuthGate({ children }: AuthGateProps) {
 
   useEffect(() => {
     const init = async () => {
-      // Step 1: Try to extract SK from URL hash fragment
+      // Step 1: Try to extract SK, page intent, and radio token from URL hash fragment
       const hashSk = extractSkFromUrl();
+      const hashPage = extractPageFromUrl();
+      const hashToken = extractRadioTokenFromUrl();
       if (hashSk) {
         setSecretKey(hashSk);
+      }
+      if (hashPage) {
+        setPageIntent(hashPage);
+      }
+      if (hashToken) {
+        setRadioToken(hashToken);
+      }
+      if (hashSk || hashPage || hashToken) {
         // Clear hash from URL (keep path)
         window.history.replaceState(null, "", window.location.pathname + window.location.search);
       }

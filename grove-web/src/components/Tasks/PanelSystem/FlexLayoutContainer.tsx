@@ -189,6 +189,8 @@ interface FlexLayoutContainerProps {
 
 export interface FlexLayoutContainerHandle {
   addPanel: (type: PanelType) => void;
+  /** Select an existing tab of this type, or create one if none exists. */
+  ensurePanel: (type: PanelType) => void;
   getModel: () => Model;
   selectTabByIndex: (index: number) => "handled" | "no_tabs" | "out_of_range";
   selectAdjacentTab: (delta: number) => boolean;
@@ -377,6 +379,19 @@ export const FlexLayoutContainer = forwardRef<
     focusPanelContent();
   }, [model, focusPanelContent, getAllTabs, createTabNode]);
 
+  // Ensure a panel of the given type exists. If one already exists, select it.
+  // Otherwise, create a new one.
+  const ensurePanel = useCallback((type: PanelType) => {
+    const allTabs = getAllTabs();
+    const existing = allTabs.find((tab) => tab.getId().startsWith(`${type}-`));
+    if (existing) {
+      model.doAction(Actions.selectTab(existing.getId()));
+      focusPanelContent();
+    } else {
+      addPanel(type);
+    }
+  }, [model, getAllTabs, addPanel, focusPanelContent]);
+
   // Select a tab by its visual index (0-based) across all tabsets.
   // Returns: "handled" if tab was selected, "no_tabs" if workspace has no tabs,
   // "out_of_range" if index exceeds the number of open tabs.
@@ -451,12 +466,13 @@ export const FlexLayoutContainer = forwardRef<
   // Expose API via ref
   useImperativeHandle(ref, () => ({
     addPanel,
+    ensurePanel,
     getModel: () => model,
     selectTabByIndex,
     selectAdjacentTab,
     closeActiveTab,
     navigateToFile,
-  }), [addPanel, model, selectTabByIndex, selectAdjacentTab, closeActiveTab, navigateToFile]);
+  }), [addPanel, ensurePanel, model, selectTabByIndex, selectAdjacentTab, closeActiveTab, navigateToFile]);
 
   // Context menu handlers
   const handleCloseTab = useCallback((tabId: string) => {

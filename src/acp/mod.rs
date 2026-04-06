@@ -50,6 +50,8 @@ pub struct AcpSessionHandle {
     pub working_dir: String,
     /// 用户终端命令的 kill channel（Shell 模式）
     terminal_kill_tx: Mutex<Option<mpsc::Sender<()>>>,
+    /// Agent 是否正在处理（busy=true 从 prompt 开始，到 complete 结束）
+    pub is_busy: std::sync::atomic::AtomicBool,
     /// 最近一轮 agent 回复的累积文本（用于 Complete 通知摘要）
     last_assistant_text: Mutex<String>,
 }
@@ -1000,6 +1002,7 @@ pub async fn get_or_start_session(
                     current_mode_id: Mutex::new(None),
                     working_dir: config.working_dir.to_string_lossy().to_string(),
                     terminal_kill_tx: Mutex::new(None),
+                    is_busy: std::sync::atomic::AtomicBool::new(false),
                     last_assistant_text: Mutex::new(String::new()),
                 });
 
@@ -1677,6 +1680,12 @@ impl AcpSessionHandle {
                     &update,
                 );
             }
+        }
+
+        // 跟踪 busy 状态
+        if let AcpUpdate::Busy { value } = &update {
+            self.is_busy
+                .store(*value, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Turn 结束时 compact 磁盘历史

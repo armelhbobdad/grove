@@ -87,6 +87,19 @@ export function useAudioRecorder(options: AudioRecorderOptions = {}): AudioRecor
   }, []);
 
   const start = useCallback(async () => {
+    // Clean up any previous recording session before starting a new one.
+    // This prevents race conditions where the old recorder's onstop callback
+    // fires after the new session is created and destroys the new stream/AudioContext.
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.onstop = null; // detach old handler
+      mediaRecorderRef.current.stop();
+    }
+    cleanupMedia();
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
+
     setError(null);
     cancelledRef.current = false;
     stoppedRef.current = false;

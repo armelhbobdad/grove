@@ -36,6 +36,53 @@ export function extractSkFromUrl(): string | null {
   return match ? match[1] : null;
 }
 
+/** Extract page intent from URL hash fragment: /#sk=xxx&page=radio */
+export function extractPageFromUrl(): string | null {
+  const hash = window.location.hash;
+  if (!hash) return null;
+  const match = hash.match(/[#&]page=([^&]*)/);
+  return match ? match[1] : null;
+}
+
+const PAGE_INTENT_KEY = 'grove_page_intent';
+
+export function getPageIntent(): string | null {
+  return sessionStorage.getItem(PAGE_INTENT_KEY);
+}
+
+export function setPageIntent(page: string) {
+  sessionStorage.setItem(PAGE_INTENT_KEY, page);
+}
+
+export function clearPageIntent() {
+  sessionStorage.removeItem(PAGE_INTENT_KEY);
+}
+
+// ─── Radio token management ────────────────────────────────────────────────
+
+const RADIO_TOKEN_KEY = 'grove_radio_token';
+
+/** Extract radio token from URL hash fragment: /#page=radio&token=xxx */
+export function extractRadioTokenFromUrl(): string | null {
+  const hash = window.location.hash;
+  if (!hash) return null;
+  const match = hash.match(/[#&]token=([^&]*)/);
+  return match ? match[1] : null;
+}
+
+export function getRadioToken(): string | null {
+  return sessionStorage.getItem(RADIO_TOKEN_KEY);
+}
+
+export function setRadioToken(token: string) {
+  sessionStorage.setItem(RADIO_TOKEN_KEY, token);
+}
+
+export function clearRadioToken() {
+  sessionStorage.removeItem(RADIO_TOKEN_KEY);
+}
+
+
 // ─── HMAC-SHA256 signing ─────────────────────────────────────────────────────
 
 import { hmacSha256Hex } from './hmac';

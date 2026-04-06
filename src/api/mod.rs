@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod handlers;
+pub mod radio_server;
 mod state;
 pub mod tls;
 
@@ -359,6 +360,39 @@ pub fn create_api_router() -> Router {
             "/skills/installed/{repo_key}/{*repo_path}",
             delete(handlers::skills::uninstall_skill),
         )
+        // TaskGroup API
+        .route(
+            "/taskgroups",
+            get(handlers::taskgroups::list_groups).post(handlers::taskgroups::create_group),
+        )
+        .route(
+            "/taskgroups/{id}",
+            patch(handlers::taskgroups::update_group).delete(handlers::taskgroups::delete_group),
+        )
+        .route(
+            "/taskgroups/{id}/slots",
+            post(handlers::taskgroups::upsert_slot),
+        )
+        .route(
+            "/taskgroups/{id}/slots/{position}",
+            delete(handlers::taskgroups::remove_slot),
+        )
+        // Walkie-Talkie / Radio
+        .route(
+            "/radio/connect-info",
+            get(handlers::walkie_talkie::connect_info),
+        )
+        .route("/radio/start", post(handlers::walkie_talkie::start_radio))
+        .route("/radio/stop", post(handlers::walkie_talkie::stop_radio))
+        .route("/radio/status", get(handlers::walkie_talkie::radio_status))
+        .route(
+            "/walkie-talkie/ws",
+            get(handlers::walkie_talkie::ws_handler),
+        )
+        .route(
+            "/radio/events/ws",
+            get(handlers::walkie_talkie::radio_events_ws_handler),
+        )
 }
 
 /// Serve embedded static files
@@ -670,6 +704,10 @@ pub async fn start_server(
         print_qr_code(&qr_url);
         println!();
 
+        // Set env vars so handlers (e.g. connect_info) can discover port & protocol
+        std::env::set_var("GROVE_PORT", port.to_string());
+        std::env::set_var("GROVE_PROTOCOL", "https");
+
         axum_server::bind_rustls(bind_addr, tls_config)
             .serve(app.into_make_service())
             .await
@@ -681,6 +719,10 @@ pub async fn start_server(
 
     // ── Non-TLS branch ───────────────────────────────────────────────────
     let (listener, actual_port) = bind_with_fallback(host, port, 10).await?;
+
+    // Set env vars so handlers (e.g. connect_info) can discover port & protocol
+    std::env::set_var("GROVE_PORT", actual_port.to_string());
+    std::env::set_var("GROVE_PROTOCOL", "http");
 
     if is_mobile {
         // Mobile mode: show LAN URL + HMAC info + QR code

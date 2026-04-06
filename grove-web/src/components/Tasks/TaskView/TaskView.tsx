@@ -135,6 +135,8 @@ interface TaskViewProps {
 
 export interface TaskViewHandle {
   addPanel: (type: PanelType) => void;
+  /** Select an existing tab of this type, or create one if none exists. */
+  ensurePanel: (type: PanelType) => void;
   selectTabByIndex: (index: number) => "handled" | "no_tabs" | "out_of_range";
   selectAdjacentTab: (delta: number) => boolean;
   closeActiveTab: () => void;
@@ -164,12 +166,17 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
     layoutRef.current?.addPanel(type);
   }, []);
 
+  const handleEnsurePanel = useCallback((type: PanelType) => {
+    layoutRef.current?.ensurePanel(type);
+  }, []);
+
   useImperativeHandle(ref, () => ({
     addPanel: handleAddPanel,
+    ensurePanel: handleEnsurePanel,
     selectTabByIndex: (index: number) => layoutRef.current?.selectTabByIndex(index) ?? "no_tabs",
     selectAdjacentTab: (delta: number) => layoutRef.current?.selectAdjacentTab(delta) ?? false,
     closeActiveTab: () => layoutRef.current?.closeActiveTab(),
-  }), [handleAddPanel]);
+  }), [handleAddPanel, handleEnsurePanel]);
 
   // Overflow menu items
   const isArchived = task.status === "archived";

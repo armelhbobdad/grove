@@ -119,3 +119,12 @@ export type {
   SkillDetail,
   InstalledSkill,
 } from './skills';
+
+export {
+  listTaskGroups,
+  createTaskGroup,
+  updateTaskGroup,
+  deleteTaskGroup,
+  upsertTaskSlot,
+  removeTaskSlot,
+} from './taskgroups';

@@ -575,13 +575,21 @@ fn call_transcription_api(
             &format!("multipart/form-data; boundary={}", boundary),
         )
         .timeout(std::time::Duration::from_secs(60))
-        .send_bytes(&body)
-        .map_err(|e| format!("HTTP error: {}", e))?;
+        .send_bytes(&body);
 
-    response
-        .into_string()
-        .map(|s| s.trim().to_string())
-        .map_err(|e| format!("Failed to read response: {}", e))
+    match response {
+        Ok(resp) => resp
+            .into_string()
+            .map(|s| s.trim().to_string())
+            .map_err(|e| format!("Failed to read response: {}", e)),
+        Err(ureq::Error::Status(status, resp)) => {
+            let body_text = resp
+                .into_string()
+                .unwrap_or_else(|_| "(unreadable)".to_string());
+            Err(format!("HTTP {}: {} — body: {}", status, url, body_text))
+        }
+        Err(e) => Err(format!("HTTP error: {}: {}", url, e)),
+    }
 }
 
 /// Call an OpenAI-compatible /chat/completions endpoint for revision

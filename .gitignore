@@ -14,6 +14,8 @@ Cargo.lock  # Uncomment if this is a library project
 
 # Claude Code
 .claude/
+.superpowers/
+docs/superpowers/
 
 # Development / Marketing materials (not for version control)
 .grove-dev/

@@ -13,6 +13,7 @@ import { MissingProjectState } from "./components/Projects/MissingProjectState";
 import { AddProjectDialog } from "./components/Projects/AddProjectDialog";
 import { WelcomePage } from "./components/Welcome";
 import { DiffReviewPage } from "./components/Review";
+import { RadioPage } from "./components/Radio";
 import { SkillsPage } from "./components/Skills";
 import { AIPage, GlobalAudioRecorder } from "./components/AI";
 import { ProjectStatsPage } from "./components/Stats/ProjectStatsPage";
@@ -28,6 +29,7 @@ import { getConfig, patchConfig, checkCommands, openIDE, openTerminal } from "./
 import { agentOptions } from "./components/ui";
 import { useIsMobile, useHotkeys, buildCommands } from "./hooks";
 import type { UseCommandsOptions } from "./hooks/useCommands";
+import { getPageIntent, clearPageIntent } from "./api/client";
 
 export type TasksMode = "zen" | "blitz";
 
@@ -528,6 +530,36 @@ function App() {
     return (
       <ThemeProvider>
         <DiffReviewPage projectId={reviewMatch[1]} taskId={reviewMatch[2]} />
+      </ThemeProvider>
+    );
+  }
+
+  // Radio page detection:
+  // 1. Independent Radio server: hash contains token but no page= (e.g. /#token=xxx)
+  // 2. Main server with page=radio: /#page=radio or /#sk=xxx&page=radio
+  // 3. SessionStorage fallback from AuthGate
+  const [isRadioPage] = useState(() => {
+    const hash = window.location.hash;
+    if (hash.includes("page=radio")) {
+      return true;
+    }
+    // Independent Radio server: token in hash without page= means we're on the Radio server
+    if (hash.includes("token=") && !hash.includes("page=")) {
+      return true;
+    }
+    const intent = getPageIntent();
+    if (intent === "radio") {
+      clearPageIntent();
+      return true;
+    }
+    return false;
+  });
+  if (isRadioPage) {
+    return (
+      <ThemeProvider>
+        <AuthGate>
+          <RadioPage />
+        </AuthGate>
       </ThemeProvider>
     );
   }
