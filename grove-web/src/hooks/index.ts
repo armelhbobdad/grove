@@ -14,3 +14,6 @@ export type { DirtyBranchError } from "./useTaskOperations";
 export { useFileMention } from "./useFileMention";
 
 export { buildCommands } from "./useCommands";
+
+export { useAgentQuota } from "./useAgentQuota";
+export type { UseAgentQuotaResult } from "./useAgentQuota";

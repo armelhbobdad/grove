@@ -78,6 +78,9 @@ export type {
 export { getVersion, checkUpdate, startAppUpdate, getAppUpdateProgress, installAppUpdate } from './version';
 export type { UpdateCheckResponse, AppUpdateProgress } from './version';
 
+export { getAgentUsage } from './agentUsage';
+export type { AgentUsage, UsageWindow, ExtraInfo } from './agentUsage';
+
 export {
   listProviders,
   createProvider,

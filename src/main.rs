@@ -1,4 +1,5 @@
 mod acp;
+mod agent_usage;
 mod api;
 mod app;
 mod async_ops_state;

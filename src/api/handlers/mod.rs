@@ -1,6 +1,7 @@
 //! API handlers
 
 pub mod acp;
+pub mod agent_usage;
 pub mod ai;
 pub mod config;
 pub mod env;

@@ -54,6 +54,9 @@ import {
 } from "../../../utils/fileMention";
 import type { Task } from "../../../data/types";
 import { getApiHost, appendHmacToUrl } from "../../../api/client";
+import { useAgentQuota } from "../../../hooks";
+import { AgentQuotaPopover } from "./AgentQuotaPopover";
+import { quotaHealthColor } from "./quotaColors";
 import {
   getConfig,
   listChats,
@@ -915,6 +918,7 @@ export function TaskChat({
   const messagesCountRef = useRef(messages.length);
   messagesCountRef.current = messages.length;
   const inputAreaRef = useRef<HTMLDivElement>(null);
+  const chatboxContainerRef = useRef<HTMLDivElement>(null);
   const [inputAreaHeight, setInputAreaHeight] = useState(120);
 
   // ─── Read-only observation mode state ──────────────────────────────────
@@ -930,6 +934,13 @@ export function TaskChat({
   const historyLoadingRef = useRef(false);
 
   const activeChat = chats.find((c) => c.id === activeChatId);
+  // Quota for built-in AI coding agents (Claude Code / Codex / Gemini).
+  // Unsupported agents return null, which hides the quota badge entirely.
+  const {
+    usage: agentQuota,
+    refreshing: quotaRefreshing,
+    refresh: refreshAgentQuota,
+  } = useAgentQuota(activeChat?.agent ?? null);
   const orderedChats = useMemo(() => [...chats].reverse(), [chats]);
   const hasTodoPanel = planEntries.length > 0;
   const hasPlanPanel = !!planFileContent;
@@ -3744,6 +3755,7 @@ export function TaskChat({
               />
 
               <div
+                ref={chatboxContainerRef}
                 className={`relative min-w-0 rounded-[30px] border bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,transparent)] px-3 pt-2 pb-3 shadow-[0_22px_60px_rgba(0,0,0,0.18)] backdrop-blur-md transition-all ${
                   isBusy
                     ? "chatbox-busy-border border-transparent focus-within:border-transparent"
@@ -3768,6 +3780,45 @@ export function TaskChat({
                         Agent
                       </span>
                       <span className="truncate font-medium">{agentLabel}</span>
+                      {agentQuota && (
+                        <AgentQuotaPopover
+                          usage={agentQuota}
+                          refreshing={quotaRefreshing}
+                          onRefresh={refreshAgentQuota}
+                          anchorRef={chatboxContainerRef}
+                        >
+                          <button
+                            type="button"
+                            onClick={refreshAgentQuota}
+                            disabled={quotaRefreshing}
+                            aria-label={`Agent quota: ${Math.round(
+                              agentQuota.percentage_remaining,
+                            )}% remaining${
+                              agentQuota.plan ? ` on ${agentQuota.plan}` : ""
+                            }. Click to refresh.`}
+                            title={`${Math.round(
+                              agentQuota.percentage_remaining,
+                            )}% remaining — click to refresh`}
+                            className="shrink-0 rounded-full border px-1.5 text-[10px] font-semibold leading-[16px] transition-opacity hover:opacity-80 disabled:opacity-50"
+                            style={{
+                              color: quotaHealthColor(
+                                agentQuota.percentage_remaining,
+                              ),
+                              // Subtle health-tinted pill so the status is
+                              // legible even at a glance: healthy green,
+                              // warning amber, critical red.
+                              backgroundColor: `color-mix(in srgb, ${quotaHealthColor(
+                                agentQuota.percentage_remaining,
+                              )} 12%, transparent)`,
+                              borderColor: `color-mix(in srgb, ${quotaHealthColor(
+                                agentQuota.percentage_remaining,
+                              )} 40%, transparent)`,
+                            }}
+                          >
+                            {Math.round(agentQuota.percentage_remaining)}%
+                          </button>
+                        </AgentQuotaPopover>
+                      )}
                     </div>
                     {isTerminalMode && (
                       <div className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]">

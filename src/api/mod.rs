@@ -35,6 +35,11 @@ pub fn create_api_router() -> Router {
     Router::new()
         // Version API
         .route("/version", get(handlers::version::get_version))
+        // Agent usage quota API (Claude Code / Codex / Gemini)
+        .route(
+            "/agent-usage/{agent}",
+            get(handlers::agent_usage::get_agent_usage),
+        )
         // Update check API
         .route("/update-check", get(handlers::update::check_update))
         // In-app update API (AppBundle mode)
