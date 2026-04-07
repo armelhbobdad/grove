@@ -1,9 +1,9 @@
 //! Skills storage — agent definitions, sources, manifest, installed records
 
 use chrono::{DateTime, Utc};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::grove_dir;
@@ -114,7 +114,7 @@ pub struct BuiltinOverride {
     pub enabled: bool,
 }
 
-// TOML wrapper structs
+// TOML wrapper structs (still used by API serialization)
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AgentsFile {
     /// Enabled/disabled overrides for builtin agents
@@ -270,7 +270,9 @@ pub fn parse_skill_md(content: &str) -> Option<ParsedSkillMd> {
                     }
                 }
             }
-            // If we consumed block scalar lines, don't increment i again
+            // `value` here is still the raw ">" / "|" token from split_once,
+            // not the expanded content (which is in `resolved_value`).
+            // If block scalar consumed extra lines, `i` was already advanced — don't increment again.
             if !(value == ">" || value == "|") {
                 i += 1;
             }
@@ -294,19 +296,20 @@ pub fn parse_skill_md(content: &str) -> Option<ParsedSkillMd> {
 // Directory Helpers
 // ============================================================================
 
-pub fn skills_dir() -> PathBuf {
-    grove_dir().join("skills")
-}
-
 pub fn repos_dir() -> PathBuf {
-    skills_dir().join("repos")
+    grove_dir().join("skills").join("repos")
 }
 
-/// Compute a deterministic 16-char hex key from a URL
+/// Compute a deterministic 16-char hex key from a URL (FNV-1a, stable across Rust versions)
 pub fn compute_repo_key(url: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    url.hash(&mut hasher);
-    let hash = hasher.finish();
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in url.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
     format!("{:016x}", hash)
 }
 
@@ -355,70 +358,109 @@ pub fn subpaths_overlap(a: Option<&str>, b: Option<&str>) -> bool {
 }
 
 // ============================================================================
-// TOML CRUD
+// SQLite CRUD — Agents
 // ============================================================================
 
 pub fn load_agents() -> AgentsFile {
-    let path = skills_dir().join("agents.toml");
-    if !path.exists() {
-        return AgentsFile::default();
+    let conn = crate::storage::database::connection();
+
+    // Custom agents: is_builtin = 0
+    let custom_agents: Vec<AgentDef> = (|| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, display_name, global_skills_dir, project_skills_dir, \
+             shared_group, icon_id, enabled FROM skill_agents WHERE is_builtin = 0",
+            )
+            .ok()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(AgentDef {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    global_skills_dir: row.get(2)?,
+                    project_skills_dir: row.get(3)?,
+                    shared_group: row.get(4)?,
+                    icon_id: row.get(5)?,
+                    enabled: row.get::<_, i32>(6)? != 0,
+                    is_builtin: false,
+                })
+            })
+            .ok()?;
+        Some(rows.filter_map(|r| r.ok()).collect())
+    })()
+    .unwrap_or_default();
+
+    // Builtin overrides: is_builtin = 1
+    let builtin_overrides: Vec<BuiltinOverride> = (|| {
+        let mut stmt = conn
+            .prepare("SELECT id, enabled FROM skill_agents WHERE is_builtin = 1")
+            .ok()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(BuiltinOverride {
+                    id: row.get(0)?,
+                    enabled: row.get::<_, i32>(1)? != 0,
+                })
+            })
+            .ok()?;
+        Some(rows.filter_map(|r| r.ok()).collect())
+    })()
+    .unwrap_or_default();
+
+    AgentsFile {
+        builtin_overrides,
+        custom_agents,
     }
-    super::load_toml(&path).unwrap_or_default()
 }
 
 pub fn save_agents(data: &AgentsFile) -> Result<()> {
-    let dir = skills_dir();
-    std::fs::create_dir_all(&dir)?;
-    super::save_toml(&dir.join("agents.toml"), data)
-}
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
 
-pub fn load_sources() -> SourcesFile {
-    let path = skills_dir().join("sources.toml");
-    if !path.exists() {
-        return SourcesFile::default();
+    tx.execute("DELETE FROM skill_agents", [])?;
+
+    // Insert custom agents
+    for agent in &data.custom_agents {
+        tx.execute(
+            "INSERT INTO skill_agents (id, display_name, global_skills_dir, project_skills_dir, \
+             shared_group, icon_id, enabled, is_builtin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+            params![
+                agent.id,
+                agent.display_name,
+                agent.global_skills_dir,
+                agent.project_skills_dir,
+                agent.shared_group,
+                agent.icon_id,
+                agent.enabled as i32,
+            ],
+        )?;
     }
-    super::load_toml(&path).unwrap_or_default()
-}
 
-pub fn save_sources(data: &SourcesFile) -> Result<()> {
-    let dir = skills_dir();
-    std::fs::create_dir_all(&dir)?;
-    super::save_toml(&dir.join("sources.toml"), data)
-}
-
-pub fn load_manifest() -> ManifestFile {
-    let path = skills_dir().join("manifest.toml");
-    if !path.exists() {
-        return ManifestFile::default();
+    // Insert builtin overrides — fill display_name/dirs from builtin_agents() constants
+    let builtins = builtin_agents();
+    for ovr in &data.builtin_overrides {
+        if let Some(b) = builtins.iter().find(|a| a.id == ovr.id) {
+            tx.execute(
+                "INSERT INTO skill_agents (id, display_name, global_skills_dir, project_skills_dir, \
+                 shared_group, icon_id, enabled, is_builtin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+                params![
+                    ovr.id,
+                    b.display_name,
+                    b.global_skills_dir,
+                    b.project_skills_dir,
+                    b.shared_group,
+                    b.icon_id,
+                    ovr.enabled as i32,
+                ],
+            )?;
+        }
     }
-    super::load_toml(&path).unwrap_or_default()
+
+    tx.commit()?;
+    Ok(())
 }
 
-pub fn save_manifest(data: &ManifestFile) -> Result<()> {
-    let dir = skills_dir();
-    std::fs::create_dir_all(&dir)?;
-    super::save_toml(&dir.join("manifest.toml"), data)
-}
-
-pub fn load_installed() -> InstalledFile {
-    let path = skills_dir().join("installed.toml");
-    if !path.exists() {
-        return InstalledFile::default();
-    }
-    super::load_toml(&path).unwrap_or_default()
-}
-
-pub fn save_installed(data: &InstalledFile) -> Result<()> {
-    let dir = skills_dir();
-    std::fs::create_dir_all(&dir)?;
-    super::save_toml(&dir.join("installed.toml"), data)
-}
-
-// ============================================================================
-// Builtin Agents Seeding
-// ============================================================================
-
-/// Return all agents: builtin (from code, with persisted enabled overrides) + custom (from toml)
+/// Return all agents: builtin (from code, with persisted enabled overrides) + custom (from DB)
 pub fn get_all_agents() -> Vec<AgentDef> {
     let file = load_agents();
     let builtins = builtin_agents();
@@ -441,16 +483,44 @@ pub fn get_all_agents() -> Vec<AgentDef> {
 
 /// Persist the enabled flag for a builtin agent
 pub fn set_builtin_enabled(id: &str, enabled: bool) -> Result<()> {
-    let mut file = load_agents();
-    if let Some(ovr) = file.builtin_overrides.iter_mut().find(|o| o.id == id) {
-        ovr.enabled = enabled;
+    let conn = crate::storage::database::connection();
+
+    // Check if override row already exists
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM skill_agents WHERE id = ?1 AND is_builtin = 1",
+            params![id],
+            |row| row.get::<_, i32>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if exists {
+        conn.execute(
+            "UPDATE skill_agents SET enabled = ?1 WHERE id = ?2 AND is_builtin = 1",
+            params![enabled as i32, id],
+        )?;
     } else {
-        file.builtin_overrides.push(BuiltinOverride {
-            id: id.to_string(),
-            enabled,
-        });
+        // Insert a new row, getting display_name/dirs from builtin_agents()
+        let builtins = builtin_agents();
+        if let Some(b) = builtins.iter().find(|a| a.id == id) {
+            conn.execute(
+                "INSERT INTO skill_agents (id, display_name, global_skills_dir, project_skills_dir, \
+                 shared_group, icon_id, enabled, is_builtin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+                params![
+                    id,
+                    b.display_name,
+                    b.global_skills_dir,
+                    b.project_skills_dir,
+                    b.shared_group,
+                    b.icon_id,
+                    enabled as i32,
+                ],
+            )?;
+        }
     }
-    save_agents(&file)
+
+    Ok(())
 }
 
 /// Check if an agent ID belongs to a builtin agent
@@ -460,9 +530,21 @@ pub fn is_builtin_agent(id: &str) -> bool {
 
 /// Add a custom agent
 pub fn add_custom_agent(agent: AgentDef) -> Result<()> {
-    let mut file = load_agents();
-    file.custom_agents.push(agent);
-    save_agents(&file)
+    let conn = crate::storage::database::connection();
+    conn.execute(
+        "INSERT INTO skill_agents (id, display_name, global_skills_dir, project_skills_dir, \
+         shared_group, icon_id, enabled, is_builtin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+        params![
+            agent.id,
+            agent.display_name,
+            agent.global_skills_dir,
+            agent.project_skills_dir,
+            agent.shared_group,
+            agent.icon_id,
+            agent.enabled as i32,
+        ],
+    )?;
+    Ok(())
 }
 
 /// Update a custom agent
@@ -472,30 +554,330 @@ pub fn update_custom_agent(
     global_dir: String,
     project_dir: String,
 ) -> Result<bool> {
-    let mut file = load_agents();
-    if let Some(agent) = file.custom_agents.iter_mut().find(|a| a.id == id) {
-        agent.display_name = display_name;
-        agent.global_skills_dir = global_dir;
-        agent.project_skills_dir = project_dir;
-        save_agents(&file)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    let conn = crate::storage::database::connection();
+    let rows = conn.execute(
+        "UPDATE skill_agents SET display_name = ?1, global_skills_dir = ?2, \
+         project_skills_dir = ?3 WHERE id = ?4 AND is_builtin = 0",
+        params![display_name, global_dir, project_dir, id],
+    )?;
+    Ok(rows > 0)
 }
 
 /// Delete a custom agent
 pub fn delete_custom_agent(id: &str) -> Result<bool> {
-    let mut file = load_agents();
-    let before = file.custom_agents.len();
-    file.custom_agents.retain(|a| a.id != id);
-    if file.custom_agents.len() < before {
-        save_agents(&file)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    let conn = crate::storage::database::connection();
+    let rows = conn.execute(
+        "DELETE FROM skill_agents WHERE id = ?1 AND is_builtin = 0",
+        params![id],
+    )?;
+    Ok(rows > 0)
 }
+
+// ============================================================================
+// SQLite CRUD — Sources
+// ============================================================================
+
+pub fn load_sources() -> SourcesFile {
+    let conn = crate::storage::database::connection();
+    let sources: Vec<SkillSourceDef> = (|| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, source_type, url, subpath, repo_key, last_synced, local_head \
+             FROM skill_sources",
+            )
+            .ok()?;
+        let rows = stmt
+            .query_map([], |row| {
+                let last_synced_str: Option<String> = row.get(5)?;
+                let last_synced = last_synced_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|d| d.with_timezone(&Utc))
+                });
+                Ok(SkillSourceDef {
+                    name: row.get(0)?,
+                    source_type: row.get(1)?,
+                    url: row.get(2)?,
+                    subpath: row.get(3)?,
+                    repo_key: row.get(4)?,
+                    last_synced,
+                    local_head: row.get(6)?,
+                })
+            })
+            .ok()?;
+        Some(rows.filter_map(|r| r.ok()).collect())
+    })()
+    .unwrap_or_default();
+    SourcesFile { sources }
+}
+
+pub fn save_sources(data: &SourcesFile) -> Result<()> {
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+
+    tx.execute("DELETE FROM skill_sources", [])?;
+
+    for src in &data.sources {
+        let last_synced_str = src.last_synced.map(|d| d.to_rfc3339());
+        tx.execute(
+            "INSERT INTO skill_sources (name, source_type, url, subpath, repo_key, last_synced, local_head) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                src.name,
+                src.source_type,
+                src.url,
+                src.subpath,
+                src.repo_key,
+                last_synced_str,
+                src.local_head,
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+// ============================================================================
+// SQLite CRUD — Manifest
+// ============================================================================
+
+pub fn load_manifest() -> ManifestFile {
+    let conn = crate::storage::database::connection();
+    let skills: Vec<SkillManifestEntry> = (|| {
+        let mut stmt = conn.prepare(
+            "SELECT repo_key, repo_path, name, description, source, relative_path, license, author \
+             FROM skill_manifest",
+        ).ok()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SkillManifestEntry {
+                    repo_key: row.get(0)?,
+                    repo_path: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                    source: row.get(4)?,
+                    relative_path: row.get(5)?,
+                    license: row.get(6)?,
+                    author: row.get(7)?,
+                })
+            })
+            .ok()?;
+        Some(rows.filter_map(|r| r.ok()).collect())
+    })()
+    .unwrap_or_default();
+    ManifestFile { skills }
+}
+
+pub fn save_manifest(data: &ManifestFile) -> Result<()> {
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+
+    tx.execute("DELETE FROM skill_manifest", [])?;
+
+    for entry in &data.skills {
+        tx.execute(
+            "INSERT INTO skill_manifest (repo_key, repo_path, name, description, source, \
+             relative_path, license, author) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                entry.repo_key,
+                entry.repo_path,
+                entry.name,
+                entry.description,
+                entry.source,
+                entry.relative_path,
+                entry.license,
+                entry.author,
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+// ============================================================================
+// SQLite CRUD — Installed
+// ============================================================================
+
+pub fn load_installed() -> InstalledFile {
+    let conn = crate::storage::database::connection();
+
+    // Query 1: base records
+    let base_records: Vec<(String, String, String, String, String)> = (|| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT repo_key, repo_path, source_name, skill_name, installed_at \
+             FROM skill_installed",
+            )
+            .ok()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .ok()?;
+        Some(rows.filter_map(|r| r.ok()).collect())
+    })()
+    .unwrap_or_default();
+
+    if base_records.is_empty() {
+        return InstalledFile::default();
+    }
+
+    // Query 2: all global agents in one shot, keyed by (repo_key, repo_path)
+    let mut agents_map: HashMap<(String, String), Vec<ScopeAgentRef>> = HashMap::new();
+    if let Ok(mut stmt) = conn
+        .prepare("SELECT repo_key, repo_path, agent_id, symlink_path FROM skill_installed_agents")
+    {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                agents_map
+                    .entry((row.0, row.1))
+                    .or_default()
+                    .push(ScopeAgentRef {
+                        agent_id: row.2,
+                        symlink_path: row.3,
+                    });
+            }
+        }
+    }
+
+    // Query 3: all project installs in one shot, keyed by (repo_key, repo_path)
+    let mut projects_map: HashMap<(String, String), HashMap<String, Vec<ScopeAgentRef>>> =
+        HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT repo_key, repo_path, project_path, agent_id, symlink_path FROM skill_installed_projects",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                projects_map
+                    .entry((row.0, row.1))
+                    .or_default()
+                    .entry(row.2)
+                    .or_default()
+                    .push(ScopeAgentRef {
+                        agent_id: row.3,
+                        symlink_path: row.4,
+                    });
+            }
+        }
+    }
+
+    // Assemble from maps
+    let mut installed = Vec::with_capacity(base_records.len());
+    for (repo_key, repo_path, source_name, skill_name, installed_at_str) in base_records {
+        let installed_at = DateTime::parse_from_rfc3339(&installed_at_str)
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        let key = (repo_key.clone(), repo_path.clone());
+        let global_agents = agents_map.remove(&key).unwrap_or_default();
+        let project_installs = projects_map
+            .remove(&key)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(project_path, agents)| ProjectInstall {
+                project_path,
+                agents,
+            })
+            .collect();
+
+        installed.push(InstalledSkillDef {
+            repo_key,
+            repo_path,
+            source_name,
+            skill_name,
+            installed_at,
+            global_agents,
+            project_installs,
+        });
+    }
+
+    InstalledFile { installed }
+}
+
+pub fn save_installed(data: &InstalledFile) -> Result<()> {
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+
+    // CASCADE handles child tables
+    tx.execute("DELETE FROM skill_installed", [])?;
+
+    for skill in &data.installed {
+        let installed_at_str = skill.installed_at.to_rfc3339();
+        tx.execute(
+            "INSERT INTO skill_installed (repo_key, repo_path, source_name, skill_name, installed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                skill.repo_key,
+                skill.repo_path,
+                skill.source_name,
+                skill.skill_name,
+                installed_at_str,
+            ],
+        )?;
+
+        // Insert global agents
+        for agent in &skill.global_agents {
+            tx.execute(
+                "INSERT INTO skill_installed_agents (repo_key, repo_path, agent_id, symlink_path) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    skill.repo_key,
+                    skill.repo_path,
+                    agent.agent_id,
+                    agent.symlink_path
+                ],
+            )?;
+        }
+
+        // Insert project installs
+        for proj in &skill.project_installs {
+            for agent in &proj.agents {
+                tx.execute(
+                    "INSERT INTO skill_installed_projects \
+                     (repo_key, repo_path, project_path, agent_id, symlink_path) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        skill.repo_key,
+                        skill.repo_path,
+                        proj.project_path,
+                        agent.agent_id,
+                        agent.symlink_path,
+                    ],
+                )?;
+            }
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+// ============================================================================
+// Builtin Agents
+// ============================================================================
 
 fn builtin_agents() -> Vec<AgentDef> {
     vec![

@@ -1,15 +1,12 @@
 //! AI settings persistence (providers + audio)
 //!
-//! - Providers: global, stored in `~/.grove/ai/providers.json`
-//! - Audio: global in `~/.grove/ai/audio.json`, project-level in
-//!   `~/.grove/projects/{hash}/ai/audio.json`
+//! Uses SQLite tables: `ai_providers`, `audio_config`, `audio_config_project`,
+//! `audio_terms`.
 
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
 use uuid::Uuid;
 
-use super::grove_dir;
 use crate::error::Result;
 
 // ─── Provider Profile ───────────────────────────────────────────────────────
@@ -32,28 +29,43 @@ pub struct ProvidersData {
     pub providers: Vec<ProviderProfile>,
 }
 
-fn providers_path() -> PathBuf {
-    grove_dir().join("ai").join("providers.json")
-}
-
 pub fn load_providers() -> ProvidersData {
-    let path = providers_path();
-    if !path.exists() {
-        return ProvidersData::default();
-    }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let conn = crate::storage::database::connection();
+    let mut stmt = match conn.prepare(
+        "SELECT id, name, provider_type, base_url, api_key, model, status FROM ai_providers",
+    ) {
+        Ok(s) => s,
+        Err(_) => return ProvidersData::default(),
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok(ProviderProfile {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            provider_type: row.get(2)?,
+            base_url: row.get(3)?,
+            api_key: row.get(4)?,
+            model: row.get(5)?,
+            status: row.get(6)?,
+        })
+    }) {
+        Ok(r) => r,
+        Err(_) => return ProvidersData::default(),
+    };
+    let providers: Vec<ProviderProfile> = rows.filter_map(|r| r.ok()).collect();
+    ProvidersData { providers }
 }
 
 pub fn save_providers(data: &ProvidersData) -> Result<()> {
-    let path = providers_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM ai_providers", [])?;
+    for p in &data.providers {
+        tx.execute(
+            "INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, model, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![p.id, p.name, p.provider_type, p.base_url, p.api_key, p.model, p.status],
+        )?;
     }
-    let content = serde_json::to_string_pretty(data)?;
-    fs::write(path, content)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -69,7 +81,7 @@ pub struct ReplacementRule {
     pub to: String,
 }
 
-/// Global audio settings (stored in `~/.grove/ai/audio.json`)
+/// Global audio settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioSettingsGlobal {
     #[serde(default)]
@@ -132,7 +144,7 @@ impl Default for AudioSettingsGlobal {
     }
 }
 
-/// Project-level audio settings (stored in `~/.grove/projects/{hash}/ai/audio.json`)
+/// Project-level audio settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AudioSettingsProject {
     #[serde(default)]
@@ -145,56 +157,246 @@ pub struct AudioSettingsProject {
     pub replacements: Vec<ReplacementRule>,
 }
 
-fn audio_global_path() -> PathBuf {
-    grove_dir().join("ai").join("audio.json")
-}
-
-fn audio_project_path(project_hash: &str) -> PathBuf {
-    grove_dir()
-        .join("projects")
-        .join(project_hash)
-        .join("ai")
-        .join("audio.json")
-}
+// ─── Audio Global ───────────────────────────────────────────────────────────
 
 pub fn load_audio_global() -> AudioSettingsGlobal {
-    let path = audio_global_path();
-    if !path.exists() {
-        return AudioSettingsGlobal::default();
+    let conn = crate::storage::database::connection();
+
+    // Load main config row
+    let config_result = conn.query_row(
+        "SELECT enabled, transcribe_provider, toggle_shortcut, push_to_talk_key, \
+         max_duration, min_duration, revise_enabled, revise_provider, revise_prompt, \
+         preferred_languages FROM audio_config WHERE id = 1",
+        [],
+        |row| {
+            let enabled: i32 = row.get(0)?;
+            let transcribe_provider: String = row.get(1)?;
+            let toggle_shortcut: String = row.get(2)?;
+            let push_to_talk_key: String = row.get(3)?;
+            let max_duration: u32 = row.get(4)?;
+            let min_duration: u32 = row.get(5)?;
+            let revise_enabled: i32 = row.get(6)?;
+            let revise_provider: String = row.get(7)?;
+            let revise_prompt: String = row.get(8)?;
+            let preferred_languages_json: String = row.get(9)?;
+            Ok((
+                enabled != 0,
+                transcribe_provider,
+                toggle_shortcut,
+                push_to_talk_key,
+                max_duration,
+                min_duration,
+                revise_enabled != 0,
+                revise_provider,
+                revise_prompt,
+                preferred_languages_json,
+            ))
+        },
+    );
+
+    let (
+        enabled,
+        transcribe_provider,
+        toggle_shortcut,
+        push_to_talk_key,
+        max_duration,
+        min_duration,
+        revise_enabled,
+        revise_provider,
+        revise_prompt,
+        preferred_languages_json,
+    ) = match config_result {
+        Ok(row) => row,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return AudioSettingsGlobal::default(),
+        Err(_) => return AudioSettingsGlobal::default(),
+    };
+
+    let preferred_languages: Vec<String> =
+        serde_json::from_str(&preferred_languages_json).unwrap_or_default();
+
+    // Load global terms (project_hash IS NULL)
+    let mut preferred_terms = Vec::new();
+    let mut forbidden_terms = Vec::new();
+    let mut replacements = Vec::new();
+
+    if let Ok(mut stmt) = conn
+        .prepare("SELECT type, from_term, target_term FROM audio_terms WHERE project_hash IS NULL")
+    {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let term_type: String = row.get(0)?;
+            let from_term: Option<String> = row.get(1)?;
+            let target_term: String = row.get(2)?;
+            Ok((term_type, from_term, target_term))
+        }) {
+            for row in rows.flatten() {
+                match row.0.as_str() {
+                    "prefer" => preferred_terms.push(row.2),
+                    "forbidden" => forbidden_terms.push(row.2),
+                    "replace" => replacements.push(ReplacementRule {
+                        from: row.1.unwrap_or_default(),
+                        to: row.2,
+                    }),
+                    _ => {}
+                }
+            }
+        }
     }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+
+    AudioSettingsGlobal {
+        enabled,
+        transcribe_provider,
+        preferred_languages,
+        toggle_shortcut,
+        push_to_talk_key,
+        max_duration,
+        min_duration,
+        revise_enabled,
+        revise_provider,
+        revise_prompt,
+        preferred_terms,
+        forbidden_terms,
+        replacements,
+    }
 }
 
 pub fn save_audio_global(data: &AudioSettingsGlobal) -> Result<()> {
-    let path = audio_global_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+
+    let preferred_languages_json = serde_json::to_string(&data.preferred_languages)?;
+
+    tx.execute(
+        "INSERT OR REPLACE INTO audio_config \
+         (id, enabled, transcribe_provider, toggle_shortcut, push_to_talk_key, \
+          max_duration, min_duration, revise_enabled, revise_provider, revise_prompt, \
+          preferred_languages) \
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            data.enabled as i32,
+            data.transcribe_provider,
+            data.toggle_shortcut,
+            data.push_to_talk_key,
+            data.max_duration,
+            data.min_duration,
+            data.revise_enabled as i32,
+            data.revise_provider,
+            data.revise_prompt,
+            preferred_languages_json,
+        ],
+    )?;
+
+    // Replace global terms
+    tx.execute("DELETE FROM audio_terms WHERE project_hash IS NULL", [])?;
+
+    for term in &data.preferred_terms {
+        tx.execute(
+            "INSERT INTO audio_terms (project_hash, type, from_term, target_term) VALUES (NULL, 'prefer', NULL, ?1)",
+            params![term],
+        )?;
     }
-    let content = serde_json::to_string_pretty(data)?;
-    fs::write(path, content)?;
+
+    for term in &data.forbidden_terms {
+        tx.execute(
+            "INSERT INTO audio_terms (project_hash, type, from_term, target_term) VALUES (NULL, 'forbidden', NULL, ?1)",
+            params![term],
+        )?;
+    }
+
+    for rule in &data.replacements {
+        tx.execute(
+            "INSERT INTO audio_terms (project_hash, type, from_term, target_term) VALUES (NULL, 'replace', ?1, ?2)",
+            params![rule.from, rule.to],
+        )?;
+    }
+
+    tx.commit()?;
     Ok(())
 }
 
+// ─── Audio Project ──────────────────────────────────────────────────────────
+
 pub fn load_audio_project(project_hash: &str) -> AudioSettingsProject {
-    let path = audio_project_path(project_hash);
-    if !path.exists() {
-        return AudioSettingsProject::default();
+    let conn = crate::storage::database::connection();
+
+    let revise_prompt: String = conn
+        .query_row(
+            "SELECT revise_prompt FROM audio_config_project WHERE project_hash = ?1",
+            params![project_hash],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+
+    // Load project terms
+    let mut preferred_terms = Vec::new();
+    let mut forbidden_terms = Vec::new();
+    let mut replacements = Vec::new();
+
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT type, from_term, target_term FROM audio_terms WHERE project_hash = ?1")
+    {
+        if let Ok(rows) = stmt.query_map(params![project_hash], |row| {
+            let term_type: String = row.get(0)?;
+            let from_term: Option<String> = row.get(1)?;
+            let target_term: String = row.get(2)?;
+            Ok((term_type, from_term, target_term))
+        }) {
+            for row in rows.flatten() {
+                match row.0.as_str() {
+                    "prefer" => preferred_terms.push(row.2),
+                    "forbidden" => forbidden_terms.push(row.2),
+                    "replace" => replacements.push(ReplacementRule {
+                        from: row.1.unwrap_or_default(),
+                        to: row.2,
+                    }),
+                    _ => {}
+                }
+            }
+        }
     }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+
+    AudioSettingsProject {
+        revise_prompt,
+        preferred_terms,
+        forbidden_terms,
+        replacements,
+    }
 }
 
 pub fn save_audio_project(project_hash: &str, data: &AudioSettingsProject) -> Result<()> {
-    let path = audio_project_path(project_hash);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+
+    tx.execute(
+        "INSERT OR REPLACE INTO audio_config_project (project_hash, revise_prompt) VALUES (?1, ?2)",
+        params![project_hash, data.revise_prompt],
+    )?;
+
+    tx.execute(
+        "DELETE FROM audio_terms WHERE project_hash = ?1",
+        params![project_hash],
+    )?;
+
+    for term in &data.preferred_terms {
+        tx.execute(
+            "INSERT INTO audio_terms (project_hash, type, from_term, target_term) VALUES (?1, 'prefer', NULL, ?2)",
+            params![project_hash, term],
+        )?;
     }
-    let content = serde_json::to_string_pretty(data)?;
-    fs::write(path, content)?;
+
+    for term in &data.forbidden_terms {
+        tx.execute(
+            "INSERT INTO audio_terms (project_hash, type, from_term, target_term) VALUES (?1, 'forbidden', NULL, ?2)",
+            params![project_hash, term],
+        )?;
+    }
+
+    for rule in &data.replacements {
+        tx.execute(
+            "INSERT INTO audio_terms (project_hash, type, from_term, target_term) VALUES (?1, 'replace', ?2, ?3)",
+            params![project_hash, rule.from, rule.to],
+        )?;
+    }
+
+    tx.commit()?;
     Ok(())
 }

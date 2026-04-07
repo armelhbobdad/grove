@@ -95,11 +95,14 @@ pub enum Commands {
         #[arg(long)]
         public: bool,
     },
-    /// Migrate storage to the latest format (v1.1 with task_modes)
+    /// Migrate storage to the latest format
     Migrate {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Remove legacy files that have been migrated to SQLite
+        #[arg(long)]
+        prune: bool,
     },
     /// Register a project in Grove
     Register {

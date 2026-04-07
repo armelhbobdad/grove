@@ -3798,10 +3798,10 @@ export function TaskChat({
                               quotaBadgePercentRemaining ?? 0,
                             )}% remaining${
                               agentQuota.plan ? ` on ${agentQuota.plan}` : ""
-                            }. Click to refresh.`}
+                            }${agentQuota.outdated ? ". Data may be outdated." : ""}. Click to refresh.`}
                             title={`${Math.round(
                               quotaBadgePercentRemaining ?? 0,
-                            )}% remaining — click to refresh`}
+                            )}% remaining${agentQuota.outdated ? " — outdated" : ""} — click to refresh`}
                             className="shrink-0 rounded-full border px-1.5 text-[10px] font-semibold leading-[16px] transition-opacity hover:opacity-80 disabled:opacity-50"
                             style={{
                               color: quotaHealthColor(quotaBadgePercentRemaining ?? 0),

@@ -43,34 +43,62 @@ const AUTO_REFRESH_INTERVAL_SECS: u64 = 5;
 
 /// Check storage version and auto-migrate if needed
 fn ensure_storage_version() {
+    use storage::database::CURRENT_STORAGE_VERSION;
+
     let config = storage::config::load_config();
-    match config.storage_version.as_deref() {
-        Some("1.1") => {} // Up to date
-        Some("1.0") => {
-            // Migrate from 1.0 to 1.1
-            eprintln!(
-                "Migrating storage from v1.0 to v1.1 (task_modes → enable_terminal/enable_chat)..."
-            );
-            cli::migrate::execute(false);
-        }
-        None => {
-            // Legacy or fresh install - run full migration
-            if storage::grove_dir().join("projects").exists() {
-                eprintln!("Migrating storage to v1.1...");
-                cli::migrate::execute(false);
+    let version = config.storage_version.as_deref();
+
+    if version == Some(CURRENT_STORAGE_VERSION) {
+        // Up to date — just ensure DB is initialized
+        let _ = storage::database::connection();
+        return;
+    }
+
+    let has_legacy_files = storage::grove_dir().join("projects").exists()
+        || storage::grove_dir().join("taskgroups.toml").exists()
+        || storage::grove_dir().join("ai").exists()
+        || storage::grove_dir()
+            .join("skills")
+            .join("agents.toml")
+            .exists();
+
+    // Chain migrations: None/1.0 → 1.1 → 2.0
+    match version {
+        Some("1.0") | None => {
+            if has_legacy_files {
+                // Legacy files need v1.0→v1.1 migration first
+                if storage::grove_dir().join("projects").exists() {
+                    eprintln!("Migrating storage v1.0 → v1.1...");
+                    cli::migrate::execute(false);
+                }
+                eprintln!("Migrating storage v1.1 → v2.0 (SQLite)...");
+                storage::database::migrate_from_files();
             } else {
-                // Fresh install, set version directly
-                let mut config = config;
-                config.storage_version = Some("1.1".to_string());
-                let _ = storage::config::save_config(&config);
+                // Fresh install — just init DB
+                let _ = storage::database::connection();
+            }
+        }
+        Some("1.1") => {
+            if has_legacy_files {
+                eprintln!("Migrating storage v1.1 → v2.0 (SQLite)...");
+                storage::database::migrate_from_files();
+            } else {
+                let _ = storage::database::connection();
             }
         }
         Some(v) => {
-            eprintln!("Unknown storage version: {}. Expected 1.1.", v);
-            eprintln!("Please run: grove migrate");
+            eprintln!(
+                "Unknown storage version: {}. Expected {}.",
+                v, CURRENT_STORAGE_VERSION
+            );
             std::process::exit(1);
         }
     }
+
+    // Update version
+    let mut config = storage::config::load_config();
+    config.storage_version = Some(CURRENT_STORAGE_VERSION.to_string());
+    let _ = storage::config::save_config(&config);
 }
 
 /// 启动 TUI 界面
@@ -290,8 +318,12 @@ fn main() -> io::Result<()> {
                     local.run_until(cli::acp::execute(agent, cwd)).await;
                 });
         }
-        Commands::Migrate { dry_run } => {
-            cli::migrate::execute(dry_run);
+        Commands::Migrate { dry_run, prune } => {
+            if prune {
+                storage::database::prune_legacy_files();
+            } else {
+                cli::migrate::execute(dry_run);
+            }
         }
         Commands::Register { path } => {
             let path = path.unwrap_or_else(|| {

@@ -17,11 +17,6 @@ export interface UseAgentQuotaResult {
   refresh: () => void;
 }
 
-interface CachedUsage {
-  agent: string;
-  data: AgentUsage | null;
-}
-
 /**
  * Poll agent usage for the currently active agent.
  *
@@ -34,7 +29,7 @@ interface CachedUsage {
  *   the UI then hides the quota badge entirely.
  */
 export function useAgentQuota(agentId: string | null): UseAgentQuotaResult {
-  const [cached, setCached] = useState<CachedUsage | null>(null);
+  const [cached, setCached] = useState<AgentUsage | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   // Tracks the latest request so late responses for a stale agent are ignored.
   const requestIdRef = useRef(0);
@@ -49,7 +44,7 @@ export function useAgentQuota(agentId: string | null): UseAgentQuotaResult {
     try {
       const result = await getAgentUsage(agent, force);
       if (requestId !== requestIdRef.current) return; // stale
-      setCached({ agent, data: result });
+      setCached(result);
     } finally {
       // Always clear the flag for the *latest* request so the UI can never
       // get stuck in a "refreshing" state, even if a stale response returns
@@ -91,9 +86,8 @@ export function useAgentQuota(agentId: string | null): UseAgentQuotaResult {
 
   // Only surface the cached usage if it belongs to the current agent. This
   // prevents a stale quota from flashing on-screen during agent switch.
-  const isActiveAgent =
-    !!agentId && SUPPORTED_AGENTS.has(agentId) && cached?.agent === agentId;
-  const usage = isActiveAgent && cached ? cached.data : null;
+  const isActiveAgent = !!agentId && SUPPORTED_AGENTS.has(agentId);
+  const usage = isActiveAgent && cached?.agent === agentId ? cached : null;
   const effectiveRefreshing = isActiveAgent ? refreshing : false;
 
   return { usage, refreshing: effectiveRefreshing, refresh };

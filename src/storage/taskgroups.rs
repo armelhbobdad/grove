@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -39,39 +40,158 @@ pub struct TaskGroup {
     pub created_at: DateTime<Utc>,
 }
 
-/// TOML wrapper struct
+/// TOML wrapper struct (kept for migration backward compat)
+#[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct TaskGroupsFile {
     #[serde(default)]
     groups: Vec<TaskGroup>,
 }
 
-/// Get the path to ~/.grove/taskgroups.toml
-fn taskgroups_file_path() -> std::path::PathBuf {
-    super::grove_dir().join("taskgroups.toml")
-}
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
 
-/// Load all task groups from TOML. Returns empty vec if file doesn't exist.
-pub fn load_groups() -> Result<Vec<TaskGroup>> {
-    let path = taskgroups_file_path();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let file: TaskGroupsFile = super::load_toml(&path)?;
-    Ok(file.groups)
-}
-
-/// Save task groups to TOML (internal).
-fn save_groups(groups: &[TaskGroup]) -> Result<()> {
-    let path = taskgroups_file_path();
-    // Ensure ~/.grove/ exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let file = TaskGroupsFile {
-        groups: groups.to_vec(),
+/// Load a single group (with slots) by ID. Caller must hold the DB lock.
+fn load_group_by_id(conn: &rusqlite::Connection, group_id: &str) -> Result<Option<TaskGroup>> {
+    let mut stmt =
+        conn.prepare("SELECT id, name, color, created_at FROM task_groups WHERE id = ?1")?;
+    let mut rows = stmt.query(params![group_id])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
     };
-    super::save_toml(&path, &file)
+    let id: String = row.get(0)?;
+    let name: String = row.get(1)?;
+    let color: Option<String> = row.get(2)?;
+    let created_at_str: String = row.get(3)?;
+    let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+
+    let slots = load_slots_for_group(conn, &id)?;
+
+    Ok(Some(TaskGroup {
+        id,
+        name,
+        color,
+        slots,
+        created_at,
+    }))
+}
+
+/// Load slots for a given group, ordered by position. Caller must hold the DB lock.
+fn load_slots_for_group(conn: &rusqlite::Connection, group_id: &str) -> Result<Vec<TaskSlot>> {
+    let mut stmt = conn.prepare(
+        "SELECT position, project_id, task_id, target_chat_id \
+         FROM task_group_slots WHERE group_id = ?1 ORDER BY position",
+    )?;
+    let rows = stmt.query_map(params![group_id], |row| {
+        Ok(TaskSlot {
+            position: row.get::<_, i64>(0)? as u16,
+            project_id: row.get(1)?,
+            task_id: row.get(2)?,
+            target_chat_id: row.get(3)?,
+        })
+    })?;
+    let mut slots = Vec::new();
+    for r in rows {
+        slots.push(r?);
+    }
+    Ok(slots)
+}
+
+/// Renumber positions for a group so they are sequential 1, 2, 3, ...
+/// Caller must hold the DB lock.
+fn renumber_positions(conn: &rusqlite::Connection, group_id: &str) -> Result<()> {
+    let slots = load_slots_for_group(conn, group_id)?;
+    // Delete all slots for the group and re-insert with sequential positions
+    conn.execute(
+        "DELETE FROM task_group_slots WHERE group_id = ?1",
+        params![group_id],
+    )?;
+    for (i, slot) in slots.iter().enumerate() {
+        let new_pos = (i as i64) + 1;
+        conn.execute(
+            "INSERT INTO task_group_slots (group_id, position, project_id, task_id, target_chat_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![group_id, new_pos, slot.project_id, slot.task_id, slot.target_chat_id],
+        )?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Load all task groups from SQLite. Returns empty vec if no groups exist.
+pub fn load_groups() -> Result<Vec<TaskGroup>> {
+    let conn = crate::storage::database::connection();
+    let mut stmt =
+        conn.prepare("SELECT id, name, color, created_at FROM task_groups ORDER BY created_at")?;
+    let group_rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    let mut groups = Vec::new();
+    for r in group_rows {
+        let (id, name, color, created_at_str) = r?;
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        let slots = load_slots_for_group(&conn, &id)?;
+        groups.push(TaskGroup {
+            id,
+            name,
+            color,
+            slots,
+            created_at,
+        });
+    }
+    Ok(groups)
+}
+
+/// Save task groups to SQLite (internal). Replaces all groups and slots within a transaction.
+fn save_groups(groups: &[TaskGroup]) -> Result<()> {
+    let conn = crate::storage::database::connection();
+    save_groups_with_conn(&conn, groups)
+}
+
+/// Save with an existing connection (avoids double-locking).
+fn save_groups_with_conn(conn: &rusqlite::Connection, groups: &[TaskGroup]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+
+    // CASCADE will delete all slots when groups are deleted
+    tx.execute("DELETE FROM task_groups", [])?;
+
+    for group in groups {
+        let created_at_str = group.created_at.to_rfc3339();
+        tx.execute(
+            "INSERT INTO task_groups (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![group.id, group.name, group.color, created_at_str],
+        )?;
+        for slot in &group.slots {
+            tx.execute(
+                "INSERT INTO task_group_slots (group_id, position, project_id, task_id, target_chat_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    group.id,
+                    slot.position as i64,
+                    slot.project_id,
+                    slot.task_id,
+                    slot.target_chat_id
+                ],
+            )?;
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
 }
 
 /// Public save for batch operations (e.g. delete_group with slot reassignment).
@@ -225,31 +345,60 @@ pub fn ensure_system_groups() -> Result<()> {
 
 /// Replace all slots for a group at once (for reordering). Returns updated group if found.
 pub fn set_slots(group_id: &str, slots: Vec<TaskSlot>) -> Result<Option<TaskGroup>> {
-    let mut groups = load_groups()?;
-    let Some(group) = groups.iter_mut().find(|g| g.id == group_id) else {
+    let conn = crate::storage::database::connection();
+    let tx = conn.unchecked_transaction()?;
+
+    // Check group exists
+    let exists: bool = tx.query_row(
+        "SELECT COUNT(*) FROM task_groups WHERE id = ?1",
+        params![group_id],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    if !exists {
         return Ok(None);
-    };
-    group.slots = slots;
-    let updated = group.clone();
-    save_groups(&groups)?;
-    Ok(Some(updated))
+    }
+
+    tx.execute(
+        "DELETE FROM task_group_slots WHERE group_id = ?1",
+        params![group_id],
+    )?;
+    for slot in &slots {
+        tx.execute(
+            "INSERT INTO task_group_slots (group_id, position, project_id, task_id, target_chat_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                group_id,
+                slot.position as i64,
+                slot.project_id,
+                slot.task_id,
+                slot.target_chat_id
+            ],
+        )?;
+    }
+    tx.commit()?;
+
+    load_group_by_id(&conn, group_id)
 }
 
 /// Create a new task group with a UUID.
 pub fn create_group(name: String, color: Option<String>) -> Result<TaskGroup> {
-    let group = TaskGroup {
-        id: Uuid::new_v4().to_string(),
+    let id = Uuid::new_v4().to_string();
+    let created_at = Utc::now();
+    let created_at_str = created_at.to_rfc3339();
+
+    let conn = crate::storage::database::connection();
+    conn.execute(
+        "INSERT INTO task_groups (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![id, name, color, created_at_str],
+    )?;
+
+    Ok(TaskGroup {
+        id,
         name,
         color,
         slots: Vec::new(),
-        created_at: Utc::now(),
-    };
-
-    let mut groups = load_groups()?;
-    groups.push(group.clone());
-    save_groups(&groups)?;
-
-    Ok(group)
+        created_at,
+    })
 }
 
 /// Update a task group's name and/or color. Returns the updated group if found.
@@ -260,96 +409,146 @@ pub fn update_group(
     name: Option<String>,
     color: Option<Option<String>>,
 ) -> Result<Option<TaskGroup>> {
-    let mut groups = load_groups()?;
+    let conn = crate::storage::database::connection();
 
-    let Some(group) = groups.iter_mut().find(|g| g.id == id) else {
+    // Check group exists
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM task_groups WHERE id = ?1",
+        params![id],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    if !exists {
         return Ok(None);
-    };
+    }
 
+    let tx = conn.unchecked_transaction()?;
     if let Some(new_name) = name {
-        group.name = new_name;
+        tx.execute(
+            "UPDATE task_groups SET name = ?1 WHERE id = ?2",
+            params![new_name, id],
+        )?;
     }
     if let Some(new_color) = color {
-        group.color = new_color;
+        tx.execute(
+            "UPDATE task_groups SET color = ?1 WHERE id = ?2",
+            params![new_color, id],
+        )?;
     }
+    tx.commit()?;
 
-    let updated = group.clone();
-    save_groups(&groups)?;
-    Ok(Some(updated))
+    load_group_by_id(&conn, id)
 }
 
 /// Delete a task group by ID. Returns true if the group was found and removed.
 pub fn delete_group(id: &str) -> Result<bool> {
-    let mut groups = load_groups()?;
-    let len_before = groups.len();
-    groups.retain(|g| g.id != id);
-    let removed = groups.len() < len_before;
-    if removed {
-        save_groups(&groups)?;
-    }
-    Ok(removed)
+    let conn = crate::storage::database::connection();
+    let rows = conn.execute("DELETE FROM task_groups WHERE id = ?1", params![id])?;
+    Ok(rows > 0)
 }
 
 /// Upsert a slot in a task group. Replaces any existing slot at the same position.
 /// Slots are sorted by position after insertion.
 /// Returns the updated group if found.
 pub fn upsert_slot(group_id: &str, slot: TaskSlot) -> Result<Option<TaskGroup>> {
-    let mut groups = load_groups()?;
+    let conn = crate::storage::database::connection();
 
-    let Some(group) = groups.iter_mut().find(|g| g.id == group_id) else {
+    // Check group exists
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM task_groups WHERE id = ?1",
+        params![group_id],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    if !exists {
         return Ok(None);
-    };
+    }
 
-    // Remove existing slot at the same position
-    group.slots.retain(|s| s.position != slot.position);
-    group.slots.push(slot);
-    group.slots.sort_by_key(|s| s.position);
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM task_group_slots WHERE group_id = ?1 AND position = ?2",
+        params![group_id, slot.position as i64],
+    )?;
+    tx.execute(
+        "INSERT INTO task_group_slots (group_id, position, project_id, task_id, target_chat_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            group_id,
+            slot.position as i64,
+            slot.project_id,
+            slot.task_id,
+            slot.target_chat_id
+        ],
+    )?;
+    tx.commit()?;
 
-    let updated = group.clone();
-    save_groups(&groups)?;
-    Ok(Some(updated))
+    load_group_by_id(&conn, group_id)
 }
 
 /// Remove a slot from a task group by position.
+/// Renumbers remaining positions sequentially.
 /// Returns the updated group if found.
 pub fn remove_slot(group_id: &str, position: u16) -> Result<Option<TaskGroup>> {
-    let mut groups = load_groups()?;
+    let conn = crate::storage::database::connection();
 
-    let Some(group) = groups.iter_mut().find(|g| g.id == group_id) else {
+    // Check group exists
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM task_groups WHERE id = ?1",
+        params![group_id],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    if !exists {
         return Ok(None);
-    };
+    }
 
-    group.slots.retain(|s| s.position != position);
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM task_group_slots WHERE group_id = ?1 AND position = ?2",
+        params![group_id, position as i64],
+    )?;
+    renumber_positions(&tx, group_id)?;
+    tx.commit()?;
 
-    let updated = group.clone();
-    save_groups(&groups)?;
-    Ok(Some(updated))
+    load_group_by_id(&conn, group_id)
 }
 
 /// Remove a task from all groups (called when task is archived/deleted).
 /// Returns true if any slot was removed.
 pub fn remove_task_from_all_groups(project_id: &str, task_id: &str) -> bool {
-    if let Ok(mut groups) = load_groups() {
-        let mut changed = false;
-        for g in &mut groups {
-            let before = g.slots.len();
-            g.slots
-                .retain(|s| !(s.project_id == project_id && s.task_id == task_id));
-            if g.slots.len() < before {
-                changed = true;
-                // Re-number positions
-                for (i, slot) in g.slots.iter_mut().enumerate() {
-                    slot.position = (i as u16) + 1;
-                }
-            }
+    let conn = crate::storage::database::connection();
+
+    let result: Result<bool> = (|| {
+        let tx = conn.unchecked_transaction()?;
+
+        // Find affected groups
+        let affected_groups: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT group_id FROM task_group_slots \
+                 WHERE project_id = ?1 AND task_id = ?2",
+            )?;
+            let rows =
+                stmt.query_map(params![project_id, task_id], |row| row.get::<_, String>(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        if affected_groups.is_empty() {
+            return Ok(false);
         }
-        if changed {
-            let _ = save_groups(&groups);
+
+        // Delete the slots
+        let deleted = tx.execute(
+            "DELETE FROM task_group_slots WHERE project_id = ?1 AND task_id = ?2",
+            params![project_id, task_id],
+        )?;
+
+        // Renumber positions for each affected group
+        for gid in &affected_groups {
+            renumber_positions(&tx, gid)?;
         }
-        changed
-    } else {
-        false
-    }
+
+        tx.commit()?;
+        Ok(deleted > 0)
+    })();
+
+    result.unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -357,7 +556,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// All tests share `~/.grove/taskgroups.toml`, so we serialize them.
+    /// All tests share the DB, so we serialize them.
     static FILE_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper that creates a group and ensures it gets deleted on drop.

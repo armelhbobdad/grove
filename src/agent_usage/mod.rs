@@ -5,8 +5,9 @@
 //! write credentials back. If a token is expired or any upstream call fails,
 //! the function returns `None` and the frontend hides the quota badge.
 //!
-//! Results are cached in memory per-agent with a 60s TTL. Callers can pass
-//! `force = true` to bypass the cache (the result is still written back).
+//! Results are cached in memory per-agent with a 60s fresh TTL plus an
+//! indefinite "last successful value" fallback. Callers can pass
+//! `force = true` to bypass the fresh cache and fetch live.
 
 pub mod claude;
 pub mod codex;
@@ -63,6 +64,13 @@ pub struct AgentUsage {
     /// Additional informational rows for the tooltip (credits, email, etc.).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extras: Vec<ExtraInfo>,
+    /// True when the response is serving the last successful value because a
+    /// fresh upstream fetch failed.
+    pub outdated: bool,
+    /// ISO 8601 timestamp when this value was last fetched successfully.
+    pub fetched_at: Option<String>,
+    /// "fresh_cache" | "live" | "last_success_fallback"
+    pub source: String,
 }
 
 impl AgentUsage {
@@ -73,6 +81,9 @@ impl AgentUsage {
             percentage_remaining: 100.0,
             windows: Vec::new(),
             extras: Vec::new(),
+            outdated: false,
+            fetched_at: None,
+            source: "live".to_string(),
         }
     }
 
@@ -101,26 +112,20 @@ impl AgentUsage {
 struct CacheEntry {
     usage: AgentUsage,
     fetched_at: Instant,
+    fetched_at_iso: String,
 }
 
 static CACHE: Lazy<Mutex<HashMap<String, CacheEntry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// How long a stale cache entry is kept alive when fresh fetches keep
-/// failing (429, network timeout, etc.). This avoids hiding the badge
-/// just because the upstream API is temporarily unhappy.
-const STALE_TTL: Duration = Duration::from_secs(300);
-
 /// Fetch usage for the given agent ("claude" / "codex" / "gemini").
 ///
 /// When `force` is false, a cached entry newer than `CACHE_TTL` is returned
-/// without hitting the upstream API. When `force` is true, the cache is
-/// bypassed for the fetch but the result is still written back.
+/// without hitting the upstream API. When `force` is true, the fresh cache is
+/// bypassed and a live fetch is attempted.
 ///
-/// On transient failures (429, timeout, network errors), a stale cache
-/// entry up to `STALE_TTL` old is returned so the badge doesn't flicker
-/// off just because one refresh failed. Permanent failures (missing
-/// credentials, expired tokens) never reach the cache because they fail
-/// before we have any data, so the badge stays hidden as designed.
+/// On fetch failure, the last successful value (if any) is returned with
+/// `outdated = true`. If no successful value has ever been cached, `None`
+/// is returned and the frontend hides the badge.
 pub async fn fetch_usage(agent: &str, force: bool) -> Option<AgentUsage> {
     if !force {
         if let Some(cached) = get_fresh_cached(agent) {
@@ -135,16 +140,8 @@ pub async fn fetch_usage(agent: &str, force: bool) -> Option<AgentUsage> {
         .flatten();
 
     match fetched {
-        Some(usage) => {
-            put_cached(agent, usage.clone());
-            Some(usage)
-        }
-        None => {
-            // Fresh fetch failed — fall back to a stale cache entry if one
-            // exists and isn't too old. This covers transient errors (429,
-            // network hiccups) without showing stale data forever.
-            get_stale_cached(agent)
-        }
+        Some(usage) => Some(put_cached(agent, usage)),
+        None => get_last_success(agent),
     }
 }
 
@@ -153,35 +150,56 @@ fn get_fresh_cached(agent: &str) -> Option<AgentUsage> {
     let guard = CACHE.lock().ok()?;
     let entry = guard.get(agent)?;
     if entry.fetched_at.elapsed() < CACHE_TTL {
-        Some(entry.usage.clone())
+        Some(with_metadata(
+            &entry.usage,
+            false,
+            Some(entry.fetched_at_iso.clone()),
+            "fresh_cache",
+        ))
     } else {
         None
     }
 }
 
-/// Return cached entry even if it's past the normal TTL, as long as it's
-/// within the extended stale window. Used as a fallback when a fresh fetch
-/// fails due to transient errors (429, timeout).
-fn get_stale_cached(agent: &str) -> Option<AgentUsage> {
+/// Return the last successful value, regardless of age.
+fn get_last_success(agent: &str) -> Option<AgentUsage> {
     let guard = CACHE.lock().ok()?;
     let entry = guard.get(agent)?;
-    if entry.fetched_at.elapsed() < STALE_TTL {
-        Some(entry.usage.clone())
-    } else {
-        None
-    }
+    Some(with_metadata(
+        &entry.usage,
+        true,
+        Some(entry.fetched_at_iso.clone()),
+        "last_success_fallback",
+    ))
 }
 
-fn put_cached(agent: &str, usage: AgentUsage) {
+fn put_cached(agent: &str, usage: AgentUsage) -> AgentUsage {
+    let fetched_at_iso = chrono::Utc::now().to_rfc3339();
+    let response = with_metadata(&usage, false, Some(fetched_at_iso.clone()), "live");
     if let Ok(mut guard) = CACHE.lock() {
         guard.insert(
             agent.to_string(),
             CacheEntry {
                 usage,
                 fetched_at: Instant::now(),
+                fetched_at_iso: fetched_at_iso.clone(),
             },
         );
     }
+    response
+}
+
+fn with_metadata(
+    usage: &AgentUsage,
+    outdated: bool,
+    fetched_at: Option<String>,
+    source: &str,
+) -> AgentUsage {
+    let mut usage = usage.clone();
+    usage.outdated = outdated;
+    usage.fetched_at = fetched_at;
+    usage.source = source.to_string();
+    usage
 }
 
 /// Dispatch to the agent-specific blocking fetcher.

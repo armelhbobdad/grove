@@ -36,6 +36,10 @@ pub enum GroveError {
     #[error("JSON parse error: {0}")]
     JsonParse(#[from] serde_json::Error),
 
+    /// SQLite 错误
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
     /// 存储错误（通用）
     #[error("Storage error: {0}")]
     Storage(String),

@@ -504,6 +504,11 @@ pub async fn create_task(
         }
     }
 
+    // Auto-assign new task to system groups and notify clients
+    let _ = crate::storage::taskgroups::ensure_system_groups();
+    use crate::api::handlers::walkie_talkie::{broadcast_radio_event, RadioEvent};
+    broadcast_radio_event(RadioEvent::GroupChanged);
+
     // Return task response
     Ok(Json(TaskResponse {
         id: result.task.id.clone(),

@@ -373,8 +373,15 @@ async fn handle_client_message(
                     task_id: slot.task_id.clone(),
                 });
             }
-            let result =
-                send_prompt_to_task(&group_id, position, &text, chat_id.as_deref(), state, &groups).await;
+            let result = send_prompt_to_task(
+                &group_id,
+                position,
+                &text,
+                chat_id.as_deref(),
+                state,
+                &groups,
+            )
+            .await;
             // Broadcast prompt_sent event after sending
             if let Some(slot) = find_slot_in(&groups, &group_id, position) {
                 let _ = RADIO_EVENTS.send(RadioEvent::PromptSent {
@@ -691,7 +698,11 @@ fn poll_task_statuses(
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /// Find a TaskSlot from pre-loaded groups (avoids repeated disk reads).
-fn find_slot_in(groups: &[taskgroups::TaskGroup], group_id: &str, position: u16) -> Option<taskgroups::TaskSlot> {
+fn find_slot_in(
+    groups: &[taskgroups::TaskGroup],
+    group_id: &str,
+    position: u16,
+) -> Option<taskgroups::TaskSlot> {
     groups
         .iter()
         .find(|g| g.id == group_id)

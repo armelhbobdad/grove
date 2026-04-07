@@ -95,48 +95,56 @@ pub async fn delete_group(Path(id): Path<String>) -> impl IntoResponse {
     }
 
     // Before deleting, batch-move tasks back to system groups (single load+save)
-    if let Ok(mut groups) = taskgroups::load_groups() {
-        let slots_to_move: Vec<taskgroups::TaskSlot> = groups
-            .iter()
-            .find(|g| g.id == id)
-            .map(|g| g.slots.clone())
-            .unwrap_or_default();
-
-        if !slots_to_move.is_empty() {
-            let mut main_max = groups
-                .iter()
-                .find(|g| g.id == taskgroups::MAIN_GROUP_ID)
-                .map(|g| g.slots.iter().map(|s| s.position).max().unwrap_or(0))
-                .unwrap_or(0);
-            let mut local_max = groups
-                .iter()
-                .find(|g| g.id == taskgroups::LOCAL_GROUP_ID)
-                .map(|g| g.slots.iter().map(|s| s.position).max().unwrap_or(0))
-                .unwrap_or(0);
-
-            for slot in &slots_to_move {
-                let (target_id, pos) = if slot.task_id == LOCAL_TASK_ID {
-                    local_max += 1;
-                    (taskgroups::LOCAL_GROUP_ID, local_max)
-                } else {
-                    main_max += 1;
-                    (taskgroups::MAIN_GROUP_ID, main_max)
-                };
-                if let Some(target) = groups.iter_mut().find(|g| g.id == target_id) {
-                    target.slots.push(taskgroups::TaskSlot {
-                        position: pos,
-                        project_id: slot.project_id.clone(),
-                        task_id: slot.task_id.clone(),
-                        target_chat_id: slot.target_chat_id.clone(),
-                    });
-                }
-            }
-            // Remove the group and save everything in one write
-            groups.retain(|g| g.id != id);
-            let _ = taskgroups::save_groups_pub(&groups);
-            broadcast_radio_event(RadioEvent::GroupChanged);
-            return Ok(StatusCode::NO_CONTENT);
+    let mut groups = match taskgroups::load_groups() {
+        Ok(g) => g,
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load groups".to_string(),
+            ));
         }
+    };
+
+    let slots_to_move: Vec<taskgroups::TaskSlot> = groups
+        .iter()
+        .find(|g| g.id == id)
+        .map(|g| g.slots.clone())
+        .unwrap_or_default();
+
+    if !slots_to_move.is_empty() {
+        let mut main_max = groups
+            .iter()
+            .find(|g| g.id == taskgroups::MAIN_GROUP_ID)
+            .map(|g| g.slots.iter().map(|s| s.position).max().unwrap_or(0))
+            .unwrap_or(0);
+        let mut local_max = groups
+            .iter()
+            .find(|g| g.id == taskgroups::LOCAL_GROUP_ID)
+            .map(|g| g.slots.iter().map(|s| s.position).max().unwrap_or(0))
+            .unwrap_or(0);
+
+        for slot in &slots_to_move {
+            let (target_id, pos) = if slot.task_id == LOCAL_TASK_ID {
+                local_max += 1;
+                (taskgroups::LOCAL_GROUP_ID, local_max)
+            } else {
+                main_max += 1;
+                (taskgroups::MAIN_GROUP_ID, main_max)
+            };
+            if let Some(target) = groups.iter_mut().find(|g| g.id == target_id) {
+                target.slots.push(taskgroups::TaskSlot {
+                    position: pos,
+                    project_id: slot.project_id.clone(),
+                    task_id: slot.task_id.clone(),
+                    target_chat_id: slot.target_chat_id.clone(),
+                });
+            }
+        }
+        // Remove the group and save everything in one write
+        groups.retain(|g| g.id != id);
+        let _ = taskgroups::save_groups_pub(&groups);
+        broadcast_radio_event(RadioEvent::GroupChanged);
+        return Ok(StatusCode::NO_CONTENT);
     }
 
     match taskgroups::delete_group(&id) {

@@ -511,6 +511,10 @@ pub async fn delete_project(Path(id): Path<String>) -> Result<StatusCode, Status
 
     workspace::remove_project(&project.path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Notify Radio/Blitz clients that group slots may have changed
+    use crate::api::handlers::walkie_talkie::{broadcast_radio_event, RadioEvent};
+    broadcast_radio_event(RadioEvent::GroupChanged);
+
     Ok(StatusCode::NO_CONTENT)
 }
 

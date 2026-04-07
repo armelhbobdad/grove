@@ -18,6 +18,9 @@ export interface AgentUsage {
   percentage_remaining: number;
   windows: UsageWindow[];
   extras?: ExtraInfo[];
+  outdated: boolean;
+  fetched_at: string | null;
+  source: "fresh_cache" | "live" | "last_success_fallback";
 }
 
 /**

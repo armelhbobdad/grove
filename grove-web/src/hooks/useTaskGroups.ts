@@ -145,7 +145,11 @@ export function useTaskGroups(): UseTaskGroupsResult {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g;
-          return { ...g, slots: g.slots.filter((s) => s.position !== position) };
+          // Filter out deleted slot and renumber positions sequentially (matches backend behavior)
+          const remaining = g.slots
+            .filter((s) => s.position !== position)
+            .map((s, i) => ({ ...s, position: i + 1 }));
+          return { ...g, slots: remaining };
         }),
       );
 

@@ -4,13 +4,13 @@ import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
 import { VSCodeIcon } from "./VSCodeIcon";
 
-// Match file paths like `path/to/file.ext` or `path/to/file.ext:123`
-// Must contain at least one `/` and end with a known extension (optionally followed by `:line`)
-const FILE_PATH_RE = /^([\w./-]+\/[\w./-]+\.[\w]+)(?::(\d+))?[,.]?$/;
+// Match file paths like `path/to/file.ext` or `path/to/file.ext:123`.
+// Accept Unicode and other non-ASCII characters in path segments.
+const FILE_PATH_RE = /^(.+\/[^/]+?\.[A-Za-z0-9]+)(?::(\d+))?[,.]?$/;
 
-// Match href that looks like a file path (possibly with #L<line> anchor)
-// e.g. "service/foo.go", "service/foo.go:505", or ends with "#L505"
-const FILE_HREF_RE = /^(?!https?:\/\/|mailto:)([\w./@-]+\/[\w./@-]+\.[\w]+)(?:[:#]L?(\d+))?$/;
+// Match local file hrefs after decoding percent-encoded characters.
+// e.g. "service/foo.go", "/abs/path/中文名.md", or ends with "#L505"
+const FILE_HREF_RE = /^(.+\/[^/]+?\.[A-Za-z0-9]+)(?:[:#]L?(\d+))?$/;
 
 // Initialize mermaid once
 mermaid.initialize({
@@ -136,6 +136,33 @@ function extractText(children: React.ReactNode): string {
   return text;
 }
 
+function parseFileHref(href: string): { filePath: string; line?: number } | null {
+  if (/^(https?:\/\/|mailto:)/.test(href)) {
+    return null;
+  }
+
+  let decodedHref = href;
+  try {
+    decodedHref = decodeURIComponent(href);
+  } catch {
+    // Keep the raw href when decoding fails so plain ASCII paths still work.
+  }
+
+  if (decodedHref.startsWith("file://")) {
+    decodedHref = decodedHref.slice("file://".length);
+  }
+
+  const hrefMatch = decodedHref.match(FILE_HREF_RE);
+  if (!hrefMatch) {
+    return null;
+  }
+
+  return {
+    filePath: hrefMatch[1],
+    line: hrefMatch[2] ? parseInt(hrefMatch[2], 10) : undefined,
+  };
+}
+
 export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
@@ -174,10 +201,9 @@ export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps
         a: ({ href, children }) => {
           // Check if the link href looks like a file path (not an external URL)
           if (onFileClick && href) {
-            const hrefMatch = href.match(FILE_HREF_RE);
-            if (hrefMatch) {
-              const filePath = hrefMatch[1];
-              const line = hrefMatch[2] ? parseInt(hrefMatch[2], 10) : undefined;
+            const parsedHref = parseFileHref(href);
+            if (parsedHref) {
+              const { filePath, line } = parsedHref;
               // Also check the link text for "file:line" pattern
               const text = extractText(children);
               const textMatch = text.match(FILE_PATH_RE);
@@ -213,20 +239,50 @@ export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps
             {children}
           </blockquote>
         ),
-        pre: ({ children }) => {
-          const child = Children.toArray(children)[0];
-          if (isValidElement(child)) {
-            const props = child.props as {
-              className?: string;
-              children?: React.ReactNode;
-            };
-            const text = extractText(props.children);
-
-            if (props.className === "language-mermaid") {
+        code: ({ className, children }) => {
+          const isBlock = className?.startsWith("language-");
+          if (isBlock) {
+            if (className === "language-mermaid") {
+              const text = extractText(children);
               return <MermaidBlock code={text} />;
             }
+            return (
+              <code className="block text-xs font-mono">{children}</code>
+            );
           }
-          return <pre>{children}</pre>;
+          // Check if inline code looks like a file path
+          if (onFileClick) {
+            const text = extractText(children);
+            const match = text.match(FILE_PATH_RE);
+            if (match) {
+              const filePath = match[1];
+              const line = match[2] ? parseInt(match[2], 10) : undefined;
+              return (
+                <FileChip
+                  filePath={filePath}
+                  line={line}
+                  onClick={() => onFileClick(filePath, line)}
+                />
+              );
+            }
+          }
+          return (
+            <code className="px-1 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-highlight)] text-xs font-mono">
+              {children}
+            </code>
+          );
+        },
+        pre: ({ children }) => {
+          // If the child is a component (e.g. MermaidBlock) rather than a native <code>, pass through
+          const child = Children.toArray(children)[0];
+          if (isValidElement(child) && typeof child.type !== 'string') {
+            return <>{children}</>;
+          }
+          return (
+            <pre className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] p-3 my-2 overflow-x-auto text-xs font-mono">
+              {children}
+            </pre>
+          );
         },
         hr: () => (
           <hr className="border-[var(--color-border)] my-3" />

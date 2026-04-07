@@ -297,9 +297,16 @@ function PopoverCard({
         <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
           Plan
         </span>
-        <span className="text-[12px] font-semibold text-[var(--color-text)]">
-          {usage.plan ?? "—"}
-        </span>
+        <div className="flex items-center gap-2">
+          {usage.outdated && (
+            <span className="rounded-full border border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--color-warning)]">
+              Outdated
+            </span>
+          )}
+          <span className="text-[12px] font-semibold text-[var(--color-text)]">
+            {usage.plan ?? "—"}
+          </span>
+        </div>
       </div>
 
       <div
@@ -397,7 +404,7 @@ function PopoverCard({
         }}
       >
         <span className="text-[10px] text-[var(--color-text-muted)]">
-          Auto-refreshes every minute
+          {usage.outdated ? "Refresh failed, showing last successful data" : "Auto-refreshes every minute"}
         </span>
         <button
           type="button"
