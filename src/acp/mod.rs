@@ -1682,10 +1682,16 @@ impl AcpSessionHandle {
             }
         }
 
-        // 跟踪 busy 状态
+        // 跟踪 busy 状态，并通知 Radio 客户端
         if let AcpUpdate::Busy { value } = &update {
             self.is_busy
                 .store(*value, std::sync::atomic::Ordering::Relaxed);
+            use crate::api::handlers::walkie_talkie::{broadcast_radio_event, RadioEvent};
+            broadcast_radio_event(RadioEvent::TaskBusy {
+                project_id: self.project_key.clone(),
+                task_id: self.task_id.clone(),
+                busy: *value,
+            });
         }
 
         // Turn 结束时 compact 磁盘历史

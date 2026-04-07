@@ -90,6 +90,29 @@ export function makeTerminalCacheKey(
   return `${connectionKey}|${instanceId}`;
 }
 
+/**
+ * Send text input to a terminal matching a connection key prefix.
+ * Prefers the active (visible) terminal; falls back to any with open WS.
+ * Returns true if input was sent, false if no matching terminal was found.
+ */
+export function sendInputToTerminal(connectionKeyPrefix: string, text: string): boolean {
+  // Prefer active (visible) terminal
+  for (const [key, entry] of cache.entries()) {
+    if (key.startsWith(connectionKeyPrefix) && entry.active && entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+      entry.ws.send(text);
+      return true;
+    }
+  }
+  // Fallback: any matching terminal with open WS
+  for (const [key, entry] of cache.entries()) {
+    if (key.startsWith(connectionKeyPrefix) && entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+      entry.ws.send(text);
+      return true;
+    }
+  }
+  return false;
+}
+
 // Clean up all terminals when page unloads
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", disposeAllTerminals);

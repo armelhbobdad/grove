@@ -1,12 +1,19 @@
 import type { GroupSnapshot, ChatRef } from "../data/types";
 
+// ─── Target Mode ────────────────────────────────────────────────────────────
+
+export type TargetMode =
+  | { mode: "chat"; chat_id: string }
+  | { mode: "terminal" };
+
 // ─── Client → Server ────────────────────────────────────────────────────────
 
 export type WalkieTalkieClientMessage =
   | { type: "switch_group"; group_id: string }
   | { type: "select_task"; group_id: string; position: number }
-  | { type: "send_prompt"; group_id: string; position: number; text: string; chat_id?: string | null }
-  | { type: "switch_chat"; group_id: string; position: number; direction: "next" | "prev" };
+  | { type: "send_prompt"; group_id: string; position: number; text: string; chat_id?: string | null; target?: TargetMode }
+  | { type: "switch_chat"; group_id: string; position: number; direction: "next" | "prev" }
+  | { type: "set_target"; group_id: string; position: number; target: TargetMode };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -22,6 +29,8 @@ export type WalkieTalkieServerMessage =
 
 export type RadioEvent =
   | { type: "focus_task"; project_id: string; task_id: string }
+  | { type: "focus_target"; project_id: string; task_id: string; target: TargetMode }
+  | { type: "terminal_input"; project_id: string; task_id: string; text: string }
   | { type: "prompt_sent"; project_id: string; task_id: string }
   | { type: "client_connected" }
   | { type: "client_disconnected" }

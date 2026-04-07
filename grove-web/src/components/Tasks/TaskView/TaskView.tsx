@@ -16,6 +16,7 @@ import {
 import { FlexLayoutContainer, type FlexLayoutContainerHandle } from "../PanelSystem";
 import type { Task } from "../../../data/types";
 import type { PanelType } from "../PanelSystem/types";
+import { sendInputToTerminal } from "../TaskDetail/terminalCache";
 
 // --- Workspace Bar Dropdown (for overflow actions) ---
 function OverflowDropdown({ items }: { items: OverflowItem[] }) {
@@ -140,6 +141,8 @@ export interface TaskViewHandle {
   selectTabByIndex: (index: number) => "handled" | "no_tabs" | "out_of_range";
   selectAdjacentTab: (delta: number) => boolean;
   closeActiveTab: () => void;
+  /** Send text input to the task's terminal (via cached terminal WebSocket). */
+  sendTerminalInput: (text: string) => boolean;
 }
 
 export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) => {
@@ -170,13 +173,20 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
     layoutRef.current?.ensurePanel(type);
   }, []);
 
+  const handleSendTerminalInput = useCallback((text: string): boolean => {
+    // Terminal cache key prefix: "task:{projectId}:{taskId}|"
+    const prefix = `task:${projectId}:${task.id}|`;
+    return sendInputToTerminal(prefix, text);
+  }, [projectId, task.id]);
+
   useImperativeHandle(ref, () => ({
     addPanel: handleAddPanel,
     ensurePanel: handleEnsurePanel,
     selectTabByIndex: (index: number) => layoutRef.current?.selectTabByIndex(index) ?? "no_tabs",
     selectAdjacentTab: (delta: number) => layoutRef.current?.selectAdjacentTab(delta) ?? false,
     closeActiveTab: () => layoutRef.current?.closeActiveTab(),
-  }), [handleAddPanel, handleEnsurePanel]);
+    sendTerminalInput: handleSendTerminalInput,
+  }), [handleAddPanel, handleEnsurePanel, handleSendTerminalInput]);
 
   // Overflow menu items
   const isArchived = task.status === "archived";

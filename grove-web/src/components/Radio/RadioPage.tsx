@@ -3,10 +3,14 @@ import { useWalkieTalkie } from "../../hooks/useWalkieTalkie";
 import { useAudioRecorder } from "../../hooks/useAudioRecorder";
 import { transcribeAudio } from "../../api/ai";
 import { themes } from "../../context/ThemeContext";
+import type { TargetMode } from "../../api/walkieTalkie";
+import type { ChatRef } from "../../data/types";
 import GroupSelector from "./GroupSelector";
 import ChannelGrid from "./ChannelGrid";
 import InfoDisplay from "./InfoDisplay";
 import TranscriptDialog from "./TranscriptDialog";
+
+type TargetModeType = "chat" | "terminal";
 
 export function RadioPage() {
   // Prevent zoom/double-tap on mobile for push-to-talk UX
@@ -56,34 +60,69 @@ export function RadioPage() {
 
   // Local state
   const [autoSend, setAutoSend] = useState(true);
-  const [recordingPosition, setRecordingPosition] = useState<number | null>(
-    null,
-  );
+  const [recordingPosition, setRecordingPosition] = useState<number | null>(null);
   const [transcriptText, setTranscriptText] = useState<string | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState<{
     groupId: string;
     position: number;
-    chatId?: string;
+    target: TargetMode;
   } | null>(null);
+
+  // Per-slot target mode state: key = "groupId:position"
+  const [targetModes, setTargetModes] = useState<Record<string, TargetModeType>>({});
+  // Per-slot selected chat: key = "groupId:position"
+  const [selectedChats, setSelectedChats] = useState<Record<string, string>>({});
+
+  const slotKey = state.currentGroupId && state.currentPosition !== null
+    ? `${state.currentGroupId}:${state.currentPosition}`
+    : null;
+
+  const currentTargetMode: TargetModeType = slotKey ? (targetModes[slotKey] ?? "chat") : "chat";
+  const currentSelectedChatId = slotKey ? selectedChats[slotKey] : undefined;
+
+  // Use the selected chat from our local state, falling back to the server's active chat
+  const effectiveActiveChat = currentSelectedChatId
+    ? (state.availableChats.find((c) => c.id === currentSelectedChatId) ?? state.activeChat)
+    : state.activeChat;
+
+  // Build TargetMode for the current slot
+  const buildTarget = useCallback((): TargetMode => {
+    if (currentTargetMode === "terminal") {
+      return { mode: "terminal" };
+    }
+    const chatId = effectiveActiveChat?.id;
+    if (chatId) {
+      return { mode: "chat", chat_id: chatId };
+    }
+    return { mode: "terminal" }; // fallback if no chat available
+  }, [currentTargetMode, effectiveActiveChat]);
 
   // Refs to capture group/position at recording start (avoids stale closures)
   const recordingGroupRef = useRef<string | null>(null);
   const recordingPositionRef = useRef<number | null>(null);
   const startPromiseRef = useRef<Promise<void> | null>(null);
 
-  // Refs to track latest values for async callbacks (C1: stale closure fix)
+  // Refs to track latest values for async callbacks (avoids stale closures)
   const connectedRef = useRef(state.connected);
-  const activeChatRef = useRef(state.activeChat);
   const autoSendRef = useRef(autoSend);
   const groupsRef = useRef(state.groups);
   const isProcessingRef = useRef(false);
   const holdGenerationRef = useRef(0);
+  const buildTargetRef = useRef(buildTarget);
+  const slotKeyRef = useRef(slotKey);
+  const currentGroupIdRef = useRef(state.currentGroupId);
+  const currentPositionRef = useRef(state.currentPosition);
+  const effectiveActiveChatRef = useRef(effectiveActiveChat);
 
   useEffect(() => { connectedRef.current = state.connected; }, [state.connected]);
-  useEffect(() => { activeChatRef.current = state.activeChat; }, [state.activeChat]);
   useEffect(() => { autoSendRef.current = autoSend; }, [autoSend]);
   useEffect(() => { groupsRef.current = state.groups; }, [state.groups]);
+  useEffect(() => { buildTargetRef.current = buildTarget; }, [buildTarget]);
+  useEffect(() => { slotKeyRef.current = slotKey; }, [slotKey]);
+  useEffect(() => { currentGroupIdRef.current = state.currentGroupId; }, [state.currentGroupId]);
+  useEffect(() => { currentPositionRef.current = state.currentPosition; }, [state.currentPosition]);
+  useEffect(() => { effectiveActiveChatRef.current = effectiveActiveChat; }, [effectiveActiveChat]);
 
   // Prompt status feedback (auto-clears after 3 seconds)
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -108,6 +147,38 @@ export function RadioPage() {
   const currentGroup =
     state.groups.find((g) => g.id === state.currentGroupId) ?? null;
 
+  // ── Mode / Session switching ─────────────────────────────────────────────
+
+  const handleTargetModeChange = useCallback(
+    (mode: TargetModeType) => {
+      const sk = slotKeyRef.current;
+      const gid = currentGroupIdRef.current;
+      const pos = currentPositionRef.current;
+      if (!sk || !gid || pos === null) return;
+      setTargetModes((prev) => ({ ...prev, [sk]: mode }));
+      // Broadcast to Blitz so it can preemptively switch panel
+      const chatId = effectiveActiveChatRef.current?.id;
+      const target: TargetMode = mode === "terminal" || !chatId
+        ? { mode: "terminal" }
+        : { mode: "chat", chat_id: chatId };
+      actions.setTarget(gid, pos, target);
+    },
+    [actions],
+  );
+
+  const handleSelectChat = useCallback(
+    (chat: ChatRef) => {
+      const sk = slotKeyRef.current;
+      const gid = currentGroupIdRef.current;
+      const pos = currentPositionRef.current;
+      if (!sk || !gid || pos === null) return;
+      setSelectedChats((prev) => ({ ...prev, [sk]: chat.id }));
+      // Broadcast to Blitz
+      actions.setTarget(gid, pos, { mode: "chat", chat_id: chat.id });
+    },
+    [actions],
+  );
+
   // ── Callbacks ─────────────────────────────────────────────────────────────
 
   const handleTap = useCallback(
@@ -121,17 +192,20 @@ export function RadioPage() {
 
   const handleHoldStart = useCallback(
     (position: number) => {
-      // C2: Cancel any in-progress recording before starting a new one
+      // Cancel any in-progress recording before starting a new one
       if (recorder.status === "recording") {
         recorder.cancel();
       }
       // Increment generation to cancel any stale hold-end processing
       holdGenerationRef.current++;
-      // C2: Block if transcription is still in progress
+      // Block if transcription is still in progress
       if (isProcessingRef.current) return;
 
       if (state.currentGroupId) {
         actions.selectTask(state.currentGroupId, position);
+        // Send target to Blitz at hold start so it can prepare
+        const target = buildTargetRef.current();
+        actions.setTarget(state.currentGroupId, position, target);
       }
       recordingGroupRef.current = state.currentGroupId;
       recordingPositionRef.current = position;
@@ -158,16 +232,18 @@ export function RadioPage() {
       const result = await transcribeAudio(blob, slot?.project_id);
       const text = result.final || result.revised || result.raw;
 
+      const target = buildTargetRef.current();
+
       if (!connectedRef.current) {
         setTranscriptText(text);
-        setPendingPrompt({ groupId, position: pos, chatId: activeChatRef.current?.id });
+        setPendingPrompt({ groupId, position: pos, target });
       } else if (autoSendRef.current) {
-        actions.sendPrompt(groupId, pos, text, activeChatRef.current?.id);
+        actions.sendPrompt(groupId, pos, text, target);
         setTranscriptText(null);
         setPendingPrompt(null);
       } else {
         setTranscriptText(text);
-        setPendingPrompt({ groupId, position: pos, chatId: activeChatRef.current?.id });
+        setPendingPrompt({ groupId, position: pos, target });
       }
     } catch (err) {
       console.error("[Radio] Transcription failed:", err);
@@ -217,13 +293,12 @@ export function RadioPage() {
 
   const handleManualSend = useCallback(
     (text: string) => {
-      // M4: Use captured groupId/position/chatId from recording time, not current state
       if (pendingPrompt) {
         actions.sendPrompt(
           pendingPrompt.groupId,
           pendingPrompt.position,
           text,
-          pendingPrompt.chatId,
+          pendingPrompt.target,
         );
       }
       setTranscriptText(null);
@@ -310,7 +385,11 @@ export function RadioPage() {
             <InfoDisplay
               group={currentGroup}
               selectedPosition={state.currentPosition}
-              activeChat={state.activeChat}
+              activeChat={effectiveActiveChat}
+              availableChats={state.availableChats}
+              targetMode={currentTargetMode}
+              onTargetModeChange={handleTargetModeChange}
+              onSelectChat={handleSelectChat}
               isRecording={recordingPosition !== null}
               recordingElapsed={recorder.elapsed}
               frequencyData={recorder.frequencyData}

@@ -1456,6 +1456,19 @@ export function TaskChat({
     };
   }, [projectId, task.id]);
 
+  // ─── External chat switch (Radio → Blitz) ──────────────────────────────
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.projectId === projectId && detail?.taskId === task.id && detail?.chatId) {
+        setActiveChatId(detail.chatId);
+      }
+    };
+    window.addEventListener("grove:switch-chat", handler);
+    return () => window.removeEventListener("grove:switch-chat", handler);
+  }, [projectId, task.id]);
+
   // ─── Per-chat WebSocket management ─────────────────────────────────────
 
   // Refs for WS callbacks so connectChatWs doesn't need them as deps
@@ -1810,6 +1823,7 @@ export function TaskChat({
         }
         case "user_message": {
           setMessages((prev) => reduceHistoryMessages(prev, msg));
+          enableAutoStickToBottom("smooth");
           break;
         }
         case "mode_changed":

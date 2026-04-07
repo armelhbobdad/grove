@@ -3,6 +3,7 @@ import type { GroupSnapshot, ChatRef } from "../data/types";
 import type {
   WalkieTalkieClientMessage,
   WalkieTalkieServerMessage,
+  TargetMode,
 } from "../api/walkieTalkie";
 import { getApiHost, appendHmacToUrl } from "../api/client";
 
@@ -30,13 +31,14 @@ export interface WalkieTalkieActions {
     groupId: string,
     position: number,
     text: string,
-    chatId?: string,
+    target?: TargetMode,
   ) => void;
   switchChat: (
     groupId: string,
     position: number,
     direction: "next" | "prev",
   ) => void;
+  setTarget: (groupId: string, position: number, target: TargetMode) => void;
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
@@ -251,13 +253,13 @@ export function useWalkieTalkie(): [WalkieTalkieState, WalkieTalkieActions] {
   );
 
   const sendPrompt = useCallback(
-    (groupId: string, position: number, text: string, chatId?: string) => {
+    (groupId: string, position: number, text: string, target?: TargetMode) => {
       send({
         type: "send_prompt",
         group_id: groupId,
         position,
         text,
-        ...(chatId ? { chat_id: chatId } : {}),
+        ...(target ? { target } : {}),
       });
     },
     [send],
@@ -266,6 +268,13 @@ export function useWalkieTalkie(): [WalkieTalkieState, WalkieTalkieActions] {
   const switchChat = useCallback(
     (groupId: string, position: number, direction: "next" | "prev") => {
       send({ type: "switch_chat", group_id: groupId, position, direction });
+    },
+    [send],
+  );
+
+  const setTarget = useCallback(
+    (groupId: string, position: number, target: TargetMode) => {
+      send({ type: "set_target", group_id: groupId, position, target });
     },
     [send],
   );
@@ -288,6 +297,7 @@ export function useWalkieTalkie(): [WalkieTalkieState, WalkieTalkieActions] {
     selectTask,
     sendPrompt,
     switchChat,
+    setTarget,
   };
 
   return [state, actions];

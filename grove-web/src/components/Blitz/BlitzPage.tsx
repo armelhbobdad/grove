@@ -93,7 +93,13 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
   const [localTasksExpanded, setLocalTasksExpanded] = useState(false);
   const mainListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // Callback ref: only SET on mount, never clear on unmount.
+  // This prevents AnimatePresence exit animation from clearing the ref
+  // when the old TaskView unmounts after the new one has already mounted.
   const taskViewRef = useRef<TaskViewHandle | null>(null);
+  const taskViewCallbackRef = useCallback((handle: TaskViewHandle | null) => {
+    if (handle) taskViewRef.current = handle;
+  }, []);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Archive confirmation state (shared between hooks)
@@ -140,6 +146,19 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
   useEffect(() => { blitzTasksRef.current = blitzTasks; }, [blitzTasks]);
   const radioFocusedTaskRef = useRef<string | null>(null);
 
+  // Helper: ensure the right panel is open for the currently selected task.
+  // Does NOT call setSelectedBlitzTask — task selection is handled by onFocusTask.
+  const ensureRadioPanel = useCallback((panelType: "chat" | "terminal") => {
+    const tryEnsure = (attempts: number) => {
+      if (taskViewRef.current) {
+        taskViewRef.current.ensurePanel(panelType);
+      } else if (attempts > 0) {
+        setTimeout(() => tryEnsure(attempts - 1), 100);
+      }
+    };
+    setTimeout(() => tryEnsure(10), 100);
+  }, []);
+
   const { radioClients } = useRadioEvents({
     onFocusTask: useCallback((projectId: string, taskId: string) => {
       const taskKey = `${projectId}:${taskId}`;
@@ -151,20 +170,43 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
       setSelectedBlitzTask(bt);
       pageHandlers.setInWorkspace(true);
 
-      // Only open chat panel on first focus for this task
+      // Only open chat panel on first focus for this task (avoid re-opening on repeated taps)
       if (radioFocusedTaskRef.current !== taskKey) {
         radioFocusedTaskRef.current = taskKey;
-        // Wait for TaskView to mount, then ensure chat panel
-        const tryEnsure = (attempts: number) => {
-          if (taskViewRef.current) {
-            taskViewRef.current.ensurePanel("chat");
-          } else if (attempts > 0) {
-            setTimeout(() => tryEnsure(attempts - 1), 100);
-          }
-        };
-        setTimeout(() => tryEnsure(10), 100);
+        ensureRadioPanel("chat");
       }
-    }, [pageHandlers]),
+    }, [pageHandlers, ensureRadioPanel]),
+
+    onFocusTarget: useCallback((_projectId: string, _taskId: string, target: import("../../api/walkieTalkie").TargetMode) => {
+      // Only switch panel — task selection is already handled by onFocusTask (tap/hold)
+      const panelType = target.mode === "terminal" ? "terminal" : "chat";
+      ensureRadioPanel(panelType);
+      // If chat mode with specific session, tell TaskChat to switch
+      if (target.mode === "chat" && "chat_id" in target && target.chat_id) {
+        window.dispatchEvent(new CustomEvent("grove:switch-chat", {
+          detail: { projectId: _projectId, taskId: _taskId, chatId: target.chat_id },
+        }));
+      }
+    }, [ensureRadioPanel]),
+
+    onTerminalInput: useCallback((_projectId: string, _taskId: string, text: string) => {
+      // Send input to terminal — task should already be selected via prior events
+      const targetKey = `${_projectId}:${_taskId}`;
+      const trySend = (attempts: number) => {
+        // Bail if task changed since event was received
+        if (radioFocusedTaskRef.current && radioFocusedTaskRef.current !== targetKey) return;
+        if (taskViewRef.current) {
+          taskViewRef.current.ensurePanel("terminal");
+          const sent = taskViewRef.current.sendTerminalInput(text.trimEnd() + "\r");
+          if (!sent && attempts > 0) {
+            setTimeout(() => trySend(attempts - 1), 200);
+          }
+        } else if (attempts > 0) {
+          setTimeout(() => trySend(attempts - 1), 200);
+        }
+      };
+      setTimeout(() => trySend(15), 100);
+    }, []),
   });
   const radioConnected = radioClients > 0;
 
@@ -208,6 +250,11 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
     if (!selectedBlitzTask) return null;
     return filteredTasks.find((bt) => bt.task.id === selectedBlitzTask.task.id && bt.projectId === selectedBlitzTask.projectId) ?? null;
   }, [filteredTasks, selectedBlitzTask]);
+
+  // Clear stale taskViewRef when no task is selected
+  useEffect(() => {
+    if (!currentSelected) taskViewRef.current = null;
+  }, [currentSelected]);
 
   // Derive task lists from groups
   const mainGroup = useMemo(() => taskGroups.find(g => g.id === MAIN_GROUP_ID), [taskGroups]);
@@ -1047,18 +1094,7 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
             </button>
           </div>
         )}
-        {/* Aurora background */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <div
-            className="absolute -inset-[50%] opacity-[0.25] animate-[aurora_20s_ease-in-out_infinite]"
-            style={{
-              background: "conic-gradient(from 0deg at 50% 50%, var(--color-warning), var(--color-info), var(--color-accent), var(--color-success), var(--color-warning))",
-              filter: "blur(50px)",
-              willChange: "transform",
-            }}
-          />
-        </div>
-        <div className="h-full p-6 relative z-[1]">
+        <div className="h-full relative">
           <div className="h-full relative">
             {/* Task List Page */}
             <motion.div
@@ -1103,7 +1139,7 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="h-full flex items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
+                    className="h-full flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
                   >
                     <div className="text-center">
                       <p className="text-[var(--color-text-muted)] mb-2">
@@ -1130,7 +1166,7 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
                   className="absolute inset-0 flex gap-1"
                 >
                   <TaskView
-                    ref={taskViewRef}
+                    ref={taskViewCallbackRef}
                     projectId={currentSelected.projectId}
                     task={currentSelected.task}
                     projectName={currentSelected.projectName}

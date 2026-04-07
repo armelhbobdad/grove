@@ -48,6 +48,32 @@ pub enum RadioEvent {
     GroupChanged,
     /// Theme changed on desktop.
     ThemeChanged,
+    /// An ACP session's busy state changed — push status to Radio clients.
+    TaskBusy {
+        project_id: String,
+        task_id: String,
+        busy: bool,
+    },
+    /// Radio user set an active target (chat session or terminal) — desktop should switch view.
+    FocusTarget {
+        project_id: String,
+        task_id: String,
+        target: TargetMode,
+    },
+    /// Radio user sent text intended for the terminal — desktop should inject into terminal WS.
+    TerminalInput {
+        project_id: String,
+        task_id: String,
+        text: String,
+    },
+}
+
+/// Target mode for Radio: either a specific chat session or the terminal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum TargetMode {
+    Chat { chat_id: String },
+    Terminal,
 }
 
 /// Global broadcast channel for radio events.
@@ -80,11 +106,18 @@ enum ClientMessage {
         text: String,
         #[serde(default)]
         chat_id: Option<String>,
+        #[serde(default)]
+        target: Option<TargetMode>,
     },
     SwitchChat {
         group_id: String,
         position: u16,
         direction: String,
+    },
+    SetTarget {
+        group_id: String,
+        position: u16,
+        target: TargetMode,
     },
 }
 
@@ -291,6 +324,20 @@ pub async fn handle_walkie_talkie_ws_inner(socket: WebSocket) {
                         let theme_name = crate::storage::config::load_config().theme.name;
                         let _ = msg_tx.send(ServerMessage::ThemeChanged { theme: theme_name });
                     }
+                    Ok(RadioEvent::TaskBusy { project_id, task_id, busy }) => {
+                        // Real-time status push from ACP session
+                        let status = if busy { "busy" } else { "idle" };
+                        let key = (project_id.clone(), task_id.clone());
+                        let changed = last_statuses.get(&key).map_or(true, |prev| prev != status);
+                        if changed {
+                            let _ = msg_tx.send(ServerMessage::TaskStatus {
+                                project_id,
+                                task_id,
+                                agent_status: status.to_string(),
+                            });
+                            last_statuses.insert(key, status.to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -320,7 +367,8 @@ async fn handle_client_message(
     match &msg {
         ClientMessage::SelectTask { position, .. }
         | ClientMessage::SendPrompt { position, .. }
-        | ClientMessage::SwitchChat { position, .. } => {
+        | ClientMessage::SwitchChat { position, .. }
+        | ClientMessage::SetTarget { position, .. } => {
             if !validate_position(*position) {
                 let _ = tx.send(ServerMessage::PromptSent {
                     group_id: String::new(),
@@ -365,31 +413,100 @@ async fn handle_client_message(
             position,
             text,
             chat_id,
+            target,
         } => {
-            // Broadcast focus event first (desktop switches to this task)
+            match target {
+                Some(TargetMode::Terminal) => {
+                    // Terminal mode: broadcast focus + terminal input to Blitz
+                    if let Some(slot) = find_slot_in(&groups, &group_id, position) {
+                        let _ = RADIO_EVENTS.send(RadioEvent::FocusTarget {
+                            project_id: slot.project_id.clone(),
+                            task_id: slot.task_id.clone(),
+                            target: TargetMode::Terminal,
+                        });
+                        let _ = RADIO_EVENTS.send(RadioEvent::TerminalInput {
+                            project_id: slot.project_id.clone(),
+                            task_id: slot.task_id.clone(),
+                            text: text.clone(),
+                        });
+                    }
+                    let _ = tx.send(ServerMessage::PromptSent {
+                        group_id,
+                        position,
+                        status: "ok".to_string(),
+                        error: None,
+                    });
+                }
+                Some(TargetMode::Chat {
+                    chat_id: ref target_chat_id,
+                }) => {
+                    // Chat mode with explicit target chat_id
+                    if let Some(slot) = find_slot_in(&groups, &group_id, position) {
+                        let _ = RADIO_EVENTS.send(RadioEvent::FocusTarget {
+                            project_id: slot.project_id.clone(),
+                            task_id: slot.task_id.clone(),
+                            target: TargetMode::Chat {
+                                chat_id: target_chat_id.clone(),
+                            },
+                        });
+                    }
+                    let result = send_prompt_to_task(
+                        &group_id,
+                        position,
+                        &text,
+                        Some(target_chat_id.as_str()),
+                        state,
+                        &groups,
+                    )
+                    .await;
+                    if let Some(slot) = find_slot_in(&groups, &group_id, position) {
+                        let _ = RADIO_EVENTS.send(RadioEvent::PromptSent {
+                            project_id: slot.project_id.clone(),
+                            task_id: slot.task_id.clone(),
+                        });
+                    }
+                    let _ = tx.send(result);
+                }
+                None => {
+                    // Legacy: no target specified, use existing logic
+                    if let Some(slot) = find_slot_in(&groups, &group_id, position) {
+                        let _ = RADIO_EVENTS.send(RadioEvent::FocusTask {
+                            project_id: slot.project_id.clone(),
+                            task_id: slot.task_id.clone(),
+                        });
+                    }
+                    let result = send_prompt_to_task(
+                        &group_id,
+                        position,
+                        &text,
+                        chat_id.as_deref(),
+                        state,
+                        &groups,
+                    )
+                    .await;
+                    if let Some(slot) = find_slot_in(&groups, &group_id, position) {
+                        let _ = RADIO_EVENTS.send(RadioEvent::PromptSent {
+                            project_id: slot.project_id.clone(),
+                            task_id: slot.task_id.clone(),
+                        });
+                    }
+                    let _ = tx.send(result);
+                }
+            }
+        }
+        ClientMessage::SetTarget {
+            group_id,
+            position,
+            target,
+        } => {
+            // Broadcast focus target to desktop Blitz listeners (preemptive switching)
             if let Some(slot) = find_slot_in(&groups, &group_id, position) {
-                let _ = RADIO_EVENTS.send(RadioEvent::FocusTask {
+                let _ = RADIO_EVENTS.send(RadioEvent::FocusTarget {
                     project_id: slot.project_id.clone(),
                     task_id: slot.task_id.clone(),
+                    target,
                 });
             }
-            let result = send_prompt_to_task(
-                &group_id,
-                position,
-                &text,
-                chat_id.as_deref(),
-                state,
-                &groups,
-            )
-            .await;
-            // Broadcast prompt_sent event after sending
-            if let Some(slot) = find_slot_in(&groups, &group_id, position) {
-                let _ = RADIO_EVENTS.send(RadioEvent::PromptSent {
-                    project_id: slot.project_id.clone(),
-                    task_id: slot.task_id.clone(),
-                });
-            }
-            let _ = tx.send(result);
         }
         ClientMessage::SwitchChat {
             group_id,
@@ -408,11 +525,17 @@ async fn handle_client_message(
 /// Load all groups and build a full snapshot with slot statuses.
 /// Excludes _local group (not relevant for Radio control).
 fn build_full_snapshot() -> Vec<GroupSnapshot> {
-    let groups: Vec<_> = taskgroups::load_groups()
+    let mut groups: Vec<_> = taskgroups::load_groups()
         .unwrap_or_default()
         .into_iter()
         .filter(|g| g.id != taskgroups::LOCAL_GROUP_ID)
         .collect();
+    // Ensure _main is always first, matching Blitz display order
+    groups.sort_by(|a, b| {
+        let a_main = a.id == taskgroups::MAIN_GROUP_ID;
+        let b_main = b.id == taskgroups::MAIN_GROUP_ID;
+        b_main.cmp(&a_main)
+    });
     let projects = workspace::load_projects().unwrap_or_default();
 
     // Build a project-name lookup by project hash
