@@ -643,9 +643,6 @@ pub async fn start_server(
     auth: Arc<ServerAuth>,
     tls_mode: crate::cli::web::TlsMode,
 ) -> std::io::Result<()> {
-    // Initialize SQLite database
-    let _ = crate::storage::database::connection();
-
     // Initialize FileWatchers for all live tasks
     init_file_watchers();
 

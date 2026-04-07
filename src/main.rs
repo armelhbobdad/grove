@@ -103,8 +103,6 @@ fn ensure_storage_version() {
 
 /// 启动 TUI 界面
 fn run_tui() -> io::Result<()> {
-    ensure_storage_version();
-
     // 环境检查
     let result = check::check_environment();
     if !result.ok {
@@ -231,6 +229,15 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Ensure storage is migrated and DB initialized for UI commands
+    let needs_storage = matches!(
+        command,
+        Commands::Tui | Commands::Web { .. } | Commands::Mobile { .. } | Commands::Gui { .. }
+    );
+    if needs_storage {
+        ensure_storage_version();
+    }
+
     // 统一调度
     match command {
         Commands::Tui => {
@@ -240,7 +247,6 @@ fn main() -> io::Result<()> {
             cli::hooks::execute(level);
         }
         Commands::Mcp => {
-            ensure_storage_version();
             tokio::runtime::Runtime::new()
                 .expect("Failed to create tokio runtime")
                 .block_on(async {
@@ -254,7 +260,6 @@ fn main() -> io::Result<()> {
             cli::fp::execute();
         }
         Commands::Web { port, no_open, dev } => {
-            ensure_storage_version();
             tokio::runtime::Runtime::new()
                 .expect("Failed to create tokio runtime")
                 .block_on(async {
@@ -270,7 +275,6 @@ fn main() -> io::Result<()> {
             host,
             public,
         } => {
-            ensure_storage_version();
             tokio::runtime::Runtime::new()
                 .expect("Failed to create tokio runtime")
                 .block_on(async {
@@ -310,7 +314,6 @@ fn main() -> io::Result<()> {
             }
         }
         Commands::Acp { agent, cwd } => {
-            ensure_storage_version();
             tokio::runtime::Runtime::new()
                 .expect("Failed to create tokio runtime")
                 .block_on(async {
