@@ -20,6 +20,7 @@ use std::process::{Command, Stdio};
 
 const CREDENTIALS_PATH: &str = ".claude/.credentials.json";
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const REQUIRED_SCOPE: &str = "user:profile";
 const CLAUDE_CODE_UA: &str = "claude-code/2.0.32";
@@ -270,6 +271,7 @@ fn try_decode_hex_json(text: &str) -> Option<CredentialsFile> {
     serde_json::from_str(&decoded).ok()
 }
 
+#[cfg(target_os = "macos")]
 fn read_keychain_password(service: &str) -> Option<String> {
     let output = Command::new("security")
         .arg("find-generic-password")
