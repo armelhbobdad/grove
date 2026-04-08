@@ -132,6 +132,7 @@ pub async fn info() -> Option<RadioServerInfo> {
 fn create_radio_router(expected_token: Arc<String>) -> Router {
     let authed_routes = Router::new()
         .route("/ws", get(radio_ws_handler))
+        .route("/api/v1/ai/audio", get(super::handlers::ai::get_audio))
         .route(
             "/api/v1/ai/transcribe",
             post(super::handlers::ai::transcribe),

@@ -13,6 +13,7 @@ interface InfoDisplayProps {
   onSelectChat: (chat: ChatRef) => void;
   isRecording: boolean;
   recordingElapsed: number;
+  maxDuration: number;
   frequencyData: Uint8Array | null;
   isTranscribing: boolean;
   promptStatus: { status: "ok" | "error"; error?: string } | null;
@@ -68,6 +69,7 @@ export default function InfoDisplay({
   onSelectChat,
   isRecording,
   recordingElapsed,
+  maxDuration,
   frequencyData,
   isTranscribing,
   promptStatus,
@@ -126,97 +128,100 @@ export default function InfoDisplay({
         </div>
       </div>
 
-      {/* Row 2: Mode tabs + session/terminal info */}
-      {hasSlot && !isRecording && (
-        <div className="mb-1.5">
-          {/* Mode toggle: Chat / Terminal */}
-          <div
-            className="mb-1.5 grid grid-cols-2 rounded-lg border p-0.5"
-            style={{ borderColor: "var(--color-border)", backgroundColor: "var(--color-bg-secondary)" }}
-          >
-            <button
-              onClick={() => onTargetModeChange("chat")}
-              className="rounded-md px-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-200"
-              style={{
-                color: targetMode === "chat" ? "var(--color-highlight)" : "var(--color-text-muted)",
-                backgroundColor: targetMode === "chat" ? "color-mix(in srgb, var(--color-highlight) 15%, transparent)" : "transparent",
-              }}
-            >
-              Chat
-            </button>
-            <button
-              onClick={() => onTargetModeChange("terminal")}
-              className="rounded-md px-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-200"
-              style={{
-                color: targetMode === "terminal" ? "var(--color-highlight)" : "var(--color-text-muted)",
-                backgroundColor: targetMode === "terminal" ? "color-mix(in srgb, var(--color-highlight) 15%, transparent)" : "transparent",
-              }}
-            >
-              Terminal
-            </button>
+      {/* Row 2: Mode tabs + session/terminal info (or recording waveform) */}
+      <div className="mb-1.5" style={{ minHeight: 60 }}>
+        {isRecording ? (
+          <div className="flex h-full flex-col justify-center">
+            <div className="flex items-center justify-between gap-3">
+              <div className="shrink-0 flex items-center gap-2">
+                <Waveform frequencyData={frequencyData} />
+              </div>
+              <div className="shrink-0 flex flex-col items-end gap-0.5">
+                <div className="flex items-baseline gap-1">
+                  <span className="font-mono text-[13px] font-semibold" style={{ color: "var(--color-warning)" }}>
+                    {formatTime(recordingElapsed)}
+                  </span>
+                  <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                    / {formatTime(maxDuration)}
+                  </span>
+                </div>
+                <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                  ↑ Cancel
+                </span>
+              </div>
+            </div>
           </div>
-
-          {/* Chat mode: session dropdown */}
-          {targetMode === "chat" && availableChats.length > 0 && (
-            <select
-              value={activeChat?.id ?? ""}
-              onChange={(e) => {
-                const chat = availableChats.find((c) => c.id === e.target.value);
-                if (chat) onSelectChat(chat);
-              }}
-              className="w-full rounded-lg border px-2 py-1.5 text-[11px] font-medium appearance-none truncate"
-              style={{
-                borderColor: "var(--color-border)",
-                backgroundColor: "var(--color-bg-secondary)",
-                color: "var(--color-text)",
-                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: "right 8px center",
-                paddingRight: "24px",
-              }}
+        ) : hasSlot ? (
+          <>
+            {/* Mode toggle: Chat / Terminal */}
+            <div
+              className="mb-1.5 grid grid-cols-2 rounded-lg border p-0.5"
+              style={{ borderColor: "var(--color-border)", backgroundColor: "var(--color-bg-secondary)" }}
             >
-              {availableChats.map((chat) => (
-                <option key={chat.id} value={chat.id}>
-                  {chat.title ? `${chat.title} — ${chat.agent}` : chat.agent}
-                </option>
-              ))}
-            </select>
-          )}
-          {targetMode === "chat" && availableChats.length === 0 && (
-            <div className="px-2 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              No sessions available
+              <button
+                onClick={() => onTargetModeChange("chat")}
+                className="rounded-md px-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-200"
+                style={{
+                  color: targetMode === "chat" ? "var(--color-highlight)" : "var(--color-text-muted)",
+                  backgroundColor: targetMode === "chat" ? "color-mix(in srgb, var(--color-highlight) 15%, transparent)" : "transparent",
+                }}
+              >
+                Chat
+              </button>
+              <button
+                onClick={() => onTargetModeChange("terminal")}
+                className="rounded-md px-2 py-1 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-200"
+                style={{
+                  color: targetMode === "terminal" ? "var(--color-highlight)" : "var(--color-text-muted)",
+                  backgroundColor: targetMode === "terminal" ? "color-mix(in srgb, var(--color-highlight) 15%, transparent)" : "transparent",
+                }}
+              >
+                Terminal
+              </button>
             </div>
-          )}
 
-          {/* Terminal mode: simple label */}
-          {targetMode === "terminal" && (
-            <div className="px-2 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              Voice input will be sent to terminal
-            </div>
-          )}
-        </div>
-      )}
+            {/* Chat mode: session dropdown */}
+            {targetMode === "chat" && availableChats.length > 0 && (
+              <select
+                value={activeChat?.id ?? ""}
+                onChange={(e) => {
+                  const chat = availableChats.find((c) => c.id === e.target.value);
+                  if (chat) onSelectChat(chat);
+                }}
+                className="w-full rounded-lg border px-2 py-1.5 text-[11px] font-medium appearance-none truncate"
+                style={{
+                  borderColor: "var(--color-border)",
+                  backgroundColor: "var(--color-bg-secondary)",
+                  color: "var(--color-text)",
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: "right 8px center",
+                  paddingRight: "24px",
+                }}
+              >
+                {availableChats.map((chat) => (
+                  <option key={chat.id} value={chat.id}>
+                    {chat.title ? `${chat.title} — ${chat.agent}` : chat.agent}
+                  </option>
+                ))}
+              </select>
+            )}
+            {targetMode === "chat" && availableChats.length === 0 && (
+              <div className="px-2 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                No sessions available
+              </div>
+            )}
 
-      {/* Row 3: Recording waveform */}
-      <div className="flex items-end justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          {isRecording ? (
-            <div className="truncate text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              Recording...
-            </div>
-          ) : !hasSlot ? (
-            <div className="truncate text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              No session
-            </div>
-          ) : null}
-        </div>
-
-        {isRecording && (
-          <div className="shrink-0 flex items-center gap-2">
-            <Waveform frequencyData={frequencyData} />
-            <span className="font-mono text-[11px]" style={{ color: "var(--color-warning)" }}>
-              {formatTime(recordingElapsed)}
-            </span>
+            {/* Terminal mode: simple label */}
+            {targetMode === "terminal" && (
+              <div className="px-2 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                Voice input will be sent to terminal
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="flex h-full items-center px-2 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            No session
           </div>
         )}
       </div>

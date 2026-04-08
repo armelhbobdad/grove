@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useWalkieTalkie } from "../../hooks/useWalkieTalkie";
 import { useAudioRecorder } from "../../hooks/useAudioRecorder";
-import { transcribeAudio } from "../../api/ai";
+import { getAudioSettings, transcribeAudio } from "../../api/ai";
 import { themes } from "../../context/ThemeContext";
 import type { TargetMode } from "../../api/walkieTalkie";
 import type { ChatRef } from "../../data/types";
@@ -23,16 +23,28 @@ export function RadioPage() {
 
   // Hooks
   const [state, actions] = useWalkieTalkie();
+  const [audioMinDuration, setAudioMinDuration] = useState(2);
+  const [audioMaxDuration, setAudioMaxDuration] = useState(60);
   const processBlobRef = useRef<(blob: Blob) => void>(() => {});
+  const isProcessingRef = useRef(false);
+  const recordingStartRef = useRef(0);
   const recorder = useAudioRecorder({
-    minDuration: 0.5,
-    maxDuration: 60,
+    minDuration: 0.5, // allow short recordings through to transcribe; we check minDuration separately
+    maxDuration: audioMaxDuration,
     onMaxReached: (blob) => {
       setRecordingPosition(null);
       isProcessingRef.current = true;
       processBlobRef.current(blob);
     },
   });
+
+  // Fetch audio settings for min/max duration
+  useEffect(() => {
+    getAudioSettings().then((settings) => {
+      setAudioMinDuration(settings.minDuration);
+      setAudioMaxDuration(settings.maxDuration);
+    }).catch((err) => { console.warn("[Radio] Failed to fetch audio settings, using defaults:", err); });
+  }, []);
 
   // Apply theme from desktop via WS
   useEffect(() => {
@@ -107,8 +119,8 @@ export function RadioPage() {
   const connectedRef = useRef(state.connected);
   const autoSendRef = useRef(autoSend);
   const groupsRef = useRef(state.groups);
-  const isProcessingRef = useRef(false);
   const holdGenerationRef = useRef(0);
+  const audioMinDurationRef = useRef(audioMinDuration);
   const buildTargetRef = useRef(buildTarget);
   const slotKeyRef = useRef(slotKey);
   const currentGroupIdRef = useRef(state.currentGroupId);
@@ -118,6 +130,7 @@ export function RadioPage() {
   useEffect(() => { connectedRef.current = state.connected; }, [state.connected]);
   useEffect(() => { autoSendRef.current = autoSend; }, [autoSend]);
   useEffect(() => { groupsRef.current = state.groups; }, [state.groups]);
+  useEffect(() => { audioMinDurationRef.current = audioMinDuration; }, [audioMinDuration]);
   useEffect(() => { buildTargetRef.current = buildTarget; }, [buildTarget]);
   useEffect(() => { slotKeyRef.current = slotKey; }, [slotKey]);
   useEffect(() => { currentGroupIdRef.current = state.currentGroupId; }, [state.currentGroupId]);
@@ -227,6 +240,7 @@ export function RadioPage() {
       }
       recordingGroupRef.current = state.currentGroupId;
       recordingPositionRef.current = position;
+      recordingStartRef.current = Date.now();
       setRecordingPosition(position);
       // Track the start promise so holdEnd can wait for it
       startPromiseRef.current = recorder.start();
@@ -248,7 +262,13 @@ export function RadioPage() {
       const currentGroup = groupsRef.current.find((g) => g.id === groupId);
       const slot = currentGroup?.slots.find((s) => s.position === pos);
       const result = await transcribeAudio(blob, slot?.project_id);
-      const text = result.final || result.revised || result.raw;
+      const text = (result.final || result.revised || result.raw || "").trim();
+
+      if (!text) {
+        // Empty transcription — skip silently
+        setPendingPrompt(null);
+        return;
+      }
 
       const target = buildTargetRef.current();
 
@@ -274,14 +294,20 @@ export function RadioPage() {
   processBlobRef.current = processBlob;
 
   const handleHoldEnd = useCallback(
-    () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    (_position: number) => {
+      const preciseElapsed = (Date.now() - recordingStartRef.current) / 1000;
       setRecordingPosition(null);
-      setIsTranscribing(true); // Show "Transcribing" immediately on release
 
-      // Capture current generation to detect stale processing
+      // Skip if recording is shorter than configured min duration
+      if (preciseElapsed < audioMinDurationRef.current) {
+        recorder.cancel();
+        isProcessingRef.current = false;
+        return;
+      }
+
       const gen = holdGenerationRef.current;
 
-      // Wait for start() to complete before stopping
       const doStop = async () => {
         if (startPromiseRef.current) {
           await startPromiseRef.current;
@@ -292,21 +318,31 @@ export function RadioPage() {
 
       isProcessingRef.current = true;
       doStop().then(async (blob) => {
-        // If a new hold-start happened while we were stopping, discard this result
         if (gen !== holdGenerationRef.current) {
           isProcessingRef.current = false;
-          setIsTranscribing(false);
           return;
         }
         if (!blob) {
-          setIsTranscribing(false);
           isProcessingRef.current = false;
           return;
         }
+        setIsTranscribing(true);
         processBlob(blob);
       });
     },
     [recorder, processBlob],
+  );
+
+  const handleCancel = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    (_position: number) => {
+      setRecordingPosition(null);
+      holdGenerationRef.current++;
+      startPromiseRef.current = null;
+      recorder.cancel();
+      isProcessingRef.current = false;
+    },
+    [recorder],
   );
 
   const handleManualSend = useCallback(
@@ -410,6 +446,7 @@ export function RadioPage() {
               onSelectChat={handleSelectChat}
               isRecording={recordingPosition !== null}
               recordingElapsed={recorder.elapsed}
+              maxDuration={audioMaxDuration}
               frequencyData={recorder.frequencyData}
               isTranscribing={isTranscribing}
               promptStatus={visiblePromptStatus}
@@ -425,6 +462,7 @@ export function RadioPage() {
               onTap={handleTap}
               onHoldStart={handleHoldStart}
               onHoldEnd={handleHoldEnd}
+              onCancel={handleCancel}
             />
           </div>
 
