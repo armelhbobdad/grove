@@ -1443,9 +1443,25 @@ export function TaskChat({
         }
         if (cancelled) return;
         setChats(chatList);
-        // Select last chat by default
-        const lastChat = chatList[chatList.length - 1];
-        setActiveChatId(lastChat.id);
+        // Check if Radio requested a specific session (pending from before mount)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pending = (window as any).__grove_pending_chat as
+          | { projectId: string; taskId: string; chatId: string }
+          | undefined;
+        if (
+          pending &&
+          pending.projectId === projectId &&
+          pending.taskId === task.id &&
+          chatList.some((c) => c.id === pending.chatId)
+        ) {
+          setActiveChatId(pending.chatId);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          delete (window as any).__grove_pending_chat;
+        } else {
+          // Select last chat by default
+          const lastChat = chatList[chatList.length - 1];
+          setActiveChatId(lastChat.id);
+        }
       } catch (err) {
         console.error("Failed to load chats:", err);
       }
@@ -1458,11 +1474,12 @@ export function TaskChat({
 
   // ─── External chat switch (Radio → Blitz) ──────────────────────────────
 
+  const switchChatRef = useRef<(chatId: string) => void>(() => {});
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.projectId === projectId && detail?.taskId === task.id && detail?.chatId) {
-        setActiveChatId(detail.chatId);
+        switchChatRef.current(detail.chatId);
       }
     };
     window.addEventListener("grove:switch-chat", handler);
@@ -2047,6 +2064,7 @@ export function TaskChat({
       if (chatId === activeChatId) return;
       saveCurrentChatState();
       setActiveChatId(chatId);
+      activeChatIdRef.current = chatId; // Sync ref immediately so WS messages route correctly
       restoreChatState(chatId);
       setShowChatMenu(false);
       // Connect WS if needed
@@ -2055,6 +2073,7 @@ export function TaskChat({
     },
     [activeChatId, saveCurrentChatState, restoreChatState, connectChatWs],
   );
+  switchChatRef.current = switchChat;
 
   // ─── New chat creation ─────────────────────────────────────────────────
 
@@ -3980,22 +3999,6 @@ export function TaskChat({
                   </div>
                 )}
 
-                {!hasContent && !isInputFocused && (
-                  <div
-                    className={`absolute ${attachments.length > 0 ? "top-[86px]" : "top-[42px]"} left-4 right-16 h-10 flex items-center text-sm text-[var(--color-text-muted)] pointer-events-none select-none`}
-                  >
-                    {activePermissionMessage
-                      ? "Handle permission above to continue"
-                      : !isConnected
-                        ? "Waiting for connection..."
-                        : isTerminalMode
-                          ? "Enter shell command\u2026"
-                          : isBusy
-                            ? "Queue a message\u2026"
-                            : "Ask anything… use @ for mentions, / for commands"}
-                  </div>
-                )}
-
                 <button
                   onClick={() => {
                     setIsInputExpanded((v) => {
@@ -4019,44 +4022,65 @@ export function TaskChat({
                   )}
                 </button>
 
-                <div className={`flex ${isTerminalMode ? "items-start" : ""}`}>
+                <div
+                  className={`relative flex ${isTerminalMode ? "items-start" : ""}`}
+                >
                   {isTerminalMode && (
                     <span className="shrink-0 pl-4 pt-2 text-sm leading-7 font-mono text-[var(--color-text-muted)] select-none">
                       $&nbsp;
                     </span>
                   )}
-                  <div
-                    ref={editableRef}
-                    contentEditable={
-                      isConnected &&
-                      !isRemoteSession &&
-                      !activePermissionMessage
-                    }
-                    suppressContentEditableWarning
-                    onInput={handleInput}
-                    onKeyDown={handleKeyDown}
-                    onMouseDown={handleEditableMouseDown}
-                    onFocus={() => setIsInputFocused(true)}
-                    onBlur={() => setIsInputFocused(false)}
-                    onPaste={handlePaste}
-                    onCompositionStart={() => {
-                      composingRef.current = true;
-                    }}
-                    onCompositionEnd={() => {
-                      composingRef.current = false;
-                      handleInput();
-                    }}
-                    className={`overflow-y-auto py-2 text-sm leading-7 text-[var(--color-text)] focus:outline-none flex-1 ${
-                      isTerminalMode ? "pr-4" : "px-4"
-                    } ${
-                      isInputExpanded
-                        ? "min-h-[32vh] max-h-[56vh]"
-                        : "min-h-[56px] max-h-32"
-                    } ${!isConnected || isRemoteSession || activePermissionMessage ? "opacity-50 cursor-not-allowed" : ""} ${
-                      isTerminalMode ? "font-mono" : ""
-                    }`}
-                    style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
-                  />
+                  <div className="relative flex-1">
+                    {!hasContent && !isInputFocused && (
+                      <div
+                        className={`pointer-events-none absolute top-2 text-sm leading-7 text-[var(--color-text-muted)] select-none ${
+                          isTerminalMode ? "left-0 right-4" : "left-4 right-4"
+                        }`}
+                      >
+                        {activePermissionMessage
+                          ? "Handle permission above to continue"
+                          : !isConnected
+                            ? "Waiting for connection..."
+                            : isTerminalMode
+                              ? "Enter shell command\u2026"
+                              : isBusy
+                                ? "Queue a message\u2026"
+                                : "Ask anything… use @ for mentions, / for commands"}
+                      </div>
+                    )}
+                    <div
+                      ref={editableRef}
+                      contentEditable={
+                        isConnected &&
+                        !isRemoteSession &&
+                        !activePermissionMessage
+                      }
+                      suppressContentEditableWarning
+                      onInput={handleInput}
+                      onKeyDown={handleKeyDown}
+                      onMouseDown={handleEditableMouseDown}
+                      onFocus={() => setIsInputFocused(true)}
+                      onBlur={() => setIsInputFocused(false)}
+                      onPaste={handlePaste}
+                      onCompositionStart={() => {
+                        composingRef.current = true;
+                      }}
+                      onCompositionEnd={() => {
+                        composingRef.current = false;
+                        handleInput();
+                      }}
+                      className={`overflow-y-auto py-2 text-sm leading-7 text-[var(--color-text)] focus:outline-none flex-1 ${
+                        isTerminalMode ? "pr-4" : "px-4"
+                      } ${
+                        isInputExpanded
+                          ? "min-h-[32vh] max-h-[56vh]"
+                          : "min-h-[56px] max-h-32"
+                      } ${!isConnected || isRemoteSession || activePermissionMessage ? "opacity-50 cursor-not-allowed" : ""} ${
+                        isTerminalMode ? "font-mono" : ""
+                      }`}
+                      style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
+                    />
+                  </div>
                 </div>
 
                 <div className="mt-2 flex items-center justify-between gap-2 select-none">

@@ -3,7 +3,7 @@ import type { RadioEvent, TargetMode } from "../api/walkieTalkie";
 import { getApiHost, appendHmacToUrl } from "../api/client";
 
 export interface RadioEventCallbacks {
-  onFocusTask?: (projectId: string, taskId: string) => void;
+  onFocusTask?: (projectId: string, taskId: string, target?: TargetMode) => void;
   onFocusTarget?: (projectId: string, taskId: string, target: TargetMode) => void;
   onTerminalInput?: (projectId: string, taskId: string, text: string) => void;
   onPromptSent?: (projectId: string, taskId: string) => void;
@@ -50,7 +50,7 @@ export function useRadioEvents(callbacks: RadioEventCallbacks): { radioClients: 
         const data: RadioEvent = JSON.parse(event.data);
         switch (data.type) {
           case "focus_task":
-            callbacksRef.current.onFocusTask?.(data.project_id, data.task_id);
+            callbacksRef.current.onFocusTask?.(data.project_id, data.task_id, data.target);
             break;
           case "focus_target":
             callbacksRef.current.onFocusTarget?.(data.project_id, data.task_id, data.target);

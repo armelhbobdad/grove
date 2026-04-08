@@ -26,7 +26,7 @@ export interface WalkieTalkieState {
 
 export interface WalkieTalkieActions {
   switchGroup: (groupId: string) => void;
-  selectTask: (groupId: string, position: number) => void;
+  selectTask: (groupId: string, position: number, target?: TargetMode) => void;
   sendPrompt: (
     groupId: string,
     position: number,
@@ -242,12 +242,12 @@ export function useWalkieTalkie(): [WalkieTalkieState, WalkieTalkieActions] {
   );
 
   const selectTask = useCallback(
-    (groupId: string, position: number) => {
+    (groupId: string, position: number, target?: TargetMode) => {
       setCurrentGroupId(groupId);
       setCurrentPosition(position);
       setActiveChat(null);
       setAvailableChats([]);
-      send({ type: "select_task", group_id: groupId, position });
+      send({ type: "select_task", group_id: groupId, position, ...(target ? { target } : {}) });
     },
     [send],
   );

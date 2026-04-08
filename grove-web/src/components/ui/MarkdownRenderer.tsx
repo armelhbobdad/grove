@@ -1,8 +1,11 @@
 import { Children, isValidElement, useState, useEffect, useRef, useId } from "react";
+import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
 import { VSCodeIcon } from "./VSCodeIcon";
+import { highlightCode, normalizeLanguage } from "../Review/syntaxHighlight";
+import { useTheme } from "../../context/ThemeContext";
 
 // Match file paths like `path/to/file.ext` or `path/to/file.ext:123`.
 // Accept Unicode and other non-ASCII characters in path segments.
@@ -12,32 +15,90 @@ const FILE_PATH_RE = /^(.+\/[^/]+?\.[A-Za-z0-9]+)(?::(\d+))?[,.]?$/;
 // e.g. "service/foo.go", "/abs/path/中文名.md", or ends with "#L505"
 const FILE_HREF_RE = /^(.+\/[^/]+?\.[A-Za-z0-9]+)(?:[:#]L?(\d+))?$/;
 
-// Initialize mermaid once
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "dark",
-  themeVariables: {
-    darkMode: true,
-    background: "transparent",
-    primaryColor: "#3b82f6",
-    primaryTextColor: "#e2e8f0",
-    primaryBorderColor: "#475569",
-    lineColor: "#64748b",
-    secondaryColor: "#1e293b",
-    tertiaryColor: "#0f172a",
-    fontFamily: "inherit",
-  },
-});
+function cssVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function isDarkColor(color: string): boolean {
+  const match = color.trim().match(/^#([0-9a-f]{6})$/i);
+  if (!match) return true;
+  const hex = match[1];
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance < 0.5;
+}
+
+function getMermaidConfig() {
+  const bg = cssVar("--color-bg", "#0a0a0b");
+  const bgSecondary = cssVar("--color-bg-secondary", "#141416");
+  const bgTertiary = cssVar("--color-bg-tertiary", "#1c1c1f");
+  const border = cssVar("--color-border", "#27272a");
+  const text = cssVar("--color-text", "#fafafa");
+  const textMuted = cssVar("--color-text-muted", "#71717a");
+  const highlight = cssVar("--color-highlight", "#10b981");
+  const darkMode = isDarkColor(bg);
+
+  return {
+    startOnLoad: false,
+    theme: "base" as const,
+    themeVariables: {
+      darkMode,
+      background: "transparent",
+      fontFamily: "inherit",
+      primaryColor: bgSecondary,
+      primaryTextColor: text,
+      primaryBorderColor: border,
+      secondaryColor: bgTertiary,
+      secondaryTextColor: text,
+      secondaryBorderColor: border,
+      tertiaryColor: bg,
+      tertiaryTextColor: text,
+      tertiaryBorderColor: border,
+      lineColor: textMuted,
+      textColor: text,
+      mainBkg: bgSecondary,
+      nodeBkg: bgSecondary,
+      nodeTextColor: text,
+      clusterBkg: bg,
+      clusterBorder: border,
+      defaultLinkColor: textMuted,
+      titleColor: text,
+      edgeLabelBackground: bg,
+      actorBkg: bgSecondary,
+      actorBorder: border,
+      actorTextColor: text,
+      actorLineColor: textMuted,
+      signalColor: textMuted,
+      signalTextColor: text,
+      labelBoxBkgColor: bg,
+      labelBoxBorderColor: border,
+      labelTextColor: text,
+      loopTextColor: text,
+      noteBkgColor: `color-mix(in srgb, ${highlight} 12%, ${bg})`,
+      noteBorderColor: border,
+      noteTextColor: text,
+      activationBorderColor: border,
+      activationBkgColor: bgTertiary,
+      sequenceNumberColor: text,
+    },
+  };
+}
 
 export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const uniqueId = useId();
+  const { theme } = useTheme();
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const id = `mermaid-${uniqueId.replace(/:/g, "")}`;
+    mermaid.initialize(getMermaidConfig());
     mermaid
       .render(id, code)
       .then(({ svg: rendered }) => {
@@ -47,7 +108,7 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       });
     return () => { cancelled = true; };
-  }, [code, uniqueId]);
+  }, [code, uniqueId, theme.id, theme.colors.bg, theme.colors.bgSecondary, theme.colors.bgTertiary, theme.colors.border, theme.colors.text, theme.colors.textMuted, theme.colors.highlight]);
 
   if (error) {
     return (
@@ -68,12 +129,61 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   return (
     <div
       ref={containerRef}
-      className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] p-3 my-2 overflow-x-auto flex justify-center [&_svg]:max-w-full"
+      className="rounded-lg border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_72%,transparent)] p-3 my-2 overflow-x-auto flex justify-center [&_svg]:max-w-full"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
 }
 MermaidBlock.displayName = 'MermaidBlock';
+
+function CodeBlock({
+  code,
+  language,
+}: {
+  code: string;
+  language?: string;
+}): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const normalizedLanguage = normalizeLanguage(language);
+  const highlightedHtml = highlightCode(code, normalizedLanguage);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="markdown-code-block group relative my-2 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--color-border)_90%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_92%,var(--color-bg))]">
+      <div className="absolute right-2 top-2 z-10">
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-transparent text-[var(--color-text-muted)] opacity-0 transition-all group-hover:opacity-100 hover:text-[var(--color-text)] focus:opacity-100 focus:outline-none"
+          title="Copy code"
+          aria-label={copied ? "Copied" : "Copy code"}
+        >
+          {copied ? <Check className="h-3.5 w-3.5 text-[var(--color-success)]" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <pre className="m-0 overflow-x-auto bg-[color-mix(in_srgb,var(--color-bg-tertiary)_72%,white_18%)] p-4 text-[13px] font-mono leading-6 whitespace-pre text-[var(--color-text)]">
+        <code
+          className="block"
+          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+        />
+      </pre>
+    </div>
+  );
+}
 
 interface MarkdownRendererProps {
   content: string;
@@ -240,19 +350,17 @@ export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps
           </blockquote>
         ),
         code: ({ className, children }) => {
-          const isBlock = className?.startsWith("language-");
+          const text = extractText(children);
+          const isBlock = className?.startsWith("language-") || text.includes("\n");
           if (isBlock) {
             if (className === "language-mermaid") {
-              const text = extractText(children);
               return <MermaidBlock code={text} />;
             }
-            return (
-              <code className="block text-xs font-mono">{children}</code>
-            );
+            const language = className?.replace(/^language-/, "");
+            return <CodeBlock code={text.replace(/\n$/, "")} language={language} />;
           }
           // Check if inline code looks like a file path
           if (onFileClick) {
-            const text = extractText(children);
             const match = text.match(FILE_PATH_RE);
             if (match) {
               const filePath = match[1];
@@ -273,16 +381,7 @@ export function MarkdownRenderer({ content, onFileClick }: MarkdownRendererProps
           );
         },
         pre: ({ children }) => {
-          // If the child is a component (e.g. MermaidBlock) rather than a native <code>, pass through
-          const child = Children.toArray(children)[0];
-          if (isValidElement(child) && typeof child.type !== 'string') {
-            return <>{children}</>;
-          }
-          return (
-            <pre className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] p-3 my-2 overflow-x-auto text-xs font-mono">
-              {children}
-            </pre>
-          );
+          return <>{children}</>;
         },
         hr: () => (
           <hr className="border-[var(--color-border)] my-3" />

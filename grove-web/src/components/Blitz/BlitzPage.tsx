@@ -160,7 +160,7 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
   }, []);
 
   const { radioClients } = useRadioEvents({
-    onFocusTask: useCallback((projectId: string, taskId: string) => {
+    onFocusTask: useCallback((projectId: string, taskId: string, target?: import("../../api/walkieTalkie").TargetMode) => {
       const taskKey = `${projectId}:${taskId}`;
       const bt = blitzTasksRef.current.find(
         (t) => t.projectId === projectId && t.task.id === taskId,
@@ -170,10 +170,26 @@ export function BlitzPage({ onSwitchToZen, onNavigate }: BlitzPageProps) {
       setSelectedBlitzTask(bt);
       pageHandlers.setInWorkspace(true);
 
-      // Only open chat panel on first focus for this task (avoid re-opening on repeated taps)
+      // Switch panel based on Radio's target mode
+      const panelType = target?.mode === "terminal" ? "terminal" : "chat";
       if (radioFocusedTaskRef.current !== taskKey) {
         radioFocusedTaskRef.current = taskKey;
-        ensureRadioPanel("chat");
+        ensureRadioPanel(panelType);
+      }
+
+      // Clear any stale pending chat from a previous focus event
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any).__grove_pending_chat;
+
+      // Tell TaskChat which session to show (Radio's active session)
+      if (target?.mode === "chat" && "chat_id" in target && target.chat_id) {
+        const chatId = target.chat_id;
+        // Store as pending so TaskChat can pick it up on mount (before its listener is set up)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__grove_pending_chat = { projectId, taskId, chatId };
+        window.dispatchEvent(new CustomEvent("grove:switch-chat", {
+          detail: { projectId, taskId, chatId },
+        }));
       }
     }, [pageHandlers, ensureRadioPanel]),
 

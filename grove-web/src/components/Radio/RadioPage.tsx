@@ -184,10 +184,21 @@ export function RadioPage() {
   const handleTap = useCallback(
     (position: number) => {
       if (state.currentGroupId) {
-        actions.selectTask(state.currentGroupId, position);
+        // Build target from the TARGET slot's state (not current slot)
+        const tapSlotKey = `${state.currentGroupId}:${position}`;
+        const mode = targetModes[tapSlotKey] ?? "chat";
+        const chatId = selectedChats[tapSlotKey];
+        let target: TargetMode | undefined;
+        if (mode === "terminal") {
+          target = { mode: "terminal" };
+        } else if (chatId) {
+          target = { mode: "chat", chat_id: chatId };
+        }
+        // If no target (first visit, no selection yet), server will use its fallback
+        actions.selectTask(state.currentGroupId, position, target);
       }
     },
-    [state.currentGroupId, actions],
+    [state.currentGroupId, actions, targetModes, selectedChats],
   );
 
   const handleHoldStart = useCallback(
@@ -202,10 +213,17 @@ export function RadioPage() {
       if (isProcessingRef.current) return;
 
       if (state.currentGroupId) {
-        actions.selectTask(state.currentGroupId, position);
-        // Send target to Blitz at hold start so it can prepare
-        const target = buildTargetRef.current();
-        actions.setTarget(state.currentGroupId, position, target);
+        // Build target from the HOLD slot's state (not current slot)
+        const holdSlotKey = `${state.currentGroupId}:${position}`;
+        const mode = targetModes[holdSlotKey] ?? "chat";
+        const holdChatId = selectedChats[holdSlotKey];
+        let target: TargetMode | undefined;
+        if (mode === "terminal") {
+          target = { mode: "terminal" };
+        } else if (holdChatId) {
+          target = { mode: "chat", chat_id: holdChatId };
+        }
+        actions.selectTask(state.currentGroupId, position, target);
       }
       recordingGroupRef.current = state.currentGroupId;
       recordingPositionRef.current = position;
@@ -213,7 +231,7 @@ export function RadioPage() {
       // Track the start promise so holdEnd can wait for it
       startPromiseRef.current = recorder.start();
     },
-    [state.currentGroupId, actions, recorder],
+    [state.currentGroupId, actions, recorder, targetModes, selectedChats],
   );
 
   // Shared blob processing: transcribe → send or show for edit

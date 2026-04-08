@@ -244,6 +244,25 @@ export function highlightLines(lines: string[], language: string | undefined): s
   }
 }
 
+export function normalizeLanguage(language: string | undefined): string | undefined {
+  if (!language) return undefined;
+  const normalized = language.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return hljs.getLanguage(normalized) ? normalized : undefined;
+}
+
+export function highlightCode(code: string, language: string | undefined): string {
+  if (!code) return "";
+  const normalized = normalizeLanguage(language);
+  if (!normalized) return escapeHtml(code);
+
+  try {
+    return hljs.highlight(code, { language: normalized, ignoreIllegals: true }).value;
+  } catch {
+    return escapeHtml(code);
+  }
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')

@@ -10,7 +10,7 @@ export type TargetMode =
 
 export type WalkieTalkieClientMessage =
   | { type: "switch_group"; group_id: string }
-  | { type: "select_task"; group_id: string; position: number }
+  | { type: "select_task"; group_id: string; position: number; target?: TargetMode }
   | { type: "send_prompt"; group_id: string; position: number; text: string; chat_id?: string | null; target?: TargetMode }
   | { type: "switch_chat"; group_id: string; position: number; direction: "next" | "prev" }
   | { type: "set_target"; group_id: string; position: number; target: TargetMode };
@@ -28,7 +28,7 @@ export type WalkieTalkieServerMessage =
 // ─── Radio Events (Desktop ← Radio) ───────────────────────────────────────
 
 export type RadioEvent =
-  | { type: "focus_task"; project_id: string; task_id: string }
+  | { type: "focus_task"; project_id: string; task_id: string; target?: TargetMode }
   | { type: "focus_target"; project_id: string; task_id: string; target: TargetMode }
   | { type: "terminal_input"; project_id: string; task_id: string; text: string }
   | { type: "prompt_sent"; project_id: string; task_id: string }

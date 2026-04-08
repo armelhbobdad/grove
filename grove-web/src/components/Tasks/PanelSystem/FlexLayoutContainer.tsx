@@ -740,6 +740,7 @@ export const FlexLayoutContainer = forwardRef<
         return (
           <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
             <TaskChat
+              key={`${projectId}:${task.id}`}
               projectId={projectId}
               task={task}
               fullscreen={true}

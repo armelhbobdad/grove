@@ -73,6 +73,40 @@ pub struct AgentUsage {
     pub source: String,
 }
 
+#[derive(Debug, Clone)]
+pub enum UsageError {
+    UnsupportedAgent,
+    Unauthorized(String),
+    Forbidden(String),
+    RateLimited(String),
+    Upstream(String),
+    Internal(String),
+}
+
+impl UsageError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnsupportedAgent => "unsupported_agent",
+            Self::Unauthorized(_) => "unauthorized",
+            Self::Forbidden(_) => "forbidden",
+            Self::RateLimited(_) => "rate_limited",
+            Self::Upstream(_) => "upstream_error",
+            Self::Internal(_) => "internal_error",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::UnsupportedAgent => "Unsupported agent",
+            Self::Unauthorized(msg)
+            | Self::Forbidden(msg)
+            | Self::RateLimited(msg)
+            | Self::Upstream(msg)
+            | Self::Internal(msg) => msg,
+        }
+    }
+}
+
 impl AgentUsage {
     pub fn new(agent: impl Into<String>) -> Self {
         Self {
@@ -126,10 +160,10 @@ static CACHE: Lazy<Mutex<HashMap<String, CacheEntry>>> = Lazy::new(|| Mutex::new
 /// On fetch failure, the last successful value (if any) is returned with
 /// `outdated = true`. If no successful value has ever been cached, `None`
 /// is returned and the frontend hides the badge.
-pub async fn fetch_usage(agent: &str, force: bool) -> Option<AgentUsage> {
+pub async fn fetch_usage(agent: &str, force: bool) -> Result<AgentUsage, UsageError> {
     if !force {
         if let Some(cached) = get_fresh_cached(agent) {
-            return Some(cached);
+            return Ok(cached);
         }
     }
 
@@ -137,11 +171,11 @@ pub async fn fetch_usage(agent: &str, force: bool) -> Option<AgentUsage> {
     let fetched = tokio::task::spawn_blocking(move || fetch_blocking(&agent_owned))
         .await
         .ok()
-        .flatten();
+        .unwrap_or_else(|| Err(UsageError::Internal("quota fetch task failed".into())));
 
     match fetched {
-        Some(usage) => Some(put_cached(agent, usage)),
-        None => get_last_success(agent),
+        Ok(usage) => Ok(put_cached(agent, usage)),
+        Err(err) => get_last_success(agent).ok_or(err),
     }
 }
 
@@ -208,13 +242,57 @@ fn with_metadata(
 /// designed to be "invisible on failure" (the frontend hides the badge on
 /// 404), and a failed fetch happens every minute while credentials are
 /// missing — logging would spam stderr.
-fn fetch_blocking(agent: &str) -> Option<AgentUsage> {
+fn fetch_blocking(agent: &str) -> Result<AgentUsage, UsageError> {
     match agent {
-        "claude" => claude::fetch().ok(),
-        "codex" => codex::fetch().ok(),
-        "gemini" => gemini::fetch().ok(),
-        _ => None,
+        "claude" => claude::fetch().map_err(|e| classify_error("claude", &e)),
+        "codex" => codex::fetch().map_err(|e| classify_error("codex", &e)),
+        "gemini" => gemini::fetch().map_err(|e| classify_error("gemini", &e)),
+        _ => Err(UsageError::UnsupportedAgent),
     }
+}
+
+fn classify_error(agent: &str, message: &str) -> UsageError {
+    let msg = message.to_ascii_lowercase();
+
+    if msg.contains("status code 429") || msg.contains("rate limited") || msg.contains("rate_limit")
+    {
+        return UsageError::RateLimited(format!("{} quota upstream rate limited", agent));
+    }
+    if msg.contains("status code 401")
+        || msg.contains("credentials not found")
+        || msg.contains("missing access_token")
+        || msg.contains("missing tokens.access_token")
+        || msg.contains("empty access_token")
+        || msg.contains("access_token expired")
+    {
+        return UsageError::Unauthorized(format!("{} credentials unavailable or expired", agent));
+    }
+    if msg.contains("status code 403")
+        || msg.contains("unsupported auth type")
+        || msg.contains("missing required scopes")
+    {
+        return UsageError::Forbidden(format!("{} credentials do not have required access", agent));
+    }
+    if msg.contains("parse usage response")
+        || msg.contains("parse quota response")
+        || msg.contains("missing five_hour")
+        || msg.contains("used_percent missing")
+        || msg.contains("no usage windows")
+        || msg.contains("no quota buckets")
+    {
+        return UsageError::Upstream(format!(
+            "{} quota upstream returned an unexpected response",
+            agent
+        ));
+    }
+    if msg.contains("usage api call failed")
+        || msg.contains("retrieveuserquota failed")
+        || msg.contains("read ")
+    {
+        return UsageError::Upstream(format!("{} quota upstream request failed", agent));
+    }
+
+    UsageError::Internal(format!("{} quota fetch failed", agent))
 }
 
 /// Convert an ISO 8601 timestamp into seconds remaining from "now". Returns

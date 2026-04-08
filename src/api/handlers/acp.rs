@@ -503,6 +503,14 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
         }
     }
 
+    // Sync busy state on (re)connect
+    if is_existing && handle.is_busy.load(std::sync::atomic::Ordering::Relaxed) {
+        let msg = ServerMessage::Busy { value: true };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = ws_sender.send(Message::Text(json.into())).await;
+        }
+    }
+
     // Send current pending queue state on (re)connect
     let queue = handle.get_queue();
     if !queue.is_empty() {

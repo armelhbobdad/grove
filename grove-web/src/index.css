@@ -220,3 +220,100 @@ body {
 body.blitz-command-pressed .blitz-shortcut {
   opacity: 1 !important;
 }
+
+.markdown-code-block .hljs-keyword,
+.markdown-code-block .hljs-selector-tag {
+  color: #c678dd;
+}
+
+.markdown-code-block .hljs-literal,
+.markdown-code-block .hljs-type {
+  color: #d19a66;
+}
+
+.markdown-code-block .hljs-string,
+.markdown-code-block .hljs-template-tag,
+.markdown-code-block .hljs-template-variable {
+  color: #98c379;
+}
+
+.markdown-code-block .hljs-number {
+  color: #d19a66;
+}
+
+.markdown-code-block .hljs-comment,
+.markdown-code-block .hljs-doctag {
+  color: #7f848e;
+  font-style: italic;
+}
+
+.markdown-code-block .hljs-title,
+.markdown-code-block .hljs-title\.function,
+.markdown-code-block .hljs-title\.class {
+  color: #61afef;
+}
+
+.markdown-code-block .hljs-variable,
+.markdown-code-block .hljs-params {
+  color: #e06c75;
+}
+
+.markdown-code-block .hljs-attr,
+.markdown-code-block .hljs-attribute {
+  color: #d19a66;
+}
+
+.markdown-code-block .hljs-built_in {
+  color: #e6c07b;
+}
+
+.markdown-code-block .hljs-symbol,
+.markdown-code-block .hljs-bullet,
+.markdown-code-block .hljs-regexp,
+.markdown-code-block .hljs-link {
+  color: #56b6c2;
+}
+
+.markdown-code-block .hljs-meta,
+.markdown-code-block .hljs-meta .hljs-keyword,
+.markdown-code-block .hljs-name,
+.markdown-code-block .hljs-tag,
+.markdown-code-block .hljs-property {
+  color: #e06c75;
+}
+
+.markdown-code-block .hljs-section {
+  color: #61afef;
+  font-weight: 600;
+}
+
+.markdown-code-block .hljs-link {
+  text-decoration: underline;
+}
+
+.markdown-code-block .hljs-emphasis {
+  font-style: italic;
+}
+
+.markdown-code-block .hljs-strong {
+  font-weight: 700;
+}
+
+.markdown-code-block .hljs-addition {
+  color: var(--color-success);
+}
+
+.markdown-code-block .hljs-deletion {
+  color: var(--color-error);
+}
+
+.markdown-code-block .hljs-selector-class,
+.markdown-code-block .hljs-selector-id,
+.markdown-code-block .hljs-selector-pseudo,
+.markdown-code-block .hljs-selector-attr {
+  color: #c678dd;
+}
+
+.markdown-code-block .hljs-punctuation {
+  color: var(--color-text-muted);
+}

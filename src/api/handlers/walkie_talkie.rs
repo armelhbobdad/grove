@@ -35,7 +35,12 @@ pub fn decrement_radio_clients() {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RadioEvent {
     /// Radio user tapped or long-pressed a task — desktop should switch to it.
-    FocusTask { project_id: String, task_id: String },
+    FocusTask {
+        project_id: String,
+        task_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<TargetMode>,
+    },
     /// Radio user sent a prompt to a task.
     PromptSent { project_id: String, task_id: String },
     /// A phone connected to the Radio server.
@@ -99,6 +104,8 @@ enum ClientMessage {
     SelectTask {
         group_id: String,
         position: u16,
+        #[serde(default)]
+        target: Option<TargetMode>,
     },
     SendPrompt {
         group_id: String,
@@ -393,18 +400,36 @@ async fn handle_client_message(
             let snapshot = build_full_snapshot();
             let _ = tx.send(ServerMessage::GroupUpdated { groups: snapshot });
         }
-        ClientMessage::SelectTask { group_id, position } => {
+        ClientMessage::SelectTask {
+            group_id,
+            position,
+            target,
+        } => {
             state.current_group_id = Some(group_id.clone());
             state.current_position = Some(position);
+            // Get chat info for the selected slot
+            let chat_info = get_chat_info_for_slot(&group_id, position, state, &groups);
+            // Use Radio's target if provided, otherwise fallback to server's active chat
+            let effective_target = target.or_else(|| {
+                chat_info.as_ref().and_then(|ci| match ci {
+                    ServerMessage::ChatInfo { active_chat, .. } => {
+                        active_chat.as_ref().map(|c| TargetMode::Chat {
+                            chat_id: c.id.clone(),
+                        })
+                    }
+                    _ => None,
+                })
+            });
             // Broadcast focus event to desktop Blitz listeners
             if let Some(slot) = find_slot_in(&groups, &group_id, position) {
                 let _ = RADIO_EVENTS.send(RadioEvent::FocusTask {
                     project_id: slot.project_id.clone(),
                     task_id: slot.task_id.clone(),
+                    target: effective_target,
                 });
             }
-            // Send chat info for the selected slot
-            if let Some(chat_info) = get_chat_info_for_slot(&group_id, position, state, &groups) {
+            // Send chat info to Radio
+            if let Some(chat_info) = chat_info {
                 let _ = tx.send(chat_info);
             }
         }
@@ -473,6 +498,7 @@ async fn handle_client_message(
                         let _ = RADIO_EVENTS.send(RadioEvent::FocusTask {
                             project_id: slot.project_id.clone(),
                             task_id: slot.task_id.clone(),
+                            target: chat_id.clone().map(|cid| TargetMode::Chat { chat_id: cid }),
                         });
                     }
                     let result = send_prompt_to_task(
@@ -617,6 +643,7 @@ fn get_chat_info_for_slot(
     let chats = tasks::load_chat_sessions(&slot.project_id, &slot.task_id).unwrap_or_default();
     let available_chats: Vec<ChatRef> = chats
         .iter()
+        .rev() // newest first
         .map(|c| ChatRef {
             id: c.id.clone(),
             agent: c.agent.clone(),
@@ -753,6 +780,7 @@ fn switch_chat(
 
     let available_chats: Vec<ChatRef> = chats
         .iter()
+        .rev() // newest first
         .map(|c| ChatRef {
             id: c.id.clone(),
             agent: c.agent.clone(),
@@ -984,7 +1012,7 @@ mod tests {
         let json = r#"{"type":"select_task","group_id":"g1","position":3}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         assert!(
-            matches!(msg, ClientMessage::SelectTask { group_id, position } if group_id == "g1" && position == 3)
+            matches!(msg, ClientMessage::SelectTask { group_id, position, .. } if group_id == "g1" && position == 3)
         );
 
         // SendPrompt with chat_id
