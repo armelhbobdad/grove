@@ -5,8 +5,9 @@ use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::storage::workspace;
 use crate::watcher;
+
+use super::common;
 
 // ============================================================================
 // Response DTOs
@@ -44,23 +45,6 @@ pub struct TaskStatsResponse {
 }
 
 // ============================================================================
-// Helper functions
-// ============================================================================
-
-/// Find project by ID and return (project, project_key)
-fn find_project_by_id(id: &str) -> Result<(workspace::RegisteredProject, String), StatusCode> {
-    let projects = workspace::load_projects().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let project = projects
-        .into_iter()
-        .find(|p| workspace::project_hash(&p.path) == id)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let project_key = workspace::project_hash(&project.path);
-    Ok((project, project_key))
-}
-
-// ============================================================================
 // API Handlers
 // ============================================================================
 
@@ -69,7 +53,7 @@ fn find_project_by_id(id: &str) -> Result<(workspace::RegisteredProject, String)
 pub async fn get_task_stats(
     Path((id, task_id)): Path<(String, String)>,
 ) -> Result<Json<TaskStatsResponse>, StatusCode> {
-    let (_project, project_key) = find_project_by_id(&id)?;
+    let (_project, project_key) = common::find_project_by_id(&id)?;
 
     // Load edit history
     let events = watcher::load_edit_history(&project_key, &task_id)

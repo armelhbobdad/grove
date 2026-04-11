@@ -3,6 +3,7 @@
 pub mod acp;
 pub mod agent_usage;
 pub mod ai;
+pub mod common;
 pub mod config;
 pub mod env;
 pub mod folder;

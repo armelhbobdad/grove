@@ -4,7 +4,8 @@ use axum::{extract::Path, http::StatusCode, Json};
 
 use crate::storage::{comments, tasks};
 
-use super::crud::{find_project_by_id, get_git_user_name};
+use super::super::common::find_project_by_id;
+use super::crud::get_git_user_name;
 use super::types::*;
 
 /// GET /api/v1/projects/{id}/tasks/{taskId}/review

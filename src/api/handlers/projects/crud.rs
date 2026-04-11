@@ -10,6 +10,7 @@ use crate::model::loader;
 use crate::storage::{tasks, workspace};
 
 use super::types::*;
+use crate::api::handlers::common;
 
 /// Convert a storage TaskStatus to the string the frontend expects.
 pub fn storage_task_status_to_string(status: &tasks::TaskStatus) -> &'static str {
@@ -40,60 +41,6 @@ pub fn storage_task_to_response(task: &tasks::Task) -> TaskResponse {
     }
 }
 
-/// Convert WorktreeStatus to string
-fn status_to_string(status: &crate::model::WorktreeStatus) -> &'static str {
-    match status {
-        crate::model::WorktreeStatus::Live => "live",
-        crate::model::WorktreeStatus::Idle => "idle",
-        crate::model::WorktreeStatus::Merged => "merged",
-        crate::model::WorktreeStatus::Conflict => "conflict",
-        crate::model::WorktreeStatus::Broken => "broken",
-        crate::model::WorktreeStatus::Error => "broken",
-        crate::model::WorktreeStatus::Archived => "archived",
-    }
-}
-
-/// Convert Worktree to TaskResponse
-fn worktree_to_response(wt: &crate::model::Worktree, _project_key: &str) -> TaskResponse {
-    let commits = git::recent_log(&wt.path, &wt.target, 10)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|log| CommitResponse {
-            hash: String::new(),
-            message: log.message,
-            time_ago: log.time_ago,
-        })
-        .collect();
-
-    TaskResponse {
-        id: wt.id.clone(),
-        name: wt.task_name.clone(),
-        branch: wt.branch.clone(),
-        target: wt.target.clone(),
-        status: status_to_string(&wt.status).to_string(),
-        additions: 0,
-        deletions: 0,
-        files_changed: 0,
-        commits,
-        created_at: wt.created_at.to_rfc3339(),
-        updated_at: wt.updated_at.to_rfc3339(),
-        path: wt.path.clone(),
-        multiplexer: wt.multiplexer.clone(),
-        created_by: wt.created_by.clone(),
-        is_local: wt.is_local,
-    }
-}
-
-/// Find project by ID (hash)
-pub(crate) fn find_project_by_id(id: &str) -> Result<workspace::RegisteredProject, StatusCode> {
-    let projects = workspace::load_projects().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    projects
-        .into_iter()
-        .find(|p| workspace::project_hash(&p.path) == id)
-        .ok_or(StatusCode::NOT_FOUND)
-}
-
 /// Count tasks for a project
 fn count_project_tasks(project_key: &str) -> u32 {
     let active_tasks = tasks::load_tasks(project_key).unwrap_or_default();
@@ -104,7 +51,7 @@ fn count_project_tasks(project_key: &str) -> u32 {
 pub(crate) fn resolve_studio_dir(
     id: &str,
 ) -> Result<(workspace::RegisteredProject, std::path::PathBuf), (StatusCode, Json<ApiError>)> {
-    let project = find_project_by_id(id).map_err(|s| {
+    let (project, _) = common::find_project_by_id(id).map_err(|s| {
         (
             s,
             Json(ApiError {
@@ -247,7 +194,7 @@ pub async fn list_projects() -> Result<Json<ProjectListResponse>, StatusCode> {
 
 /// GET /api/v1/projects/{id}
 pub async fn get_project(Path(id): Path<String>) -> Result<Json<ProjectResponse>, StatusCode> {
-    let project = find_project_by_id(&id)?;
+    let (project, _) = common::find_project_by_id(&id)?;
 
     let project_name = project.name.clone();
     let project_path = project.path.clone();
@@ -306,36 +253,40 @@ pub async fn get_project(Path(id): Path<String>) -> Result<Json<ProjectResponse>
         }));
     }
 
-    let (all_tasks, local_task, current_branch, is_git_usable) =
-        tokio::task::spawn_blocking(move || {
-            let is_git_usable = git::is_git_usable(&project_path);
+    let (all_tasks, local_task, current_branch, is_git_usable): (
+        Vec<TaskResponse>,
+        Option<TaskResponse>,
+        String,
+        bool,
+    ) = tokio::task::spawn_blocking(move || {
+        let is_git_usable = git::is_git_usable(&project_path);
 
-            let (active, local) = loader::load_worktrees_and_local(&project_path);
-            let archived = loader::load_archived_worktrees(&project_path);
+        let (active, local) = loader::load_worktrees_and_local(&project_path);
+        let archived = loader::load_archived_worktrees(&project_path);
 
-            use rayon::prelude::*;
-            let mut all_tasks: Vec<TaskResponse> = active
-                .iter()
-                .chain(archived.iter())
-                .collect::<Vec<_>>()
-                .par_iter()
-                .map(|wt| worktree_to_response(wt, &id_clone))
-                .collect();
+        use rayon::prelude::*;
+        let mut all_tasks: Vec<TaskResponse> = active
+            .iter()
+            .chain(archived.iter())
+            .collect::<Vec<_>>()
+            .par_iter()
+            .map(|wt| common::worktree_to_response(wt, &id_clone))
+            .collect();
 
-            all_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        all_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
-            let local_task = local.map(|wt| worktree_to_response(&wt, &id_clone));
+        let local_task = local.map(|wt| common::worktree_to_response(&wt, &id_clone));
 
-            let current_branch = if is_git_usable {
-                git::current_branch(&project_path).unwrap_or_else(|_| "unknown".to_string())
-            } else {
-                String::new()
-            };
+        let current_branch = if is_git_usable {
+            git::current_branch(&project_path).unwrap_or_else(|_| "unknown".to_string())
+        } else {
+            String::new()
+        };
 
-            (all_tasks, local_task, current_branch, is_git_usable)
-        })
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        (all_tasks, local_task, current_branch, is_git_usable)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ProjectResponse {
         id,
@@ -504,7 +455,7 @@ pub async fn create_new_project(
 
 /// DELETE /api/v1/projects/{id}
 pub async fn delete_project(Path(id): Path<String>) -> Result<StatusCode, StatusCode> {
-    let project = find_project_by_id(&id)?;
+    let (project, _) = common::find_project_by_id(&id)?;
 
     workspace::remove_project(&project.path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

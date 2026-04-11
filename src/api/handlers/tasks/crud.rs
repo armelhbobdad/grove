@@ -15,21 +15,9 @@ use crate::model::loader;
 use crate::session::{self, SessionType};
 use crate::storage::{self, notes, tasks, workspace};
 
-use super::super::projects::{storage_task_to_response, CommitResponse, TaskResponse};
+use super::super::common;
+use super::super::projects::{storage_task_to_response, TaskResponse};
 use super::types::*;
-
-/// Convert WorktreeStatus to string
-fn status_to_string(status: &crate::model::WorktreeStatus) -> &'static str {
-    match status {
-        crate::model::WorktreeStatus::Live => "live",
-        crate::model::WorktreeStatus::Idle => "idle",
-        crate::model::WorktreeStatus::Merged => "merged",
-        crate::model::WorktreeStatus::Conflict => "conflict",
-        crate::model::WorktreeStatus::Broken => "broken",
-        crate::model::WorktreeStatus::Error => "broken",
-        crate::model::WorktreeStatus::Archived => "archived",
-    }
-}
 
 /// Get git user.name for a task's worktree (used for display purposes in frontend).
 pub(crate) fn get_git_user_name(project_key: &str, task_id: &str) -> Option<String> {
@@ -39,61 +27,12 @@ pub(crate) fn get_git_user_name(project_key: &str, task_id: &str) -> Option<Stri
         .and_then(|task| git::git_user_name(&task.worktree_path))
 }
 
-/// Convert Worktree to TaskResponse
-pub(crate) fn worktree_to_response(
-    wt: &crate::model::Worktree,
-    _project_key: &str,
-) -> TaskResponse {
-    let commits = git::recent_log(&wt.path, &wt.target, 10)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|log| CommitResponse {
-            hash: log.hash,
-            message: log.message,
-            time_ago: log.time_ago,
-        })
-        .collect();
-
-    TaskResponse {
-        id: wt.id.clone(),
-        name: wt.task_name.clone(),
-        branch: wt.branch.clone(),
-        target: wt.target.clone(),
-        status: status_to_string(&wt.status).to_string(),
-        additions: 0,
-        deletions: 0,
-        files_changed: 0,
-        commits,
-        created_at: wt.created_at.to_rfc3339(),
-        updated_at: wt.updated_at.to_rfc3339(),
-        path: wt.path.clone(),
-        multiplexer: wt.multiplexer.clone(),
-        created_by: wt.created_by.clone(),
-        is_local: wt.is_local,
-    }
-}
-
-/// Find project by ID and return (project, project_key)
-pub(crate) fn find_project_by_id(
-    id: &str,
-) -> Result<(workspace::RegisteredProject, String), StatusCode> {
-    let projects = workspace::load_projects().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let project = projects
-        .into_iter()
-        .find(|p| workspace::project_hash(&p.path) == id)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let project_key = workspace::project_hash(&project.path);
-    Ok((project, project_key))
-}
-
 /// GET /api/v1/projects/{id}/tasks
 pub async fn list_tasks(
     Path(id): Path<String>,
     Query(query): Query<TaskListQuery>,
 ) -> Result<Json<TaskListResponse>, StatusCode> {
-    let (project, project_key) = find_project_by_id(&id)?;
+    let (project, project_key) = common::find_project_by_id(&id)?;
     let filter = query.filter.as_deref().unwrap_or("active");
 
     if project.project_type == workspace::ProjectType::Studio {
@@ -122,13 +61,13 @@ pub async fn list_tasks(
             let archived = loader::load_archived_worktrees(&project_path);
             archived
                 .iter()
-                .map(|wt| worktree_to_response(wt, &pk))
+                .map(|wt| common::worktree_to_response(wt, &pk))
                 .collect()
         } else {
             let active = loader::load_worktrees(&project_path);
             active
                 .iter()
-                .map(|wt| worktree_to_response(wt, &pk))
+                .map(|wt| common::worktree_to_response(wt, &pk))
                 .collect()
         }
     })
@@ -144,7 +83,7 @@ pub async fn list_tasks(
 pub async fn get_task(
     Path((id, task_id)): Path<(String, String)>,
 ) -> Result<Json<TaskResponse>, StatusCode> {
-    let (project, project_key) = find_project_by_id(&id)?;
+    let (project, project_key) = common::find_project_by_id(&id)?;
 
     if project.project_type == workspace::ProjectType::Studio {
         let pk = project_key.clone();
@@ -167,17 +106,18 @@ pub async fn get_task(
     let tid = task_id.clone();
     let result: Option<TaskResponse> = tokio::task::spawn_blocking(move || {
         if tid == crate::storage::tasks::LOCAL_TASK_ID {
-            return loader::load_local_task(&project_path).map(|wt| worktree_to_response(&wt, &pk));
+            return loader::load_local_task(&project_path)
+                .map(|wt| common::worktree_to_response(&wt, &pk));
         }
         let active = loader::load_worktrees(&project_path);
         if let Some(wt) = active.iter().find(|wt| wt.id == tid) {
-            return Some(worktree_to_response(wt, &pk));
+            return Some(common::worktree_to_response(wt, &pk));
         }
         let archived = loader::load_archived_worktrees(&project_path);
         archived
             .iter()
             .find(|wt| wt.id == tid)
-            .map(|wt| worktree_to_response(wt, &pk))
+            .map(|wt| common::worktree_to_response(wt, &pk))
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -190,7 +130,7 @@ pub async fn create_task(
     Path(id): Path<String>,
     Json(req): Json<CreateTaskRequest>,
 ) -> Result<Json<TaskResponse>, (StatusCode, Json<ApiError>)> {
-    let (project, project_key) = find_project_by_id(&id).map_err(|s| {
+    let (project, project_key) = common::find_project_by_id(&id).map_err(|s| {
         (
             s,
             Json(ApiError {
@@ -272,7 +212,7 @@ pub async fn archive_task(
     Path((id, task_id)): Path<(String, String)>,
     Query(query): Query<ArchiveQuery>,
 ) -> Result<Json<TaskResponse>, (StatusCode, Json<ArchiveConfirmResponse>)> {
-    let (project, project_key) = find_project_by_id(&id).map_err(|s| {
+    let (project, project_key) = common::find_project_by_id(&id).map_err(|s| {
         (
             s,
             Json(ArchiveConfirmResponse::error(
@@ -475,14 +415,14 @@ pub async fn archive_task(
         )
     })?;
 
-    Ok(Json(worktree_to_response(task, &project_key)))
+    Ok(Json(common::worktree_to_response(task, &project_key)))
 }
 
 /// POST /api/v1/projects/{id}/tasks/{taskId}/recover
 pub async fn recover_task(
     Path((id, task_id)): Path<(String, String)>,
 ) -> Result<Json<TaskResponse>, (StatusCode, Json<ApiError>)> {
-    let (project, project_key) = find_project_by_id(&id).map_err(|s| {
+    let (project, project_key) = common::find_project_by_id(&id).map_err(|s| {
         (
             s,
             Json(ApiError {
@@ -516,7 +456,7 @@ pub async fn recover_task(
         active
             .iter()
             .find(|wt| wt.id == tid)
-            .map(|wt| worktree_to_response(wt, &pk))
+            .map(|wt| common::worktree_to_response(wt, &pk))
     })
     .await
     .map_err(|e| {
@@ -552,7 +492,7 @@ pub async fn delete_task(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let (project, project_key) = find_project_by_id(&id)?;
+    let (project, project_key) = common::find_project_by_id(&id)?;
 
     let task = tasks::get_task(&project_key, &task_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?

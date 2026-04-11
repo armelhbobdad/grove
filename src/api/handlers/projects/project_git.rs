@@ -15,12 +15,12 @@ use crate::model::loader;
 use crate::storage::{tasks, workspace};
 use crate::watcher;
 
-use super::crud::find_project_by_id;
 use super::types::*;
+use crate::api::handlers::common::find_project_by_id;
 
 /// GET /api/v1/projects/{id}/stats
 pub async fn get_stats(Path(id): Path<String>) -> Result<Json<ProjectStatsResponse>, StatusCode> {
-    let project = find_project_by_id(&id)?;
+    let (project, _) = find_project_by_id(&id)?;
     let project_key = workspace::project_hash(&project.path);
 
     if !std::path::Path::new(&project.path).exists() {
@@ -90,7 +90,7 @@ pub async fn get_branches(
     Path(id): Path<String>,
     Query(params): Query<BranchQueryParams>,
 ) -> Result<Json<BranchesResponse>, StatusCode> {
-    let project = find_project_by_id(&id)?;
+    let (project, _) = find_project_by_id(&id)?;
 
     let current = git::current_branch(&project.path).unwrap_or_else(|_| "unknown".to_string());
 
@@ -152,7 +152,7 @@ pub async fn get_branches(
 
 /// POST /api/v1/projects/{id}/init-git
 pub async fn init_git(Path(id): Path<String>) -> Result<Json<ProjectResponse>, StatusCode> {
-    let project = find_project_by_id(&id)?;
+    let (project, _) = find_project_by_id(&id)?;
     let project_path = project.path.clone();
 
     let init_result = tokio::task::spawn_blocking(move || {
@@ -173,7 +173,7 @@ pub async fn init_git(Path(id): Path<String>) -> Result<Json<ProjectResponse>, S
 pub async fn open_ide(Path(id): Path<String>) -> Result<Json<OpenResponse>, StatusCode> {
     use crate::storage::config;
 
-    let project = find_project_by_id(&id)?;
+    let (project, _) = find_project_by_id(&id)?;
     let config = config::load_config();
 
     let ide_cmd = config.web.ide.unwrap_or_else(|| "code".to_string());
@@ -212,7 +212,7 @@ pub async fn open_ide(Path(id): Path<String>) -> Result<Json<OpenResponse>, Stat
 pub async fn open_terminal(Path(id): Path<String>) -> Result<Json<OpenResponse>, StatusCode> {
     use crate::storage::config;
 
-    let project = find_project_by_id(&id)?;
+    let (project, _) = find_project_by_id(&id)?;
     let config = config::load_config();
 
     let terminal_cmd = config.web.terminal.as_deref();

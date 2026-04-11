@@ -95,10 +95,3 @@ impl ApiError {
         (status, axum::Json(Self { error: msg.into() })).into_response()
     }
 }
-
-// Allow `ApiError` to be returned directly from handlers.
-impl IntoResponse for ApiError {
-    fn into_response(self) -> axum::response::Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(self)).into_response()
-    }
-}

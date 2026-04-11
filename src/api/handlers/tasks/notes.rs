@@ -4,7 +4,7 @@ use axum::{extract::Path, http::StatusCode, Json};
 
 use crate::storage::notes;
 
-use super::crud::find_project_by_id;
+use super::super::common::find_project_by_id;
 use super::types::*;
 
 /// GET /api/v1/projects/{id}/tasks/{taskId}/notes

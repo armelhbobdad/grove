@@ -11,7 +11,7 @@ use crate::api::error::ApiError;
 use crate::git;
 use crate::storage::tasks;
 
-use super::crud::find_project_by_id;
+use super::super::common::find_project_by_id;
 use super::types::*;
 
 /// POST /api/v1/projects/{id}/tasks/{taskId}/sync
@@ -269,12 +269,11 @@ pub async fn get_diff(
                 total_deletions += entry.deletions;
 
                 let status = match entry.status {
-                    'A' => "A",
-                    'D' => "D",
-                    'R' => "R",
-                    _ => "M",
-                }
-                .to_string();
+                    'A' => DiffStatus::Added,
+                    'D' => DiffStatus::Deleted,
+                    'R' => DiffStatus::Renamed,
+                    _ => DiffStatus::Modified,
+                };
 
                 DiffFileEntry {
                     path: entry.path,

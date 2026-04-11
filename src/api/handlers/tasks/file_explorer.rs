@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::api::error::ApiError;
 use crate::storage::tasks;
 
-use super::crud::find_project_by_id;
+use super::super::common::find_project_by_id;
 use super::types::*;
 
 /// Resolve a relative path within a worktree, preventing path traversal attacks.

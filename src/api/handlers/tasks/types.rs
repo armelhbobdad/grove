@@ -129,11 +129,24 @@ pub struct GitOperationResponse {
     pub warning: Option<String>,
 }
 
+/// Diff file status
+#[derive(Debug, Clone, Serialize)]
+pub enum DiffStatus {
+    #[serde(rename = "A")]
+    Added,
+    #[serde(rename = "M")]
+    Modified,
+    #[serde(rename = "D")]
+    Deleted,
+    #[serde(rename = "R")]
+    Renamed,
+}
+
 /// Diff file entry
 #[derive(Debug, Serialize)]
 pub struct DiffFileEntry {
     pub path: String,
-    pub status: String, // "A" | "M" | "D" | "R"
+    pub status: DiffStatus,
     pub additions: u32,
     pub deletions: u32,
 }

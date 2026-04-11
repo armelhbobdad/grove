@@ -6,6 +6,7 @@ import {
   GitBranch,
   FileText,
   MessageSquare,
+  Package,
 
   ChevronRight,
   ChevronLeft,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { Button, DropdownMenu } from "../../ui";
 import type { Task } from "../../../data/types";
-import { StatsTab, GitTab, NotesTab, CommentsTab } from "./tabs";
+import { StatsTab, GitTab, NotesTab, CommentsTab, ArtifactsTab } from "./tabs";
 
 import { useIsMobile } from "../../../hooks";
 import { useProject } from "../../../context";
@@ -51,7 +52,7 @@ interface TaskInfoPanelProps {
   onAddPanel?: (type: PanelType) => void;
 }
 
-export type TabType = "stats" | "git" | "notes" | "comments";
+export type TabType = "stats" | "git" | "notes" | "comments" | "artifacts";
 
 interface TabConfig {
   id: TabType;
@@ -61,6 +62,7 @@ interface TabConfig {
 
 const REPO_TABS: TabConfig[] = [
   { id: "stats", label: "Stats", icon: BarChart3 },
+  { id: "artifacts", label: "Artifacts", icon: Package },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "notes", label: "Notes", icon: FileText },
   { id: "comments", label: "Comments", icon: MessageSquare },
@@ -68,6 +70,7 @@ const REPO_TABS: TabConfig[] = [
 
 const STUDIO_TABS: TabConfig[] = [
   { id: "stats", label: "Stats", icon: BarChart3 },
+  { id: "artifacts", label: "Artifacts", icon: Package },
   { id: "notes", label: "Notes", icon: FileText },
 ];
 
@@ -112,6 +115,8 @@ export function TaskInfoPanel({
     switch (activeTab) {
       case "stats":
         return <StatsTab projectId={projectId} task={task} />;
+      case "artifacts":
+        return <ArtifactsTab projectId={projectId} task={task} />;
       case "git":
         return <GitTab projectId={projectId} task={task} />;
       case "notes":

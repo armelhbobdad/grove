@@ -12,11 +12,11 @@ use std::path::PathBuf;
 use crate::api::error::ApiError;
 use crate::storage::{tasks, workspace};
 
+use super::super::common::find_project_by_id;
 use super::super::studio_common;
 use super::super::studio_common::{
     AddWorkDirectoryRequest, WorkDirectoryEntry, WorkDirectoryListResponse, WorkDirectoryQuery,
 };
-use super::crud::find_project_by_id;
 use super::types::*;
 
 fn list_dir_recursive(
