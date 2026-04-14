@@ -230,7 +230,7 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
   const isLocal = task.isLocal === true;
   const canOperate = !isArchived && !isBroken && !isLocal;
 
-  const overflowItems: OverflowItem[] = [
+  const overflowItems = useMemo<OverflowItem[]>(() => [
     ...(!isLocal && onRebase ? [{
       id: "rebase", label: "Rebase", icon: GitBranchPlus, onClick: onRebase,
       shortcut: "b", disabled: !canOperate,
@@ -248,7 +248,7 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
       id: "clean", label: "Clean", icon: Trash2, onClick: onClean,
       shortcut: "⇧X", variant: "danger" as const,
     }] : []),
-  ];
+  ], [isLocal, onRebase, onArchive, onReset, onClean, canOperate, isBroken, isArchived]);
 
   const workspaceLeading = useMemo(() => onBack ? (
     <div className="flex items-center gap-2.5 text-[12.5px] shrink-0">

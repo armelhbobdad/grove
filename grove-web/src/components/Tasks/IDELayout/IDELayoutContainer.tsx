@@ -264,12 +264,10 @@ export const IDELayoutContainer = forwardRef<IDELayoutHandle, IDELayoutContainer
     const isStudio = selectedProject?.projectType === "studio";
     const isGitRepo = selectedProject?.isGitRepo;
 
-    // Read persisted state once at mount (useRef avoids repeated localStorage reads)
-    const persistedRef = useRef<Partial<PersistedIDEState> | null>(null);
-    if (persistedRef.current === null) {
-      persistedRef.current = loadPersistedState(projectId, task.id);
-    }
-    const persisted = persistedRef.current;
+    // Read persisted state once at mount via useState lazy initializer (avoids repeated localStorage reads)
+    const [persisted] = useState<Partial<PersistedIDEState>>(() =>
+      loadPersistedState(projectId, task.id),
+    );
 
     const [state, setState] = useState<IDELayoutInternalState>(() => {
       const firstTabId = `term-init-${Date.now()}`;

@@ -1449,7 +1449,7 @@ export function TaskChat({
     attachCountersRef.current = buildAttachmentCounters(restoredMessages);
     // Point wsRef to this chat's WebSocket
     wsRef.current = wsMapRef.current.get(chatId) ?? null;
-  }, []);
+  }, [updateBusy]);
 
   // ─── Load chats on mount ───────────────────────────────────────────────
 
@@ -1694,7 +1694,7 @@ export function TaskChat({
         wsEventBufferRef.current = [];
       }
     })();
-  }, [activeChatId, connectChatWs, projectId, task.id]);
+  }, [activeChatId, connectChatWs, projectId, task.id, updateBusy]);
 
   // Cleanup all WebSockets on unmount
   useEffect(() => {
@@ -1944,7 +1944,7 @@ export function TaskChat({
           break;
       }
     },
-    [onConnectedProp, enableAutoStickToBottom, onChatBecameIdle],
+    [onConnectedProp, enableAutoStickToBottom, onChatBecameIdle, updateBusy],
   );
 
   /** Buffer a server message into the per-chat cache (for non-active chats) */
