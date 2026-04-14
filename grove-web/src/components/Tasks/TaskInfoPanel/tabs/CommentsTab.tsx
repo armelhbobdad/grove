@@ -200,9 +200,9 @@ export function CommentsTab({ projectId, task }: CommentsTabProps) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="h-full min-h-0 flex flex-col gap-3 overflow-hidden">
       {/* Filter Buttons */}
-      <div className="flex gap-2 text-sm">
+      <div className="flex flex-wrap gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-sm shadow-sm">
         <button
           onClick={() => setFilter("all")}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors ${
@@ -239,7 +239,7 @@ export function CommentsTab({ projectId, task }: CommentsTabProps) {
       </div>
 
       {/* Comments */}
-      <div className="space-y-3">
+      <div className="min-h-0 flex-1 overflow-y-auto space-y-3 pr-1">
         {filteredComments.length === 0 ? (
           <div className="py-8 text-center">
             <p className="text-sm text-[var(--color-text-muted)]">

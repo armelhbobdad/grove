@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
@@ -14,9 +14,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { FlexLayoutContainer, type FlexLayoutContainerHandle } from "../PanelSystem";
+import { IDELayoutContainer } from "../IDELayout";
+import type { IDELayoutHandle, LayoutMode, AuxPanelType, InfoTabType } from "../IDELayout";
+import { AUX_PANEL_TYPES, INFO_PANEL_TYPES } from "../IDELayout";
 import type { Task } from "../../../data/types";
 import type { PanelType } from "../PanelSystem/types";
 import { sendInputToTerminal } from "../TaskDetail/terminalCache";
+import { useConfig } from "../../../context";
 
 // --- Workspace Bar Dropdown (for overflow actions) ---
 function OverflowDropdown({ items }: { items: OverflowItem[] }) {
@@ -145,6 +149,7 @@ export interface TaskViewHandle {
   sendTerminalInput: (text: string) => boolean;
 }
 
+
 export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) => {
   const {
     projectId,
@@ -162,16 +167,31 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
     onReset,
   } = props;
   const layoutRef = useRef<FlexLayoutContainerHandle>(null);
+  const ideLayoutRef = useRef<IDELayoutHandle>(null);
+  const { config } = useConfig();
+  const layoutMode: LayoutMode = (config?.web?.workspace_layout === "ide" ? "ide" : "flex") as LayoutMode;
   const fullscreen = externalFullscreen ?? false;
   const toggleFullscreen = () => onFullscreenChange?.(!fullscreen);
 
-  const handleAddPanel = useCallback((type: PanelType) => {
-    layoutRef.current?.addPanel(type);
-  }, []);
+  // Shared panel routing: delegates to the correct layout backend
+  const routePanelCommand = useCallback((type: PanelType, flexAction: "add" | "ensure") => {
+    if (layoutMode === "ide") {
+      if ((AUX_PANEL_TYPES as readonly string[]).includes(type)) {
+        ideLayoutRef.current?.focusAuxPanel(type as AuxPanelType);
+      } else if ((INFO_PANEL_TYPES as readonly string[]).includes(type)) {
+        ideLayoutRef.current?.focusInfoPanel(type as InfoTabType);
+      } else if (type === "chat") {
+        ideLayoutRef.current?.focusChat();
+      }
+    } else {
+      const ref = layoutRef.current;
+      if (flexAction === "add") ref?.addPanel(type);
+      else ref?.ensurePanel(type);
+    }
+  }, [layoutMode]);
 
-  const handleEnsurePanel = useCallback((type: PanelType) => {
-    layoutRef.current?.ensurePanel(type);
-  }, []);
+  const handleAddPanel = useCallback((type: PanelType) => routePanelCommand(type, "add"), [routePanelCommand]);
+  const handleEnsurePanel = useCallback((type: PanelType) => routePanelCommand(type, "ensure"), [routePanelCommand]);
 
   const handleSendTerminalInput = useCallback((text: string): boolean => {
     // Terminal cache key prefix: "task:{projectId}:{taskId}|"
@@ -182,11 +202,27 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
   useImperativeHandle(ref, () => ({
     addPanel: handleAddPanel,
     ensurePanel: handleEnsurePanel,
-    selectTabByIndex: (index: number) => layoutRef.current?.selectTabByIndex(index) ?? "no_tabs",
-    selectAdjacentTab: (delta: number) => layoutRef.current?.selectAdjacentTab(delta) ?? false,
-    closeActiveTab: () => layoutRef.current?.closeActiveTab(),
+    selectTabByIndex: (index: number) => {
+      if (layoutMode === "ide") {
+        return ideLayoutRef.current?.selectTabByIndex(index) ?? "no_tabs";
+      }
+      return layoutRef.current?.selectTabByIndex(index) ?? "no_tabs";
+    },
+    selectAdjacentTab: (delta: number) => {
+      if (layoutMode === "ide") {
+        return ideLayoutRef.current?.selectAdjacentTab(delta) ?? false;
+      }
+      return layoutRef.current?.selectAdjacentTab(delta) ?? false;
+    },
+    closeActiveTab: () => {
+      if (layoutMode === "ide") {
+        ideLayoutRef.current?.closeActiveTab();
+      } else {
+        layoutRef.current?.closeActiveTab();
+      }
+    },
     sendTerminalInput: handleSendTerminalInput,
-  }), [handleAddPanel, handleEnsurePanel, handleSendTerminalInput]);
+  }), [handleAddPanel, handleEnsurePanel, handleSendTerminalInput, layoutMode]);
 
   // Overflow menu items
   const isArchived = task.status === "archived";
@@ -214,10 +250,64 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
     }] : []),
   ];
 
+  const workspaceLeading = useMemo(() => onBack ? (
+    <div className="flex items-center gap-2.5 text-[12.5px] shrink-0">
+      <button
+        onClick={onBack}
+        className="flex items-center gap-1 h-7 px-2 rounded-md text-[var(--color-text)]/50 hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
+        title="Back (Esc)"
+      >
+        <ArrowLeft size={13} />
+        <span className="text-xs font-medium">Back</span>
+      </button>
+    </div>
+  ) : undefined, [onBack]);
+
+  const workspaceActions = useMemo(() => (
+    <div className="flex items-center gap-1 shrink-0">
+      {onCommit && (
+        <button
+          onClick={onCommit}
+          disabled={isArchived}
+          className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+          title="Commit (c)"
+        >
+          <GitCommit size={13} />
+          <span>Commit</span>
+        </button>
+      )}
+      {onMerge && (
+        <button
+          onClick={onMerge}
+          disabled={!canOperate}
+          className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+          title="Merge (m)"
+        >
+          <GitMerge size={13} />
+          <span>Merge</span>
+        </button>
+      )}
+      {!isLocal && onSync && (
+        <button
+          onClick={onSync}
+          disabled={!canOperate}
+          className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+          title="Sync (s)"
+        >
+          <RefreshCw size={13} />
+          <span>Sync</span>
+        </button>
+      )}
+
+      <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
+      {overflowItems.length > 0 && <OverflowDropdown items={overflowItems} />}
+    </div>
+  ), [onCommit, onMerge, onSync, canOperate, isLocal, isArchived, overflowItems]);
+
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${fullscreen ? 'fixed inset-0 z-50 bg-[var(--color-bg)]' : ''}`}>
       {/* Workspace Bar — hidden in fullscreen */}
-      {!fullscreen && <div className="flex items-center h-9 px-3 gap-3 bg-[var(--color-bg)] border-b border-[var(--color-border)] shrink-0 select-none">
+      {!fullscreen && layoutMode !== "ide" && <div className="flex items-center h-9 px-3 gap-3 bg-[var(--color-bg)] border-b border-[var(--color-border)] shrink-0 select-none">
         {/* Left: Back + Breadcrumb + Branch */}
         <div className="flex items-center gap-2.5 min-w-0 text-[12.5px]">
           {/* Back button (hidden when onBack is not provided, e.g. localMode) */}
@@ -258,7 +348,6 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
           )}
         </div>
 
-        {/* Spacer */}
         <div className="flex-1" />
 
         {/* Right: Git Actions + Overflow + CmdK + Fullscreen */}
@@ -307,15 +396,25 @@ export const TaskView = forwardRef<TaskViewHandle, TaskViewProps>((props, ref) =
         </div>
       </div>}
 
-      {/* FlexLayout — fills remaining space */}
+      {/* Layout area — fills remaining space */}
       <div className="flex-1 min-h-0 relative">
-        <FlexLayoutContainer
-          ref={layoutRef}
-          task={task}
-          projectId={projectId}
-          fullscreen={fullscreen}
-          onToggleFullscreen={toggleFullscreen}
-        />
+        {layoutMode === "ide" ? (
+          <IDELayoutContainer
+            ref={ideLayoutRef}
+            task={task}
+            projectId={projectId}
+            toolbarLeading={workspaceLeading}
+            toolbarTrailing={workspaceActions}
+          />
+        ) : (
+          <FlexLayoutContainer
+            ref={layoutRef}
+            task={task}
+            projectId={projectId}
+            fullscreen={fullscreen}
+            onToggleFullscreen={toggleFullscreen}
+          />
+        )}
       </div>
     </div>
   );

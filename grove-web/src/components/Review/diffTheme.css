@@ -282,6 +282,7 @@
   top: 0;
   z-index: 5;
   font-size: 13px;
+  container-type: inline-size;
 }
 
 .diff-file-header-top {
@@ -289,6 +290,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 /* Preview button (Eye icon in header) */
@@ -327,6 +330,12 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   color: var(--color-text);
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: min(62cqi, 820px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .diff-file-badge {
@@ -933,8 +942,11 @@ td.diff-code.diff-line-highlighted::before {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding-left: 0;
 }
 
 .diff-file-viewed-label {
@@ -989,6 +1001,7 @@ td.diff-code.diff-line-highlighted::before {
   font-size: 11px;
   color: var(--color-text-muted);
   white-space: nowrap;
+  min-width: 0;
 }
 
 .diff-file-unresolved {
@@ -1311,6 +1324,17 @@ td.diff-code.diff-line-highlighted::before {
   overflow: clip;
 }
 
+/* When preview drawer is open, fix height to viewport so iframe can fill it */
+.diff-file-body.with-preview {
+  height: calc(100vh - 50px);
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.diff-file-body.with-preview .diff-file-body-main {
+  overflow-y: auto;
+}
+
 .diff-file-body-main {
   flex: 1;
   min-width: 0;
@@ -1330,6 +1354,8 @@ td.diff-code.diff-line-highlighted::before {
   width: 0;
   min-width: 0;
   overflow: clip;
+  display: flex;
+  flex-direction: column;
   border-left: 1px solid var(--color-border);
   background: var(--color-bg);
   transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
@@ -1387,6 +1413,9 @@ td.diff-code.diff-line-highlighted::before {
 
 .preview-drawer-content {
   padding: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 /* Diff preview hunk markers (inside drawer) — non-code blocks */
@@ -1983,12 +2012,23 @@ td.diff-code.diff-line-highlighted::before {
   font-size: 13px;
   transition: all 0.15s;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .diff-file-comment-btn:hover {
   background: var(--color-bg-tertiary);
   border-color: var(--color-highlight);
   color: var(--color-highlight);
+}
+
+@container (max-width: 560px) {
+  .diff-file-comment-btn span {
+    display: none;
+  }
+
+  .diff-file-header-right {
+    gap: 8px;
+  }
 }
 
 /* Conversation sidebar footer */
@@ -2402,7 +2442,7 @@ td.diff-code.diff-line-highlighted::before {
   .diff-file-header-top {
     padding: 6px 10px;
     gap: 6px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
   .diff-file-preview-mode {
     padding: 6px 10px;

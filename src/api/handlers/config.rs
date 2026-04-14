@@ -44,6 +44,7 @@ pub struct WebConfigDto {
     pub ide: Option<String>,
     pub terminal: Option<String>,
     pub terminal_mode: Option<String>,
+    pub workspace_layout: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +90,7 @@ impl From<&Config> for ConfigResponse {
                 ide: config.web.ide.clone(),
                 terminal: config.web.terminal.clone(),
                 terminal_mode: config.web.terminal_mode.clone(),
+                workspace_layout: config.web.workspace_layout.clone(),
             },
             auto_link: AutoLinkConfigDto {
                 patterns: config.auto_link.patterns.clone(),
@@ -153,6 +155,7 @@ pub struct WebConfigPatch {
     pub ide: Option<String>,
     pub terminal: Option<String>,
     pub terminal_mode: Option<String>,
+    pub workspace_layout: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +225,9 @@ pub async fn patch_config(
         }
         if web_patch.terminal_mode.is_some() {
             config.web.terminal_mode = web_patch.terminal_mode;
+        }
+        if web_patch.workspace_layout.is_some() {
+            config.web.workspace_layout = web_patch.workspace_layout;
         }
     }
 

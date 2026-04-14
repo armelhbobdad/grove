@@ -54,7 +54,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: "Info Panel Tabs",
     entries: [
-      { keys: ["1"], description: "Stats tab" },
+      { keys: ["1"], description: "Info tab" },
       { keys: ["2"], description: "Git tab" },
       { keys: ["3"], description: "Notes tab" },
       { keys: ["4"], description: "Comments tab" },

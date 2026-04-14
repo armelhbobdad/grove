@@ -352,7 +352,10 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt }
   const outputEntries = getDirectChildren(outputFiles, currentOutputPath);
 
   return (
-    <div className="flex flex-col h-full relative" style={{ color: "var(--color-text)" }}>
+    <div
+      className="flex flex-col h-full relative"
+      style={{ color: "var(--color-text)", overflow: previewFile ? 'hidden' : undefined }}
+    >
       {/* Hidden file input */}
       <input
         ref={fileInputRef}

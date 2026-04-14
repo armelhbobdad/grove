@@ -1063,7 +1063,7 @@ export function DiffFileView({
             </div>
           )}
 
-          <div className="diff-file-body" ref={bodyRef}>
+          <div className={`diff-file-body${isPreviewOpen ? ' with-preview' : ''}`} ref={bodyRef}>
             {/* Main diff content (left side when drawer is open) */}
             <div className={`diff-file-body-main${isPreviewOpen && drawerExpanded ? ' hidden' : ''}`}>
               {file.is_virtual ? (

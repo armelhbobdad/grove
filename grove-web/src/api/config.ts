@@ -21,6 +21,8 @@ export interface WebConfig {
   terminal?: string;
   /** Web terminal backend: "multiplexer" (default) | "direct" */
   terminal_mode?: string;
+  /** Workspace layout mode: "flex" (default) | "ide" */
+  workspace_layout?: "flex" | "ide";
 }
 
 export interface AutoLinkConfig {

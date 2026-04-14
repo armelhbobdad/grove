@@ -71,6 +71,8 @@ import {
   readFile,
 } from "../../../api";
 import type { ChatSessionResponse, CustomAgent } from "../../../api";
+import { openExternalUrl } from "../../../utils/openExternal";
+import "./task-chat.css";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -3431,7 +3433,7 @@ export function TaskChat({
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-none p-1.5">
               <div className="space-y-1">
                 <div className="relative" ref={sidebarAgentPickerRef}>
                   <button
@@ -3522,7 +3524,7 @@ export function TaskChat({
           {/* Messages */}
           <div
             ref={messagesViewportRef}
-            className="relative z-0 h-full min-h-0 flex-1 overflow-y-auto px-4 pt-4"
+            className="relative z-0 h-full min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-none px-4 pt-4"
           >
             <div className="flex w-full flex-col gap-3">
               {renderItems.map((item, idx) =>
@@ -3570,7 +3572,7 @@ export function TaskChat({
           {/* Input */}
           <div ref={inputAreaRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pb-4 pt-2">
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-bg)_96%,transparent),transparent)]" />
-            <div className="pointer-events-auto relative mx-auto w-full max-w-[920px]">
+            <div className="chatbox-cq-root pointer-events-auto relative mx-auto w-full max-w-[920px]">
               {isRemoteSession && (
                 <div className="absolute inset-x-0 bottom-full z-20 mb-3">
                   <div className="flex items-center justify-between gap-3 rounded-[22px] border border-[color-mix(in_srgb,var(--color-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] px-4 py-2.5 shadow-[0_10px_28px_rgba(0,0,0,0.12)] backdrop-blur-md">
@@ -3838,7 +3840,7 @@ export function TaskChat({
 
               <div
                 ref={chatboxContainerRef}
-                className={`relative min-w-0 rounded-[30px] border bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,transparent)] px-3 pt-2 pb-3 shadow-[0_22px_60px_rgba(0,0,0,0.18)] backdrop-blur-md transition-all ${
+                className={`chatbox-bubble relative min-w-0 rounded-[30px] border bg-[color-mix(in_srgb,var(--color-bg-secondary)_78%,transparent)] px-3 pt-2 pb-3 shadow-[0_22px_60px_rgba(0,0,0,0.18)] backdrop-blur-md transition-all ${
                   isBusy
                     ? "chatbox-busy-border border-transparent focus-within:border-transparent"
                     : isTerminalMode
@@ -4129,7 +4131,7 @@ export function TaskChat({
                   </div>
                 </div>
 
-                <div className="mt-2 flex items-center justify-between gap-2 select-none">
+                <div className="chatbox-footer mt-2 flex items-center justify-between gap-2 select-none">
                   <div className="flex items-center gap-2 min-w-0 select-none">
                     {!activePermissionMessage &&
                       (promptCaps.image || promptCaps.audio) && (
@@ -4451,7 +4453,7 @@ const DropdownSelect = ({
       onClick={onToggle}
       className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--color-bg)] px-2.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
     >
-      <span className="opacity-70">{label}</span>
+      <span className="chatbox-dropdown-label opacity-70">{label}</span>
       <span className="max-w-40 truncate text-[var(--color-text)]">
         {options.find((o) => o.value === value)?.label ?? "Default"}
       </span>
@@ -4593,7 +4595,7 @@ function MessageItem({
                   <div key={i} className="group/res relative mb-2">
                     <button
                       type="button"
-                      onClick={() => att.uri && window.open(att.uri, "_blank")}
+                      onClick={() => att.uri && openExternalUrl(att.uri)}
                       className="flex w-full max-w-[320px] items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-border)_70%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_72%,transparent)] px-3 py-2 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)]"
                       title={att.uri ?? att.name}
                     >
@@ -4627,7 +4629,7 @@ function MessageItem({
                 ) : null,
               )}
               {message.content && (
-                <div className="whitespace-pre-wrap">{message.content}</div>
+                <div className="whitespace-pre-wrap break-words">{message.content}</div>
               )}
             </div>
           </div>
@@ -4809,7 +4811,7 @@ function PermissionCard({
             Permission Required
           </span>
         </div>
-        <p className="text-xs text-[var(--color-text-muted)] mb-3 ml-6">
+        <p className="text-xs text-[var(--color-text-muted)] mb-3 ml-6 break-words">
           {message.description}
         </p>
         <div className="flex items-center gap-2 ml-6 flex-wrap">

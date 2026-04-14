@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { motion } from "framer-motion";
+import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings,
   LayoutGrid,
@@ -21,6 +22,8 @@ import { GroveIcon } from "./GroveIcon";
 import { useNotifications, useProject } from "../../context";
 import { REPO_NAV_IDS, STUDIO_NAV_IDS } from "../../data/nav";
 import type { TasksMode } from "../../App";
+import { Zap, Code } from "lucide-react";
+import type { Task } from "../../data/types";
 
 interface NavItem {
   id: string;
@@ -61,9 +64,15 @@ interface SidebarProps {
   drawerMode?: boolean;
   /** Called when an item is clicked in drawer mode so the drawer can close */
   onDrawerClose?: () => void;
+  /** Non-archived tasks for the current project (for Tasks button hover popup) */
+  tasks?: Task[];
+  /** Called when user selects a task from the hover popup */
+  onTaskSelect?: (task: Task) => void;
+  /** Whether a task workspace is currently active */
+  inWorkspace?: boolean;
 }
 
-export function Sidebar({ activeItem, onItemClick, collapsed, onToggleCollapse, onManageProjects, onAddProject, onNavigate, tasksMode, onTasksModeChange, onProjectSwitch, onSearch, drawerMode, onDrawerClose }: SidebarProps) {
+export function Sidebar({ activeItem, onItemClick, collapsed, onToggleCollapse, onManageProjects, onAddProject, onNavigate, tasksMode, onTasksModeChange, onProjectSwitch, onSearch, drawerMode, onDrawerClose, tasks, onTaskSelect, inWorkspace }: SidebarProps) {
   const [notifOpen, setNotifOpen] = useState(false);
   const { unreadCount } = useNotifications();
   const { selectedProject } = useProject();
@@ -104,15 +113,40 @@ export function Sidebar({ activeItem, onItemClick, collapsed, onToggleCollapse, 
       {/* Navigation */}
       <nav className="flex-1 p-2 overflow-y-auto select-none">
         <div className="space-y-1">
-          {navItems.map((item) => (
-            <NavButton
-              key={item.id}
-              item={item}
-              isActive={activeItem === item.id}
-              onClick={() => handleItemClick(item.id)}
-              collapsed={isCollapsed}
-            />
-          ))}
+          {navItems.map((item) => {
+            const isTasksItem = item.id === "tasks";
+            const hasPopup =
+              isTasksItem &&
+              activeItem === "tasks" &&
+              !!inWorkspace &&
+              !!tasks &&
+              !!onTaskSelect &&
+              tasks.filter((t) => t.status !== "archived").length > 0;
+
+            if (hasPopup) {
+              return (
+                <TasksNavButtonWithPopup
+                  key={item.id}
+                  item={item}
+                  isActive={activeItem === item.id}
+                  onClick={() => handleItemClick(item.id)}
+                  collapsed={isCollapsed}
+                  tasks={tasks!}
+                  onTaskSelect={onTaskSelect!}
+                />
+              );
+            }
+
+            return (
+              <NavButton
+                key={item.id}
+                item={item}
+                isActive={activeItem === item.id}
+                onClick={() => handleItemClick(item.id)}
+                collapsed={isCollapsed}
+              />
+            );
+          })}
         </div>
       </nav>
 
@@ -222,6 +256,148 @@ interface NavButtonProps {
   isActive: boolean;
   onClick: () => void;
   collapsed: boolean;
+}
+
+interface TasksNavButtonWithPopupProps {
+  item: NavItem;
+  isActive: boolean;
+  onClick: () => void;
+  collapsed: boolean;
+  tasks: Task[];
+  onTaskSelect: (task: Task) => void;
+}
+
+function TasksNavButtonWithPopup({ item, isActive, onClick, collapsed, tasks, onTaskSelect }: TasksNavButtonWithPopupProps) {
+  const [hovered, setHovered] = useState(false);
+  const [popupPos, setPopupPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLDivElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, []);
+
+  const updatePos = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPopupPos({ top: rect.top, left: rect.right + 8 });
+    }
+  };
+
+  const handleMouseEnter = () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    updatePos();
+    setHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    hideTimerRef.current = setTimeout(() => setHovered(false), 100);
+  };
+
+  const handleTaskClick = (task: Task) => {
+    setHovered(false);
+    onTaskSelect(task);
+  };
+
+  return (
+    <div
+      ref={btnRef}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <NavButton
+        item={item}
+        isActive={isActive}
+        onClick={onClick}
+        collapsed={collapsed}
+      />
+      <AnimatePresence>
+        {hovered && popupPos && (
+          <TasksHoverPopup
+            tasks={tasks}
+            onTaskSelect={handleTaskClick}
+            top={popupPos.top}
+            left={popupPos.left}
+            onMouseEnter={() => {
+              if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+            }}
+            onMouseLeave={handleMouseLeave}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+
+interface TasksHoverPopupProps {
+  tasks: Task[];
+  onTaskSelect: (task: Task) => void;
+  top: number;
+  left: number;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}
+
+function TasksHoverPopup({ tasks, onTaskSelect, top, left, onMouseEnter, onMouseLeave }: TasksHoverPopupProps) {
+  const nonArchived = tasks.filter((t) => t.status !== "archived");
+  if (nonArchived.length === 0) return null;
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0, x: -6, scale: 0.97 }}
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: -6, scale: 0.97 }}
+      transition={{ duration: 0.15, ease: "easeOut" }}
+      style={{ top, left, position: "fixed" }}
+      className="z-[9999] w-[260px] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl shadow-xl overflow-hidden"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {/* Header */}
+      <div className="px-3 py-2.5 border-b border-[var(--color-border)] flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Switch Task
+        </span>
+        <span className="text-[11px] text-[var(--color-text-muted)]">{nonArchived.length}</span>
+      </div>
+
+      {/* Task list */}
+      <div className="max-h-[320px] overflow-y-auto py-1">
+        {nonArchived.map((task) => {
+          return (
+            <motion.button
+              key={task.id}
+              whileHover={{ backgroundColor: "var(--color-bg-secondary)" }}
+              onClick={() => onTaskSelect(task)}
+              className="w-full text-left px-3 py-2.5 border-l-2 border-l-transparent hover:border-l-[var(--color-highlight)] transition-colors duration-100"
+            >
+              <div className="flex items-center gap-2.5">
+                {/* Type icon */}
+                <div className="flex-shrink-0">
+                  {task.isLocal ? (
+                    <Laptop className="w-3.5 h-3.5" style={{ color: "var(--color-accent)" }} />
+                  ) : task.createdBy === "agent" ? (
+                    <Zap className="w-3.5 h-3.5" style={{ color: "var(--color-info)" }} />
+                  ) : (
+                    <Code className="w-3.5 h-3.5" style={{ color: "var(--color-highlight)" }} />
+                  )}
+                </div>
+
+                {/* Name + meta */}
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium text-[var(--color-text)] truncate">{task.name}</span>
+                </div>
+              </div>
+            </motion.button>
+          );
+        })}
+      </div>
+    </motion.div>,
+    document.body
+  );
 }
 
 function NavButton({ item, isActive, onClick, collapsed }: NavButtonProps) {

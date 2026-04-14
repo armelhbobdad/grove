@@ -325,7 +325,7 @@ export function TaskEditor({ projectId, taskId, onClose, fullscreen = false, onT
   const breadcrumb = selectedFile ? selectedFile.split('/') : [];
 
   return (
-    <div className={`flex-1 flex flex-col bg-[var(--color-bg-secondary)] overflow-hidden ${fullscreen ? '' : 'rounded-lg border border-[var(--color-border)]'}`}>
+    <div className={`h-full min-h-0 flex-1 flex flex-col bg-[var(--color-bg-secondary)] overflow-hidden ${fullscreen ? '' : 'rounded-lg border border-[var(--color-border)]'}`}>
       {/* Header - 只在非 hideHeader 模式下显示 */}
       {!hideHeader && (
       <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-bg)] border-b border-[var(--color-border)]">

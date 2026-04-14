@@ -369,12 +369,12 @@ export function buildCommands(options: UseCommandsOptions): Command[] {
         commands.push(
           withRanking({
             id: "tab-stats",
-            name: inWorkspace ? "Open Stats Panel" : "Show Stats Tab",
+            name: inWorkspace ? "Open Info Panel" : "Show Info Tab",
             category: "Info Panel",
             icon: ChartBar,
             shortcut: "1",
             handler: infoHandler("stats"),
-            keywords: ["statistics", "info", "overview"],
+            keywords: ["statistics", "stats", "info", "overview"],
           }, { contexts: { default: 0, tasks: 8, workspace: 22 } }),
         );
         if (!studioMode) {

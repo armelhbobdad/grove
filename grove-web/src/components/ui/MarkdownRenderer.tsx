@@ -6,6 +6,7 @@ import mermaid from "mermaid";
 import { VSCodeIcon } from "./VSCodeIcon";
 import { highlightCode, normalizeLanguage } from "../Review/syntaxHighlight";
 import { useTheme } from "../../context/ThemeContext";
+import { openExternalUrl } from "../../utils/openExternal";
 
 // Match file paths like `path/to/file.ext` or `path/to/file.ext:123`.
 // Accept Unicode and other non-ASCII characters in path segments.
@@ -328,7 +329,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onFile
           <h6 className="text-xs font-medium text-[var(--color-text-muted)] mt-2 mb-1">{children}</h6>
         ),
         p: ({ children }) => (
-          <p className="text-sm text-[var(--color-text)] mb-2 last:mb-0 [li>&]:mb-0">{children}</p>
+          <p className="text-sm text-[var(--color-text)] mb-2 last:mb-0 [li>&]:mb-0 break-words">{children}</p>
         ),
         ul: ({ children }) => (
           <ul className="list-disc list-inside text-sm text-[var(--color-text)] mb-2 ml-2 space-y-0.5">{children}</ul>
@@ -358,12 +359,27 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onFile
               );
             }
           }
+          const isExternal = href && (href.startsWith("http://") || href.startsWith("https://"));
+          if (isExternal) {
+            return (
+              <a
+                href={href}
+                className="text-[var(--color-highlight)] hover:underline break-words cursor-pointer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  openExternalUrl(href);
+                }}
+              >
+                {children}
+              </a>
+            );
+          }
           return (
             <a
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[var(--color-highlight)] hover:underline"
+              className="text-[var(--color-highlight)] hover:underline break-words"
             >
               {children}
             </a>

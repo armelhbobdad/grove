@@ -385,6 +385,9 @@ function AppContent() {
     onTasksModeChange: setTasksMode,
     onProjectSwitch: handleProjectSwitch,
     onSearch: openCommandPalette,
+    tasks: selectedProject?.tasks ?? [],
+    onTaskSelect: handleTaskSelectFromPalette,
+    inWorkspace,
   };
 
   // Mobile layout

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Calendar, GitCommit, FileCode, Clock, Activity, Loader2 } from "lucide-react";
+import { Calendar, GitCommit, FileCode, Clock, Activity, Loader2, GitBranch, Info } from "lucide-react";
 import { getTaskStats, getDiff, type TaskStatsResponse, type DiffResponse } from "../../../../api";
 import type { Task } from "../../../../data/types";
 import { compactPath } from "../../../../utils/pathUtils";
@@ -149,7 +149,43 @@ export function StatsTab({ projectId, task }: StatsTabProps) {
     : 1;
 
   return (
-    <div className="space-y-4 overflow-y-auto h-full pr-2">
+    <div className="h-full min-h-0 overflow-y-auto space-y-4 pr-1">
+      {/* Basic Info */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0 }}
+        className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4"
+      >
+        <div className="flex items-center gap-2 mb-3 select-none">
+          <Info className="w-4 h-4 text-[var(--color-text-muted)]" />
+          <h3 className="text-sm font-medium text-[var(--color-text)]">Task Info</h3>
+        </div>
+
+        <div className="space-y-3">
+          <div className="text-base font-semibold text-[var(--color-text)] break-words">{task.name}</div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
+                <GitBranch className="w-3.5 h-3.5" />
+                Branch
+              </div>
+              <code className="block text-sm text-[var(--color-accent)] bg-[var(--color-bg-secondary)] rounded-md px-2 py-1 truncate" title={task.branch}>
+                {task.branch || "—"}
+              </code>
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-medium uppercase tracking-wide text-[var(--color-text-muted)] mb-1">Target</div>
+              <code className="block text-sm text-[var(--color-text-muted)] bg-[var(--color-bg-secondary)] rounded-md px-2 py-1 truncate" title={task.target}>
+                {task.target || "—"}
+              </code>
+            </div>
+          </div>
+
+        </div>
+      </motion.div>
+
       {/* Stats Grid */}
       <div className="grid grid-cols-2 gap-3">
         <StatCard

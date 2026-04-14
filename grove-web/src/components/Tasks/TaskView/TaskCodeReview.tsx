@@ -38,7 +38,7 @@ export function TaskCodeReview({
   navigateToFile,
   isGitRepo,
 }: TaskCodeReviewProps) {
-  const containerClass = `flex-1 flex flex-col bg-[var(--color-bg-secondary)] overflow-hidden ${fullscreen ? '' : 'rounded-lg border border-[var(--color-border)]'}`;
+  const containerClass = `h-full min-h-0 flex-1 flex flex-col bg-[var(--color-bg-secondary)] overflow-hidden ${fullscreen ? '' : 'rounded-lg border border-[var(--color-border)]'}`;
 
   return (
     <motion.div
@@ -74,7 +74,7 @@ export function TaskCodeReview({
       )}
 
       {/* Embedded diff review */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden">
         <DiffReviewPage
           projectId={projectId}
           taskId={taskId}

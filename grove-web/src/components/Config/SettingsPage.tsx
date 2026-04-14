@@ -239,6 +239,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
   const [terminalMultiplexer, setTerminalMultiplexer] = useState("tmux");
   // Web terminal backend: "multiplexer" (default) | "direct"
   const [webTerminalMode, setWebTerminalMode] = useState("multiplexer");
+  const [workspaceLayout, setWorkspaceLayout] = useState<"flex" | "ide">("flex");
 
   const lastTerminalMuxRef = useRef<string>("tmux");
   const defaultAppliedRef = useRef(false);
@@ -301,6 +302,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
       setTerminalMultiplexer(cfg.terminal_multiplexer || "tmux");
       lastTerminalMuxRef.current = cfg.terminal_multiplexer || "tmux";
       setWebTerminalMode(cfg.web.terminal_mode || "multiplexer");
+      setWorkspaceLayout(cfg.web.workspace_layout || "flex");
 
       // Load theme - sync with context
       // API stores theme id (e.g., "dark", "tokyo-night")
@@ -440,6 +442,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
           ide: ideCommand || undefined,
           terminal: terminalCommand || undefined,
           terminal_mode: webTerminalMode,
+          workspace_layout: workspaceLayout,
         },
         terminal_multiplexer: terminalMultiplexer,
         acp: {
@@ -455,7 +458,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
     } catch {
       console.error("Failed to save config");
     }
-  }, [isLoaded, selectedLayout, agentCommand, acpAgent, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, autoLinkPatterns, refreshGlobalConfig]);
+  }, [isLoaded, selectedLayout, agentCommand, acpAgent, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, workspaceLayout, autoLinkPatterns, refreshGlobalConfig]);
 
   // Handle theme change with immediate save
   const handleThemeChange = useCallback((newThemeId: string) => {
@@ -477,7 +480,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
     }, 500); // 500ms debounce
 
     return () => clearTimeout(timer);
-  }, [selectedLayout, agentCommand, acpAgent, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, autoLinkPatterns, isLoaded, saveConfig]);
+  }, [selectedLayout, agentCommand, acpAgent, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, workspaceLayout, autoLinkPatterns, isLoaded, saveConfig]);
 
   // Load applications list
   const loadApplications = useCallback(async () => {
@@ -1083,10 +1086,42 @@ env_vars = [
                 isLoadingApps={isLoadingApps}
                 appFilter={(app) =>
                   // Filter for terminals
-                  /terminal|iterm|warp|kitty|alacritty|hyper|konsole|tilix/i.test(app.name) ||
-                  /com\.(apple\.Terminal|googlecode\.iterm|warp|kovidgoyal)/i.test(app.bundle_id || "")
+                  /terminal|iterm|warp|ghostty|kitty|alacritty|hyper|konsole|tilix|wezterm|cmux/i.test(app.name) ||
+                  /com\.(apple\.Terminal|googlecode\.iterm|warp|kovidgoyal|wez|feh)|io\.github\.mlfwka/i.test(app.bundle_id || "")
                 }
               />
+            </div>
+
+            {/* Workspace Layout */}
+            <div>
+              <div className="flex items-center gap-2 mb-3 select-none">
+                <LayoutGrid className="w-4 h-4 text-[var(--color-warning)]" />
+                <span className="text-sm font-medium text-[var(--color-text)]">Workspace Layout</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setWorkspaceLayout("flex")}
+                  className={`p-3 rounded-lg border text-left transition-all ${
+                    workspaceLayout === "flex"
+                      ? "border-[var(--color-highlight)] bg-[var(--color-highlight)]/10"
+                      : "border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:border-[var(--color-highlight)]/50"
+                  }`}
+                >
+                  <div className="text-xs font-medium text-[var(--color-text)] mb-1">Free Layout</div>
+                  <div className="text-[11px] text-[var(--color-text-muted)]">Drag and arrange panels freely</div>
+                </button>
+                <button
+                  onClick={() => setWorkspaceLayout("ide")}
+                  className={`p-3 rounded-lg border text-left transition-all ${
+                    workspaceLayout === "ide"
+                      ? "border-[var(--color-highlight)] bg-[var(--color-highlight)]/10"
+                      : "border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:border-[var(--color-highlight)]/50"
+                  }`}
+                >
+                  <div className="text-xs font-medium text-[var(--color-text)] mb-1">IDE Layout</div>
+                  <div className="text-[11px] text-[var(--color-text-muted)]">Fixed panels with Chat-centric view</div>
+                </button>
+              </div>
             </div>
           </div>
         </Section>

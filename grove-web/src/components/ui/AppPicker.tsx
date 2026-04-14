@@ -39,9 +39,12 @@ export const terminalAppOptions: AppPickerOption[] = [
   { id: "system", label: "System Default", appName: "Terminal" },
   { id: "iterm", label: "iTerm2", appName: "iTerm", command: "iterm" },
   { id: "warp", label: "Warp", appName: "Warp", command: "warp" },
+  { id: "ghostty", label: "Ghostty", appName: "Ghostty", command: "ghostty" },
   { id: "kitty", label: "Kitty", appName: "kitty", command: "kitty" },
   { id: "alacritty", label: "Alacritty", appName: "Alacritty", command: "alacritty" },
   { id: "hyper", label: "Hyper", appName: "Hyper", command: "hyper" },
+  { id: "wezterm", label: "WezTerm", appName: "WezTerm", command: "wezterm" },
+  { id: "cmux", label: "cmux", appName: "cmux", command: "cmux" },
 ];
 
 interface InstalledOption {

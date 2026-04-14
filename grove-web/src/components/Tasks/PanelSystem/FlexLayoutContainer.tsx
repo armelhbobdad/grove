@@ -228,7 +228,7 @@ export const FlexLayoutContainer = forwardRef<
       chat: 'Chat',
       review: 'Code Review',
       editor: 'Editor',
-      stats: 'Stats',
+      stats: 'Info',
       git: 'Git',
       notes: 'Notes',
       comments: 'Comments',
@@ -685,7 +685,7 @@ export const FlexLayoutContainer = forwardRef<
     }
     items.push(
       { id: 'editor', label: 'Editor', icon: FileCode, onClick: () => addPanel('editor'), shortcut: 'e', separator: true },
-      { id: 'stats', label: 'Stats', icon: BarChart3, onClick: () => addPanel('stats') },
+      { id: 'stats', label: 'Info', icon: BarChart3, onClick: () => addPanel('stats') },
     );
     if (!isStudio) {
       items.push({ id: 'git', label: 'Git', icon: GitBranch, onClick: () => addPanel('git') });

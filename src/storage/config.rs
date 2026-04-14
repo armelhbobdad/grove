@@ -220,6 +220,11 @@ pub struct WebConfig {
     /// CLI 不使用此字段，始终走 multiplexer
     #[serde(default)]
     pub terminal_mode: Option<String>,
+    /// Workspace 布局模式: "flex" (default) | "ide"
+    ///   - "flex": 自由拖拽的 FlexLayout 面板
+    ///   - "ide": 固定三栏 IDE 布局 (Chat-centric)
+    #[serde(default)]
+    pub workspace_layout: Option<String>,
 }
 
 /// 自定义布局配置

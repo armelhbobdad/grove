@@ -61,15 +61,14 @@ interface TabConfig {
 }
 
 const REPO_TABS: TabConfig[] = [
-  { id: "stats", label: "Stats", icon: BarChart3 },
-  { id: "artifacts", label: "Artifacts", icon: Package },
+  { id: "stats", label: "Info", icon: BarChart3 },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "notes", label: "Notes", icon: FileText },
   { id: "comments", label: "Comments", icon: MessageSquare },
 ];
 
 const STUDIO_TABS: TabConfig[] = [
-  { id: "stats", label: "Stats", icon: BarChart3 },
+  { id: "stats", label: "Info", icon: BarChart3 },
   { id: "artifacts", label: "Artifacts", icon: Package },
   { id: "notes", label: "Notes", icon: FileText },
 ];
@@ -105,7 +104,8 @@ export function TaskInfoPanel({
   const [expanded, setExpanded] = useState(false);
 
   // Support controlled/uncontrolled tab mode
-  const activeTab: TabType = controlledTab ?? internalTab;
+  const requestedTab: TabType = controlledTab ?? internalTab;
+  const activeTab: TabType = TABS.some((tab) => tab.id === requestedTab) ? requestedTab : "stats";
   const handleTabChange = (tab: TabType) => {
     setInternalTab(tab);
     onTabChange?.(tab);
@@ -466,23 +466,6 @@ export function TaskInfoPanel({
             </>
           )}
         </div>
-      </div>
-
-      {/* Task Name */}
-      <div className="px-3 py-2 border-b border-[var(--color-border)] select-none">
-        <div className="flex items-center gap-1.5">
-          <h2 className="text-sm font-semibold text-[var(--color-text)] truncate">
-            {task.name}
-          </h2>
-          {projectName && (
-            <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-muted)] bg-[var(--color-bg-tertiary)] rounded">{projectName}</span>
-          )}
-        </div>
-        {task.branch && (
-          <p className="text-xs text-[var(--color-text-muted)] font-mono truncate">
-            {task.isLocal ? task.branch : <>{task.branch} → {task.target}</>}
-          </p>
-        )}
       </div>
 
       {/* Tab Navigation */}
