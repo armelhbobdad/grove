@@ -240,7 +240,7 @@ brew tap GarrickZ2/grove && brew install grove
 curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | sh
 
 # Linux desktop GUI build
-GROVE_GUI=1 curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | GROVE_GUI=1 sh
 
 # Custom install path (default: /usr/local/bin)
 INSTALL_DIR=~/.local/bin curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | sh
