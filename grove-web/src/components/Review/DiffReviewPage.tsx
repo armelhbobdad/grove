@@ -124,6 +124,7 @@ export function DiffReviewPage({ projectId, taskId, embedded, navigateToFile, is
   const [focusFiles, setFocusFiles] = useState<DiffFile[]>([]);
   const fileDiffCacheRef = useRef<Map<string, DiffFile | 'unsupported' | 'error'>>(new Map());
   const loadingDiffsRef = useRef<Set<string>>(new Set());
+  const [, setCacheVersion] = useState(0);
   const failedFullFilesRef = useRef<Set<string>>(new Set());
   const [displayMode, setDisplayMode] = useState<'code' | 'split' | 'preview'>('code');
   const [fromVersion, setFromVersion] = useState('target');

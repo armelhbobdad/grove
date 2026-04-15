@@ -9,14 +9,27 @@ homepage = "https://github.com/GarrickZ2/grove"
 keywords = ["git", "worktree", "tmux", "tui", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
-exclude = [
-    "docs/images/",
-    "docs/index.html",
-    "grove-web/",
-    "src-tauri/",
-    ".github/",
-    ".githooks/",
-    "CLAUDE.md",
+include = [
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/build.rs",
+    "/install.sh",
+    "/package-lock.json",
+    "/package.json",
+    "/tauri.conf.json",
+    "/docs/apple-touch-icon.png",
+    "/docs/favicon.png",
+    "/docs/favicon.svg",
+    "/docs/logo.png",
+    "/gen/**",
+    "/grove-web/dist/**",
+    "!/grove-web/dist/.DS_Store",
+    "/scripts/**",
+    "/src/**",
+    "/src-tauri/**",
 ]
 
 [[bin]]
