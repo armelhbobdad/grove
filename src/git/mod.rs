@@ -795,13 +795,13 @@ pub fn diff_stat(worktree_path: &str, target: &str) -> Result<Vec<DiffStatEntry>
     let mut entries: Vec<DiffStatEntry> = numstat
         .lines()
         .filter(|l| !l.is_empty())
-        .filter_map(|line| {
+        .map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 3 {
                 let path = git_unquote(parts[2]);
                 let is_binary = parts[0].trim() == "-";
                 let status = status_map.get(&path).copied().unwrap_or('M');
-                Some(DiffStatEntry {
+                DiffStatEntry {
                     status,
                     path,
                     additions: if is_binary {
@@ -815,15 +815,15 @@ pub fn diff_stat(worktree_path: &str, target: &str) -> Result<Vec<DiffStatEntry>
                         parts[1].parse().unwrap_or(0)
                     },
                     is_binary,
-                })
+                }
             } else {
-                Some(DiffStatEntry {
+                DiffStatEntry {
                     status: '?',
                     path: line.to_string(),
                     additions: 0,
                     deletions: 0,
                     is_binary: false,
-                })
+                }
             }
         })
         .collect();
