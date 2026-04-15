@@ -36,9 +36,7 @@ fn ensure_frontend_dist() {
     println!("cargo:warning=Building frontend (this may take a moment)...");
 
     let node_modules = grove_web_dir.join("node_modules");
-    if !node_modules.exists()
-        && !run_npm(grove_web_dir, "ci")
-        && !run_npm(grove_web_dir, "install")
+    if !node_modules.exists() && !run_npm(grove_web_dir, "ci") && !run_npm(grove_web_dir, "install")
     {
         panic!("failed to install frontend dependencies");
     }
