@@ -43,9 +43,11 @@ interface TasksPageProps {
   onNavByIndex?: (indexOrDelta: number, relative?: boolean) => void;
   /** When true, opens the New Task dialog on mount */
   initialOpenNewTask?: boolean;
+  /** Increment to signal TasksPage to exit the current workspace (e.g. when Tasks tab is re-clicked) */
+  exitWorkspaceSignal?: number;
 }
 
-export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed, onNavByIndex, initialOpenNewTask }: TasksPageProps) {
+export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed, onNavByIndex, initialOpenNewTask, exitWorkspaceSignal }: TasksPageProps) {
   const { selectedProject, refreshSelectedProject } = useProject();
   const isStudio = selectedProject?.projectType === "studio";
 
@@ -156,6 +158,12 @@ export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed
     // Consume the navigation data so it doesn't re-trigger
     onNavigationConsumed?.();
   }, [initialTaskId, initialViewMode, activeTasks, pageState.selectedTask?.id, onNavigationConsumed, pageHandlers]);
+
+  // Exit workspace when Tasks tab is re-clicked (signal from App.tsx)
+  useEffect(() => {
+    if (!exitWorkspaceSignal) return;
+    if (pageState.inWorkspace) pageHandlers.handleCloseTask();
+  }, [exitWorkspaceSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync selectedTask with latest project data after refresh
   useEffect(() => {
