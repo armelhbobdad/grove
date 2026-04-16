@@ -15,3 +15,5 @@ export { FilePreviewDrawer, getExtBadge, downloadViaIframe, getPreviewType, canP
 export { ImageLightbox } from "./ImageLightbox";
 export { formatSize, formatTime } from "./FileListUtils";
 export { getPreviewRenderer } from "../Review/previewRenderers";
+export { FileConflictDialog } from "./FileConflictDialog";
+export type { FileConflictState } from "./FileConflictDialog";

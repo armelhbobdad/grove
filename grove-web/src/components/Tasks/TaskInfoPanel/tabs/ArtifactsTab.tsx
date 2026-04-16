@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Download, Trash2, Eye,
-  Loader2, Upload, MoreHorizontal, FolderOpen, RefreshCw,
+  Loader2, Upload, MoreHorizontal, FolderOpen, RefreshCw, ArrowUpFromLine,
 } from "lucide-react";
 import type { Task } from "../../../../data/types";
 import {
   listArtifacts, previewArtifact, artifactDownloadUrl, deleteArtifact,
-  uploadArtifacts, listArtifactWorkdirs, addArtifactWorkdir, deleteArtifactWorkdir, openArtifactWorkdir,
+  uploadArtifacts, syncArtifactToResource, listArtifactWorkdirs, addArtifactWorkdir, deleteArtifactWorkdir, openArtifactWorkdir,
+  listResources,
   type ArtifactFile, type ArtifactWorkDirectoryEntry,
 } from "../../../../api";
 import {
@@ -19,6 +21,7 @@ import {
   downloadViaIframe,
   formatSize,
   formatTime,
+  FileConflictDialog,
 } from "../../../ui";
 
 interface ArtifactsTabProps {
@@ -54,6 +57,11 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [syncConflict, setSyncConflict] = useState<{
+    file: ArtifactFile;
+    newName: string;
+    existingNames: Set<string>;
+  } | null>(null);
 
   const [previewFile, setPreviewFile] = useState<{ file: ArtifactFile; content: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -340,6 +348,34 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
     }
   };
 
+  const handleSyncToResource = useCallback(async (
+    file: ArtifactFile,
+    options?: { force?: boolean; renameTo?: string },
+    cachedExistingNames?: Set<string>,
+  ) => {
+    if (!projectId) return;
+    try {
+      await syncArtifactToResource(projectId, task.id, file.directory, file.path, options);
+      setToastMessage(`Synced "${options?.renameTo ?? file.name}" to Shared Assets`);
+    } catch (err) {
+      const apiErr = err as { status?: number; data?: unknown };
+      if (apiErr.status === 409) {
+        // Fetch resource root filenames once and cache them for the dialog
+        const existingNames = cachedExistingNames ?? await (async () => {
+          try {
+            const data = await listResources(projectId);
+            return new Set(data.files.map(f => f.name));
+          } catch {
+            return new Set<string>();
+          }
+        })();
+        setSyncConflict({ file, newName: options?.renameTo ?? file.name, existingNames });
+        return;
+      }
+      setError(err instanceof Error ? err.message : "Sync failed");
+    }
+  }, [projectId, task.id]);
+
   const handleOpenFolder = (dir: string) => {
     if (!projectId) return;
     fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/open-folder?dir=${encodeURIComponent(dir)}&path=.`, { method: "POST" }).catch(() => {});
@@ -495,7 +531,8 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
               <>
                 {inputFiles.filter(f => !f.is_dir).map((file) => (
                   <FileCard key={file.path} file={file} projectId={projectId} taskId={task.id}
-                    onPreview={handlePreview} onDownload={handleDownload} onDelete={handleDelete} allowDelete />
+                    onPreview={handlePreview} onDownload={handleDownload} onDelete={handleDelete} allowDelete
+                    onSyncToResource={handleSyncToResource} />
                 ))}
                 {inputFileCount === 0 && (
                   <button onClick={() => fileInputRef.current?.click()}
@@ -624,7 +661,8 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
                 />
               ) : (
                 <FileCard key={entry.path} file={entry} projectId={projectId} taskId={task.id}
-                  onPreview={handlePreview} onDownload={handleDownload} />
+                  onPreview={handlePreview} onDownload={handleDownload}
+                  onSyncToResource={handleSyncToResource} />
               )
             ))}
             {outputFileCount === 0 && (
@@ -654,6 +692,27 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
           to { transform: translateX(0); }
         }
       `}</style>
+
+      {syncConflict && (
+        <FileConflictDialog
+          fileName={syncConflict.file.name}
+          newName={syncConflict.newName}
+          existingNames={syncConflict.existingNames}
+          onNewNameChange={(v) => setSyncConflict({ ...syncConflict, newName: v })}
+          onCancel={() => setSyncConflict(null)}
+          onOverwrite={() => {
+            const { file, existingNames } = syncConflict;
+            setSyncConflict(null);
+            void handleSyncToResource(file, { force: true }, existingNames);
+          }}
+          onRename={() => {
+            const { file, newName, existingNames } = syncConflict;
+            if (!newName.trim()) return;
+            setSyncConflict(null);
+            void handleSyncToResource(file, { renameTo: newName.trim() }, existingNames);
+          }}
+        />
+      )}
 
       <AnimatePresence>
         {toastMessage && (
@@ -872,11 +931,12 @@ function FolderEntryRow({
 /* ─── FileCard ─── */
 
 function FileCard({
-  file, projectId, taskId, onPreview, onDownload, onDelete, allowDelete,
+  file, projectId, taskId, onPreview, onDownload, onDelete, allowDelete, onSyncToResource,
 }: {
   file: ArtifactFile; projectId?: string; taskId: string;
   onPreview: (f: ArtifactFile) => void; onDownload: (f: ArtifactFile) => void;
   onDelete?: (f: ArtifactFile) => void; allowDelete?: boolean;
+  onSyncToResource?: (f: ArtifactFile) => void;
 }) {
   const canPreview = canPreviewFile(file.name);
   const ext = getExtBadge(file.name);
@@ -951,8 +1011,8 @@ function FileCard({
         onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--color-text-muted)"; }}>
         <MoreHorizontal className="w-4 h-4" />
       </button>
-      {showMenu && menuPos && (
-        <div ref={menuRef} className="fixed z-50 min-w-[140px] rounded-lg shadow-lg py-1"
+      {showMenu && menuPos && createPortal(
+        <div ref={menuRef} className="fixed z-[9999] min-w-[140px] rounded-lg shadow-lg py-1"
           style={{ top: menuPos.top, left: menuPos.left, background: "var(--color-bg)", border: "1px solid var(--color-border)" }}>
           {canPreview && (
             <button onClick={(e) => { e.stopPropagation(); setShowMenu(false); onPreview(file); }}
@@ -968,6 +1028,14 @@ function FileCard({
             onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
             <Download className="w-3.5 h-3.5" /> Download
           </button>
+          {onSyncToResource && (
+            <button onClick={(e) => { e.stopPropagation(); setShowMenu(false); onSyncToResource(file); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+              onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-secondary)"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <ArrowUpFromLine className="w-3.5 h-3.5" /> Sync to Shared Assets
+            </button>
+          )}
           {allowDelete && onDelete && (
             <>
               <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
@@ -980,8 +1048,10 @@ function FileCard({
               </button>
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
 }
+

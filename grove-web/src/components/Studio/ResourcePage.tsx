@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Trash2, Upload, Loader2, MoreHorizontal, Download, Eye,
   FolderOpen, Save, FileText, RefreshCw, Sparkles,
   Search, ArrowRight, Files, ShieldCheck, Clock3, Plus, X, Brain,
+  FolderPlus, ChevronRight, Pencil, Check, CornerLeftUp,
 } from "lucide-react";
 import { useProject } from "../../context";
 import {
   listResources, uploadResource, deleteResource,
   previewResource, resourceDownloadUrl,
+  createResourceFolder, moveResource,
   getInstructions, updateInstructions,
   getMemory, updateMemory,
   listResourceWorkdirs, addResourceWorkdir, deleteResourceWorkdir, openResourceWorkdir,
@@ -23,7 +26,11 @@ import {
   downloadViaIframe,
   formatSize,
   formatTime,
+  FileConflictDialog,
+  type FileConflictState,
 } from "../ui";
+
+const DRAG_TYPE = "application/x-grove-resource-path";
 
 function countInstructionLines(text: string): number {
   if (!text.trim()) return 0;
@@ -85,6 +92,16 @@ export function ResourcePage() {
   const [workdirError, setWorkdirError] = useState<string | null>(null);
   const [isAddingWorkdir, setIsAddingWorkdir] = useState(false);
 
+  // File manager state
+  const [currentPath, setCurrentPath] = useState("");
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [moveConflict, setMoveConflict] = useState<FileConflictState | null>(null);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const newFolderInputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
   const [instructions, setInstructions] = useState("");
   const [savedInstructions, setSavedInstructions] = useState("");
   const [isLoadingInstructions, setIsLoadingInstructions] = useState(true);
@@ -106,11 +123,16 @@ export function ResourcePage() {
   const hasUnsavedMemory = memory !== savedMemory;
   const memoryLineCount = countInstructionLines(memory);
 
-  const filteredFiles = files.filter((file) =>
-    file.name.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
-  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-  const latestUpdate = files.reduce<string | null>((latest, file) => {
+  const fileOnlyList = files.filter(f => !f.is_dir);
+  const filteredFiles = files
+    .filter((file) => file.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  const totalBytes = fileOnlyList.reduce((sum, file) => sum + file.size, 0);
+  const latestUpdate = fileOnlyList.reduce<string | null>((latest, file) => {
     if (!latest) return file.modified_at;
     return new Date(file.modified_at) > new Date(latest) ? file.modified_at : latest;
   }, null);
@@ -120,14 +142,14 @@ export function ResourcePage() {
     setIsLoadingFiles(true);
     setFileError(null);
     try {
-      const data = await listResources(projectId);
-      setFiles(data.files.filter(f => !f.is_dir));
+      const data = await listResources(projectId, currentPath || undefined);
+      setFiles(data.files);
     } catch (err) {
       setFileError(err instanceof Error ? err.message : "Failed to load");
     } finally {
       setIsLoadingFiles(false);
     }
-  }, [projectId]);
+  }, [projectId, currentPath]);
 
   const loadWorkdirs = useCallback(async () => {
     if (!projectId) return;
@@ -189,19 +211,96 @@ export function ResourcePage() {
     }
   }, [projectId, memory]);
 
-  useEffect(() => { loadFiles(); loadWorkdirs(); loadInstructions(); loadMemory(); }, [loadFiles, loadWorkdirs, loadInstructions, loadMemory]);
+  useEffect(() => { loadFiles(); }, [loadFiles]);
+  useEffect(() => { loadWorkdirs(); loadInstructions(); loadMemory(); }, [loadWorkdirs, loadInstructions, loadMemory]);
+
+  // Focus new folder input when it appears
+  useEffect(() => {
+    if (isCreatingFolder) setTimeout(() => newFolderInputRef.current?.focus(), 0);
+  }, [isCreatingFolder]);
+
+  // Focus rename input when it appears
+  useEffect(() => {
+    if (renamingPath) setTimeout(() => { renameInputRef.current?.focus(); renameInputRef.current?.select(); }, 0);
+  }, [renamingPath]);
 
   const handleUpload = useCallback(async (fileList: FileList | File[]) => {
     if (!projectId || fileList.length === 0) return;
     setIsUploading(true);
     setFileError(null);
     try {
-      await uploadResource(projectId, Array.from(fileList));
+      await uploadResource(projectId, Array.from(fileList), currentPath || undefined);
       await loadFiles();
     } catch (err) {
       setFileError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setIsUploading(false);
+    }
+  }, [projectId, currentPath, loadFiles]);
+
+  const handleCreateFolder = useCallback(async () => {
+    if (!projectId || !newFolderName.trim()) return;
+    try {
+      const folderPath = currentPath
+        ? `${currentPath}/${newFolderName.trim()}`
+        : newFolderName.trim();
+      await createResourceFolder(projectId, folderPath);
+      setNewFolderName("");
+      setIsCreatingFolder(false);
+      await loadFiles();
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : "Failed to create folder");
+    }
+  }, [projectId, currentPath, newFolderName, loadFiles]);
+
+  const handleMoveFile = useCallback(async (
+    fromPath: string,
+    toFolderPath: string,
+    options?: { force?: boolean; renameTo?: string },
+    cachedExistingNames?: Set<string>,
+  ) => {
+    if (!projectId) return;
+    const filename = fromPath.split("/").pop()!;
+    const toPath = toFolderPath ? `${toFolderPath}/${filename}` : filename;
+    try {
+      await moveResource(projectId, fromPath, toPath, options);
+      await loadFiles();
+    } catch (err) {
+      const apiErr = err as { status?: number };
+      if (apiErr.status === 409) {
+        // Fetch destination folder contents to know which names are taken
+        const existingNames = cachedExistingNames ?? await (async () => {
+          try {
+            const data = await listResources(projectId, toFolderPath || undefined);
+            return new Set(data.files.map(f => f.name));
+          } catch {
+            return new Set<string>();
+          }
+        })();
+        setMoveConflict({
+          fromPath,
+          toFolderPath,
+          newName: options?.renameTo ?? filename,
+          existingNames,
+        });
+        return;
+      }
+      setFileError(err instanceof Error ? err.message : "Failed to move");
+    }
+  }, [projectId, loadFiles]);
+
+  const handleRenameFile = useCallback(async (oldPath: string, newName: string) => {
+    if (!projectId || !newName.trim()) { setRenamingPath(null); return; }
+    const parts = oldPath.split("/");
+    parts[parts.length - 1] = newName.trim();
+    const newPath = parts.join("/");
+    if (newPath === oldPath) { setRenamingPath(null); return; }
+    try {
+      await moveResource(projectId, oldPath, newPath);
+      setRenamingPath(null);
+      await loadFiles();
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : "Failed to rename");
     }
   }, [projectId, loadFiles]);
 
@@ -288,6 +387,8 @@ export function ResourcePage() {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
+    // Ignore internal drag-drop (file row → folder)
+    if (e.dataTransfer.types.includes(DRAG_TYPE)) return;
     if (activeTab === "workdir") {
       setWorkdirError("Drag-and-drop folders are not supported for Work Directory yet. Use Add Folder.");
       return;
@@ -328,6 +429,14 @@ export function ResourcePage() {
     downloadViaIframe(resourceDownloadUrl(projectId, file.path));
   };
 
+  const navigateTo = (path: string) => {
+    setCurrentPath(path);
+    setSearchQuery("");
+    setIsCreatingFolder(false);
+    setNewFolderName("");
+    setRenamingPath(null);
+  };
+
   if (!selectedProject || selectedProject.projectType !== "studio") {
     return (
       <div className="flex items-center justify-center h-full">
@@ -335,6 +444,8 @@ export function ResourcePage() {
       </div>
     );
   }
+
+  const breadcrumbSegments = currentPath.split("/").filter(Boolean);
 
   return (
     <motion.div
@@ -344,7 +455,13 @@ export function ResourcePage() {
       className="h-full flex flex-col gap-4 p-4 overflow-y-auto select-none"
       style={{ color: "var(--color-text)" }}
       onDrop={handleDrop}
-      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+      onDragOver={(e) => {
+        // Only show overlay for OS file drops, not internal drags
+        if (!e.dataTransfer.types.includes(DRAG_TYPE)) {
+          e.preventDefault();
+          setIsDragOver(true);
+        }
+      }}
       onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false); }}
     >
       {/* Hidden file input */}
@@ -364,6 +481,27 @@ export function ResourcePage() {
             </p>
           </div>
         </div>
+      )}
+
+      {moveConflict && (
+        <FileConflictDialog
+          fileName={moveConflict.fromPath.split("/").pop()!}
+          newName={moveConflict.newName}
+          existingNames={moveConflict.existingNames}
+          onNewNameChange={(v) => setMoveConflict({ ...moveConflict, newName: v })}
+          onCancel={() => setMoveConflict(null)}
+          onOverwrite={() => {
+            const { fromPath, toFolderPath, existingNames } = moveConflict;
+            setMoveConflict(null);
+            void handleMoveFile(fromPath, toFolderPath, { force: true }, existingNames);
+          }}
+          onRename={() => {
+            const { fromPath, toFolderPath, newName, existingNames } = moveConflict;
+            if (!newName.trim()) return;
+            setMoveConflict(null);
+            void handleMoveFile(fromPath, toFolderPath, { renameTo: newName.trim() }, existingNames);
+          }}
+        />
       )}
 
       <AnimatePresence>
@@ -416,8 +554,8 @@ export function ResourcePage() {
               <HeroStat
                 icon={Files}
                 label="Uploads"
-                value={String(files.length)}
-                subtext={files.length > 0 ? formatSize(totalBytes) : "No files yet"}
+                value={String(fileOnlyList.length)}
+                subtext={fileOnlyList.length > 0 ? formatSize(totalBytes) : "No files yet"}
               />
               <HeroStat
                 icon={Clock3}
@@ -455,7 +593,7 @@ export function ResourcePage() {
                         color: "var(--color-text-muted)",
                         background: "var(--color-bg)",
                       }}>
-                      {activeTab === "uploads" ? files.length : workdirs.length}
+                      {activeTab === "uploads" ? filteredFiles.length : workdirs.length}
                     </span>
                   </div>
                   <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
@@ -472,7 +610,7 @@ export function ResourcePage() {
                   {(["uploads", "workdir"] as const).map((tab) => (
                     <button
                       key={tab}
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => { setActiveTab(tab); if (tab === "uploads") navigateTo(""); }}
                       className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                         activeTab === tab ? "text-white" : ""
                       }`}
@@ -492,6 +630,17 @@ export function ResourcePage() {
                   title="Refresh">
                   <RefreshCw className="w-4 h-4" />
                 </button>
+                {activeTab === "uploads" && (
+                  <button
+                    onClick={() => { setIsCreatingFolder(true); setNewFolderName(""); }}
+                    className="p-2 rounded-lg transition-colors"
+                    style={{ color: "var(--color-text-muted)" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "var(--color-bg-tertiary)"; e.currentTarget.style.color = "var(--color-text)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--color-text-muted)"; }}
+                    title="New folder">
+                    <FolderPlus className="w-4 h-4" />
+                  </button>
+                )}
                 <button
                   onClick={() => activeTab === "uploads" ? fileInputRef.current?.click() : handleAddWorkdir()}
                   disabled={activeTab === "uploads" ? isUploading : isAddingWorkdir}
@@ -506,6 +655,16 @@ export function ResourcePage() {
                 </button>
               </div>
             </div>
+
+            {/* Breadcrumb (uploads tab) — also acts as drop targets to move files up */}
+            {activeTab === "uploads" && (
+              <BreadcrumbNav
+                currentPath={currentPath}
+                breadcrumbSegments={breadcrumbSegments}
+                onNavigate={navigateTo}
+                onDropToPath={handleMoveFile}
+              />
+            )}
 
             {activeTab === "uploads" ? (
               <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
@@ -564,7 +723,7 @@ export function ResourcePage() {
                 <p className="text-sm" style={{ color: "var(--color-error)" }}>{workdirError}</p>
                 <button onClick={loadWorkdirs} className="text-sm hover:underline" style={{ color: "var(--color-highlight)" }}>Retry</button>
               </div>
-            ) : activeTab === "uploads" && files.length === 0 ? (
+            ) : activeTab === "uploads" && files.length === 0 && !isCreatingFolder ? (
               <button onClick={() => fileInputRef.current?.click()}
                 className="w-full h-full min-h-[200px] rounded-2xl cursor-pointer transition-all flex flex-col items-center justify-center gap-3 px-6 text-center"
                 style={{
@@ -611,11 +770,11 @@ export function ResourcePage() {
                   Add Folder <ArrowRight className="w-4 h-4" />
                 </div>
               </button>
-            ) : activeTab === "uploads" && filteredFiles.length === 0 ? (
+            ) : activeTab === "uploads" && filteredFiles.length === 0 && !isCreatingFolder && searchQuery ? (
               <div className="flex flex-col items-center justify-center gap-3 rounded-[22px] border py-14 text-center"
                 style={{ borderColor: "var(--color-border)", background: "color-mix(in srgb, var(--color-bg) 40%, transparent)" }}>
                 <Search className="w-5 h-5" style={{ color: "var(--color-text-muted)" }} />
-                <p className="text-sm font-medium">No files match “{searchQuery}”</p>
+                <p className="text-sm font-medium">No files match "{searchQuery}"</p>
                 <button
                   onClick={() => setSearchQuery("")}
                   className="text-sm hover:underline"
@@ -628,14 +787,87 @@ export function ResourcePage() {
               <div className="h-full overflow-y-auto pr-1 [scrollbar-width:none] hover:[scrollbar-width:thin] [&::-webkit-scrollbar]:w-0 hover:[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[var(--color-border)]">
                 {activeTab === "uploads" ? (
                   <div className="space-y-2">
+                    {/* New folder inline input */}
+                    {isCreatingFolder && (
+                      <div className="flex items-center gap-2 rounded-2xl border px-3 py-2.5"
+                        style={{ borderColor: "var(--color-highlight)", background: "color-mix(in srgb, var(--color-highlight) 6%, var(--color-bg))" }}>
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                          style={{ background: "color-mix(in srgb, var(--color-highlight) 14%, transparent)" }}>
+                          <FolderOpen className="w-4 h-4" style={{ color: "var(--color-highlight)" }} />
+                        </div>
+                        <input
+                          ref={newFolderInputRef}
+                          value={newFolderName}
+                          onChange={e => setNewFolderName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") handleCreateFolder();
+                            if (e.key === "Escape") { setIsCreatingFolder(false); setNewFolderName(""); }
+                          }}
+                          placeholder="Folder name"
+                          className="flex-1 bg-transparent text-sm outline-none font-medium"
+                          style={{ color: "var(--color-text)" }}
+                        />
+                        <button onClick={handleCreateFolder}
+                          className="p-1.5 rounded-md transition-colors"
+                          style={{ color: "var(--color-highlight)" }}
+                          onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-tertiary)"}
+                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => { setIsCreatingFolder(false); setNewFolderName(""); }}
+                          className="p-1.5 rounded-md transition-colors"
+                          style={{ color: "var(--color-text-muted)" }}
+                          onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-tertiary)"}
+                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                     {filteredFiles.map(file => (
-                      <ResourceFileRow
-                        key={file.path}
-                        file={file}
-                        onPreview={handlePreview}
-                        onDownload={handleDownload}
-                        onDelete={handleDelete}
-                      />
+                      file.is_dir ? (
+                        <ResourceFolderRow
+                          key={file.path}
+                          file={file}
+                          isRenaming={renamingPath === file.path}
+                          renameValue={renameValue}
+                          renameInputRef={renamingPath === file.path ? renameInputRef : undefined}
+                          onEnter={() => navigateTo(file.path)}
+                          onStartRename={() => { setRenamingPath(file.path); setRenameValue(file.name); }}
+                          onRenameChange={setRenameValue}
+                          onRenameConfirm={() => handleRenameFile(file.path, renameValue)}
+                          onRenameCancel={() => setRenamingPath(null)}
+                          onDelete={() => handleDelete(file)}
+                          onDragStart={(e) => { e.dataTransfer.setData(DRAG_TYPE, file.path); e.dataTransfer.effectAllowed = "move"; }}
+                          onMoveToParent={currentPath ? () => handleMoveFile(file.path, currentPath.split("/").slice(0, -1).join("/")) : undefined}
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const fromPath = e.dataTransfer.getData(DRAG_TYPE);
+                            // prevent drop onto self or own descendant
+                            if (fromPath && fromPath !== file.path && !fromPath.startsWith(file.path + "/")) {
+                              handleMoveFile(fromPath, file.path);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <ResourceFileRow
+                          key={file.path}
+                          file={file}
+                          isRenaming={renamingPath === file.path}
+                          renameValue={renameValue}
+                          renameInputRef={renamingPath === file.path ? renameInputRef : undefined}
+                          onPreview={handlePreview}
+                          onDownload={handleDownload}
+                          onDelete={handleDelete}
+                          onStartRename={() => { setRenamingPath(file.path); setRenameValue(file.name); }}
+                          onRenameChange={setRenameValue}
+                          onRenameConfirm={() => handleRenameFile(file.path, renameValue)}
+                          onRenameCancel={() => setRenamingPath(null)}
+                          onDragStart={(e) => { e.dataTransfer.setData(DRAG_TYPE, file.path); e.dataTransfer.effectAllowed = "move"; }}
+                          onMoveToParent={currentPath ? () => handleMoveFile(file.path, currentPath.split("/").slice(0, -1).join("/")) : undefined}
+                        />
+                      )
                     ))}
                   </div>
                 ) : (
@@ -890,6 +1122,79 @@ export function ResourcePage() {
   );
 }
 
+/* ─── Breadcrumb Nav (with drop targets) ─── */
+
+function BreadcrumbNav({
+  currentPath,
+  breadcrumbSegments,
+  onNavigate,
+  onDropToPath,
+}: {
+  currentPath: string;
+  breadcrumbSegments: string[];
+  onNavigate: (path: string) => void;
+  onDropToPath: (fromPath: string, toFolderPath: string) => void;
+}) {
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  const makeDragProps = (targetPath: string) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes(DRAG_TYPE)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropTarget(targetPath);
+      }
+    },
+    onDragLeave: () => setDropTarget(null),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDropTarget(null);
+      const fromPath = e.dataTransfer.getData(DRAG_TYPE);
+      if (fromPath) onDropToPath(fromPath, targetPath);
+    },
+  });
+
+  const isDropActive = (path: string) => dropTarget === path;
+
+  return (
+    <div className="flex items-center gap-1 text-[12px] flex-wrap" style={{ color: "var(--color-text-muted)" }}>
+      <button
+        type="button"
+        onClick={() => onNavigate("")}
+        className="px-1.5 py-0.5 rounded transition-colors"
+        style={{
+          ...(currentPath === "" ? { color: "var(--color-text)", fontWeight: 500 } : {}),
+          ...(isDropActive("") ? { background: "color-mix(in srgb, var(--color-highlight) 18%, transparent)", color: "var(--color-highlight)", outline: "1px dashed var(--color-highlight)" } : {}),
+        }}
+        {...makeDragProps("")}
+      >
+        resource
+      </button>
+      {breadcrumbSegments.map((segment, index) => {
+        const segPath = breadcrumbSegments.slice(0, index + 1).join("/");
+        return (
+          <div key={segPath} className="flex items-center gap-1">
+            <ChevronRight className="w-3 h-3 shrink-0" style={{ opacity: 0.5 }} />
+            <button
+              type="button"
+              onClick={() => onNavigate(segPath)}
+              className="px-1.5 py-0.5 rounded transition-colors"
+              style={{
+                ...(index === breadcrumbSegments.length - 1 ? { color: "var(--color-text)", fontWeight: 500 } : {}),
+                ...(isDropActive(segPath) ? { background: "color-mix(in srgb, var(--color-highlight) 18%, transparent)", color: "var(--color-highlight)", outline: "1px dashed var(--color-highlight)" } : {}),
+              }}
+              {...makeDragProps(segPath)}
+            >
+              {segment}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function HeroStat({
   icon: Icon,
   label,
@@ -921,15 +1226,193 @@ function HeroStat({
   );
 }
 
+/* ─── Resource Folder Row ─── */
+
+function ResourceFolderRow({
+  file, isRenaming, renameValue, renameInputRef,
+  onEnter, onStartRename, onRenameChange, onRenameConfirm, onRenameCancel,
+  onDelete, onDragStart, onMoveToParent, onDragOver, onDrop,
+}: {
+  file: ResourceFile;
+  isRenaming: boolean;
+  renameValue: string;
+  renameInputRef?: React.RefObject<HTMLInputElement | null>;
+  onEnter: () => void;
+  onStartRename: () => void;
+  onRenameChange: (v: string) => void;
+  onRenameConfirm: () => void;
+  onRenameCancel: () => void;
+  onDelete: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onMoveToParent?: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void;
+}) {
+  const [isDragTarget, setIsDragTarget] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowMenu(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showMenu]);
+
+  return (
+    <div
+      className="group flex items-center gap-3 rounded-2xl border px-3 py-3 transition-all cursor-grab"
+      draggable={!isRenaming}
+      style={{
+        borderColor: isDragTarget
+          ? "var(--color-highlight)"
+          : "color-mix(in srgb, var(--color-border) 75%, transparent)",
+        background: isDragTarget
+          ? "color-mix(in srgb, var(--color-highlight) 8%, var(--color-bg))"
+          : "color-mix(in srgb, var(--color-bg) 44%, transparent)",
+      }}
+      onClick={() => { if (!isRenaming) onEnter(); }}
+      onDragStart={onDragStart}
+      onMouseEnter={e => {
+        if (!isDragTarget) {
+          e.currentTarget.style.background = "var(--color-bg-tertiary)";
+          e.currentTarget.style.borderColor = "color-mix(in srgb, var(--color-highlight) 26%, var(--color-border))";
+        }
+      }}
+      onMouseLeave={e => {
+        if (!isDragTarget) {
+          e.currentTarget.style.background = "color-mix(in srgb, var(--color-bg) 44%, transparent)";
+          e.currentTarget.style.borderColor = "color-mix(in srgb, var(--color-border) 75%, transparent)";
+        }
+      }}
+      onDragOver={(e) => { onDragOver(e); setIsDragTarget(true); }}
+      onDragLeave={() => setIsDragTarget(false)}
+      onDrop={(e) => { onDrop(e); setIsDragTarget(false); }}
+    >
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+        style={{ background: "var(--color-bg)" }}>
+        <FolderOpen className="w-4 h-4" style={{ color: "var(--color-highlight)" }} />
+      </div>
+      <div className="flex-1 min-w-0" onClick={e => { if (isRenaming) e.stopPropagation(); }}>
+        {isRenaming ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              ref={renameInputRef as React.RefObject<HTMLInputElement>}
+              value={renameValue}
+              onChange={e => onRenameChange(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") { e.stopPropagation(); onRenameConfirm(); }
+                if (e.key === "Escape") { e.stopPropagation(); onRenameCancel(); }
+              }}
+              className="flex-1 bg-transparent text-[13px] font-medium outline-none border-b"
+              style={{ borderColor: "var(--color-highlight)", color: "var(--color-text)" }}
+              onClick={e => e.stopPropagation()}
+            />
+            <button onClick={(e) => { e.stopPropagation(); onRenameConfirm(); }}
+              className="p-1 rounded shrink-0" style={{ color: "var(--color-highlight)" }}>
+              <Check className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onRenameCancel(); }}
+              className="p-1 rounded shrink-0" style={{ color: "var(--color-text-muted)" }}>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-medium truncate block">{file.name}</span>
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Folder</span>
+              <span className="text-[11px] opacity-50" style={{ color: "var(--color-text-muted)" }}>· Drop files here to move</span>
+            </div>
+          </>
+        )}
+      </div>
+      {!isRenaming && (
+        <button ref={btnRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (btnRef.current) {
+              const rect = btnRef.current.getBoundingClientRect();
+              setMenuPos({ top: rect.bottom + 4, left: rect.right - 140 });
+            }
+            setShowMenu(!showMenu);
+          }}
+          className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-all shrink-0"
+          style={{ color: "var(--color-text-muted)" }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+      )}
+      {showMenu && menuPos && createPortal(
+        <div ref={menuRef} className="fixed z-[9999] min-w-[140px] rounded-lg shadow-lg py-1"
+          style={{ top: menuPos.top, left: menuPos.left, background: "var(--color-bg)", border: "1px solid var(--color-border)" }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMenu(false); onEnter(); }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+            onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-secondary)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <FolderOpen className="w-3.5 h-3.5" /> Open
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMenu(false); onStartRename(); }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+            onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-secondary)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <Pencil className="w-3.5 h-3.5" /> Rename
+          </button>
+          {onMoveToParent && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowMenu(false); onMoveToParent(); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+              onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-secondary)"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <CornerLeftUp className="w-3.5 h-3.5" /> Move to parent
+            </button>
+          )}
+          <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMenu(false); onDelete(); }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+            style={{ color: "var(--color-error)" }}
+            onMouseEnter={e => e.currentTarget.style.background = "color-mix(in srgb, var(--color-error) 10%, transparent)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </button>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
 /* ─── Resource File Row ─── */
 
 function ResourceFileRow({
-  file, onPreview, onDownload, onDelete,
+  file, isRenaming, renameValue, renameInputRef,
+  onPreview, onDownload, onDelete,
+  onStartRename, onRenameChange, onRenameConfirm, onRenameCancel,
+  onDragStart, onMoveToParent,
 }: {
   file: ResourceFile;
+  isRenaming: boolean;
+  renameValue: string;
+  renameInputRef?: React.RefObject<HTMLInputElement | null>;
   onPreview: (f: ResourceFile) => void;
   onDownload: (f: ResourceFile) => void;
   onDelete: (f: ResourceFile) => void;
+  onStartRename: () => void;
+  onRenameChange: (v: string) => void;
+  onRenameConfirm: () => void;
+  onRenameCancel: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onMoveToParent?: () => void;
 }) {
   const canPreview = canPreviewFile(file.name);
   const ext = getExtBadge(file.name);
@@ -948,12 +1431,16 @@ function ResourceFileRow({
   }, [showMenu]);
 
   return (
-    <div className="group flex items-center gap-3 rounded-2xl border px-3 py-3 transition-all"
+    <div
+      className="group flex items-center gap-3 rounded-2xl border px-3 py-3 transition-all"
+      draggable={!isRenaming}
       style={{
         borderColor: "color-mix(in srgb, var(--color-border) 75%, transparent)",
         background: "color-mix(in srgb, var(--color-bg) 44%, transparent)",
+        cursor: isRenaming ? "default" : "grab",
       }}
-      onClick={() => canPreview ? onPreview(file) : onDownload(file)}
+      onClick={() => { if (!isRenaming) (canPreview ? onPreview(file) : onDownload(file)); }}
+      onDragStart={onDragStart}
       onMouseEnter={e => {
         e.currentTarget.style.background = "var(--color-bg-tertiary)";
         e.currentTarget.style.borderColor = "color-mix(in srgb, var(--color-highlight) 26%, var(--color-border))";
@@ -966,42 +1453,71 @@ function ResourceFileRow({
         style={{ background: "var(--color-bg)" }}>
         <VSCodeIcon filename={file.name} size={16} />
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium truncate block">{file.name}</span>
-          {ext && (
-            <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
-              style={{
-                color: "var(--color-text-muted)",
-                background: "var(--color-bg)",
-              }}>
-              {ext}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 mt-1">
-          <span className="text-[11px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{formatSize(file.size)}</span>
-          <span className="text-[11px] opacity-60" style={{ color: "var(--color-text-muted)" }}>•</span>
-          <span className="text-[11px] opacity-60" style={{ color: "var(--color-text-muted)" }}>{formatTime(file.modified_at)}</span>
-        </div>
+      <div className="flex-1 min-w-0" onClick={e => { if (isRenaming) e.stopPropagation(); }}>
+        {isRenaming ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              ref={renameInputRef as React.RefObject<HTMLInputElement>}
+              value={renameValue}
+              onChange={e => onRenameChange(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") { e.stopPropagation(); onRenameConfirm(); }
+                if (e.key === "Escape") { e.stopPropagation(); onRenameCancel(); }
+              }}
+              className="flex-1 bg-transparent text-[13px] font-medium outline-none border-b"
+              style={{ borderColor: "var(--color-highlight)", color: "var(--color-text)" }}
+              onClick={e => e.stopPropagation()}
+            />
+            <button onClick={(e) => { e.stopPropagation(); onRenameConfirm(); }}
+              className="p-1 rounded shrink-0" style={{ color: "var(--color-highlight)" }}>
+              <Check className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onRenameCancel(); }}
+              className="p-1 rounded shrink-0" style={{ color: "var(--color-text-muted)" }}>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-medium truncate block">{file.name}</span>
+              {ext && (
+                <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
+                  style={{
+                    color: "var(--color-text-muted)",
+                    background: "var(--color-bg)",
+                  }}>
+                  {ext}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-[11px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{formatSize(file.size)}</span>
+              <span className="text-[11px] opacity-60" style={{ color: "var(--color-text-muted)" }}>•</span>
+              <span className="text-[11px] opacity-60" style={{ color: "var(--color-text-muted)" }}>{formatTime(file.modified_at)}</span>
+            </div>
+          </>
+        )}
       </div>
-      <button ref={btnRef}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (btnRef.current) {
-            const rect = btnRef.current.getBoundingClientRect();
-            setMenuPos({ top: rect.bottom + 4, left: rect.right - 140 });
-          }
-          setShowMenu(!showMenu);
-        }}
-        className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-all shrink-0"
-        style={{ color: "var(--color-text-muted)" }}
-        onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg)"}
-        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-        <MoreHorizontal className="w-4 h-4" />
-      </button>
-      {showMenu && menuPos && (
-        <div ref={menuRef} className="fixed z-50 min-w-[140px] rounded-lg shadow-lg py-1"
+      {!isRenaming && (
+        <button ref={btnRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (btnRef.current) {
+              const rect = btnRef.current.getBoundingClientRect();
+              setMenuPos({ top: rect.bottom + 4, left: rect.right - 140 });
+            }
+            setShowMenu(!showMenu);
+          }}
+          className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-all shrink-0"
+          style={{ color: "var(--color-text-muted)" }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+      )}
+      {showMenu && menuPos && createPortal(
+        <div ref={menuRef} className="fixed z-[9999] min-w-[140px] rounded-lg shadow-lg py-1"
           style={{ top: menuPos.top, left: menuPos.left, background: "var(--color-bg)", border: "1px solid var(--color-border)" }}>
           {canPreview && (
             <button
@@ -1019,15 +1535,32 @@ function ResourceFileRow({
             onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
             <Download className="w-3.5 h-3.5" /> Download
           </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMenu(false); onStartRename(); }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+            onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-secondary)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <Pencil className="w-3.5 h-3.5" /> Rename
+          </button>
+          {onMoveToParent && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowMenu(false); onMoveToParent(); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
+              onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg-secondary)"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <CornerLeftUp className="w-3.5 h-3.5" /> Move to parent
+            </button>
+          )}
           <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
-          <button onClick={() => { setShowMenu(false); onDelete(file); }}
+          <button onClick={(e) => { e.stopPropagation(); setShowMenu(false); onDelete(file); }}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors"
             style={{ color: "var(--color-error)" }}
             onMouseEnter={e => e.currentTarget.style.background = "color-mix(in srgb, var(--color-error) 10%, transparent)"}
             onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
             <Trash2 className="w-3.5 h-3.5" /> Delete
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
