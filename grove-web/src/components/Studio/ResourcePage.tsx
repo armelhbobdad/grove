@@ -123,6 +123,8 @@ export function ResourcePage() {
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [memorySaveMessage, setMemorySaveMessage] = useState<string | null>(null);
 
+  const [isEditingMemory, setIsEditingMemory] = useState(false);
+
   const hasUnsavedMemory = memory !== savedMemory;
   const memoryLineCount = countInstructionLines(memory);
 
@@ -207,6 +209,7 @@ export function ResourcePage() {
       setSavedMemory(memory);
       setMemorySaveMessage("Saved");
       setTimeout(() => setMemorySaveMessage(null), 2000);
+      setIsEditingMemory(false);
     } catch {
       setMemorySaveMessage("Failed to save");
     } finally {
@@ -968,7 +971,7 @@ export function ResourcePage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-semibold">Project Memory</span>
-                {hasUnsavedMemory && (
+                {isEditingMemory && hasUnsavedMemory && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
                     style={{ background: "color-mix(in srgb, var(--color-warning) 15%, transparent)", color: "var(--color-warning)" }}>
                     Unsaved
@@ -988,25 +991,39 @@ export function ResourcePage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => setMemory(savedMemory)} disabled={!hasUnsavedMemory}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30 border"
-              style={{
-                borderColor: "var(--color-border)",
-                color: "var(--color-text-muted)",
-                background: "var(--color-bg)",
-              }}>
-              <X className="w-4 h-4" />
-              Cancel
-            </button>
-            <button onClick={handleSaveMemory} disabled={isSavingMemory || !hasUnsavedMemory}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30"
-              style={{
-                color: hasUnsavedMemory ? "white" : "var(--color-text-muted)",
-                background: hasUnsavedMemory ? "var(--color-highlight)" : "var(--color-bg)",
-              }}>
-              {isSavingMemory ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {hasUnsavedMemory ? "Save Changes" : "Saved"}
-            </button>
+            {isEditingMemory ? (
+              <>
+                <button
+                  onClick={() => { setMemory(savedMemory); setIsEditingMemory(false); }}
+                  disabled={isSavingMemory}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30 border"
+                  style={{ borderColor: "var(--color-border)", color: "var(--color-text-muted)", background: "var(--color-bg)" }}
+                >
+                  <X className="w-4 h-4" />
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveMemory}
+                  disabled={isSavingMemory || !hasUnsavedMemory}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30"
+                  style={{ color: hasUnsavedMemory ? "white" : "var(--color-text-muted)", background: hasUnsavedMemory ? "var(--color-highlight)" : "var(--color-bg)" }}
+                >
+                  {isSavingMemory ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {hasUnsavedMemory ? "Save Changes" : "Saved"}
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setIsEditingMemory(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border"
+                style={{ borderColor: "var(--color-border)", color: "var(--color-text-muted)", background: "var(--color-bg)" }}
+                onMouseEnter={e => { e.currentTarget.style.color = "var(--color-text)"; e.currentTarget.style.background = "var(--color-bg-tertiary)"; }}
+                onMouseLeave={e => { e.currentTarget.style.color = "var(--color-text-muted)"; e.currentTarget.style.background = "var(--color-bg)"; }}
+              >
+                <Edit3 className="w-4 h-4" />
+                Edit
+              </button>
+            )}
           </div>
         </div>
 
@@ -1017,12 +1034,12 @@ export function ResourcePage() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 p-3">
+      <div className="flex-1 min-h-0 p-3 overflow-y-auto">
         {isLoadingMemory ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="w-5 h-5 animate-spin" style={{ color: "var(--color-text-muted)" }} />
           </div>
-        ) : (
+        ) : isEditingMemory ? (
           <div className="flex h-full min-h-[120px] flex-col rounded-2xl border"
             style={{
               borderColor: "var(--color-border)",
@@ -1040,9 +1057,7 @@ export function ResourcePage() {
                 <p className="text-xs font-medium" style={{ color: "var(--color-text)" }}>
                   {memoryLineCount > 0 ? `${memoryLineCount} ${memoryLineCount === 1 ? "line" : "lines"}` : "No content"}
                 </p>
-                <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                  Shared across tasks
-                </p>
+                <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Shared across tasks</p>
               </div>
             </div>
             <textarea
@@ -1051,13 +1066,28 @@ export function ResourcePage() {
               onChange={(e) => setMemory(e.target.value)}
               placeholder={"# Project Memory\n\nThis file is maintained by AI agents.\n\n## Conventions\n\n## Known Issues\n\n## Decisions"}
               className="w-full flex-1 resize-none outline-none px-4 py-3 text-[13px] font-mono leading-6"
-              style={{
-                background: "transparent",
-                color: "var(--color-text)",
-                caretColor: "var(--color-highlight)",
-              }}
+              style={{ background: "transparent", color: "var(--color-text)", caretColor: "var(--color-highlight)" }}
               spellCheck={false}
             />
+          </div>
+        ) : memory.trim() ? (
+          <div className="rounded-2xl border p-4 min-h-[120px]"
+            style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}>
+            <MarkdownRenderer content={memory} />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-3 h-full min-h-[120px] rounded-2xl border border-dashed"
+            style={{ borderColor: "var(--color-border)" }}>
+            <Brain className="w-8 h-8" style={{ color: "var(--color-text-muted)" }} />
+            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No memory yet</p>
+            <button
+              onClick={() => setIsEditingMemory(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border"
+              style={{ borderColor: "var(--color-border)", color: "var(--color-highlight)", background: "color-mix(in srgb, var(--color-highlight) 10%, transparent)" }}
+            >
+              <Edit3 className="w-4 h-4" />
+              Add Memory
+            </button>
           </div>
         )}
       </div>
