@@ -166,7 +166,7 @@ export function FilePreviewDrawer({
             const lang = detectLanguage(fileName);
             const highlighted = lang ? highlightCode(content, lang) : null;
             return highlighted ? (
-              <pre className="p-5 text-xs font-mono whitespace-pre leading-6 overflow-x-auto" style={{ color: "var(--color-text)" }}>
+              <pre className="markdown-code-block p-5 text-xs font-mono whitespace-pre leading-6 overflow-x-auto" style={{ color: "var(--color-text)" }}>
                 <code dangerouslySetInnerHTML={{ __html: highlighted }} />
               </pre>
             ) : (
