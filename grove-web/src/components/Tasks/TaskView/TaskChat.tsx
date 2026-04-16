@@ -3651,6 +3651,7 @@ export function TaskChat({
                             content={planFileContent}
                             onFileClick={onNavigateToFile}
                             onMermaidClick={setLightboxSvg}
+                            onImageClick={setLightboxUrl}
                           />
                         </div>
                       )}
@@ -4652,6 +4653,7 @@ function MessageItem({
               onFileClick={onFileClick}
               resolveImageUrl={resolveImageUrl}
               onMermaidClick={onMermaidClick}
+              onImageClick={onImageClick}
             />
             {!message.complete && isBusy && (
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-[var(--color-text-muted)] animate-pulse rounded-sm" />
