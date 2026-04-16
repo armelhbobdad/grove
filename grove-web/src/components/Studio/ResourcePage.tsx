@@ -5,7 +5,7 @@ import {
   Trash2, Upload, Loader2, MoreHorizontal, Download, Eye,
   FolderOpen, Save, FileText, RefreshCw, Sparkles,
   Search, ArrowRight, Files, ShieldCheck, Clock3, Plus, X, Brain,
-  FolderPlus, ChevronRight, Pencil, Check, CornerLeftUp, Maximize2, Edit3,
+  FolderPlus, ChevronRight, Pencil, Check, CornerLeftUp, Edit3,
 } from "lucide-react";
 import { useProject } from "../../context";
 import {
@@ -484,14 +484,6 @@ export function ResourcePage() {
                   }}>
                   {activeTab === "uploads" ? filteredFiles.length : workdirs.length}
                 </span>
-                {isMain && (
-                  <span title="Current main view" className="shrink-0 flex items-center">
-                    <Maximize2
-                      className="w-3.5 h-3.5"
-                      style={{ color: "var(--color-text-muted)", opacity: 0.5 }}
-                    />
-                  </span>
-                )}
               </div>
               <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
                 {activeTab === "uploads"
@@ -810,14 +802,6 @@ export function ResourcePage() {
                     Unsaved
                   </span>
                 )}
-                {isMain && (
-                  <span title="Current main view" className="shrink-0 flex items-center">
-                    <Maximize2
-                      className="w-3.5 h-3.5"
-                      style={{ color: "var(--color-text-muted)", opacity: 0.5 }}
-                    />
-                  </span>
-                )}
               </div>
               <p className="mt-0.5 text-xs" style={{ color: "var(--color-text-muted)" }}>
                 Injected into every task. Define reusable guidance once.
@@ -979,14 +963,6 @@ export function ResourcePage() {
                   <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
                     style={{ background: "color-mix(in srgb, var(--color-warning) 15%, transparent)", color: "var(--color-warning)" }}>
                     Unsaved
-                  </span>
-                )}
-                {isMain && (
-                  <span title="Current main view" className="shrink-0 flex items-center">
-                    <Maximize2
-                      className="w-3.5 h-3.5"
-                      style={{ color: "var(--color-text-muted)", opacity: 0.5 }}
-                    />
                   </span>
                 )}
               </div>
