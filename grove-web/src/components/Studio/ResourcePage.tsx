@@ -459,7 +459,7 @@ export function ResourcePage() {
   );
 
   const renderAssetsPanel = ({ isMain }: { isMain: boolean }) => (
-    <section className="min-h-[300px] rounded-2xl border overflow-hidden flex flex-col xl:min-h-0"
+    <section className="min-h-[300px] h-full rounded-2xl border overflow-hidden flex flex-col xl:min-h-0"
       style={{ borderColor: "var(--color-border)", background: "var(--color-bg-secondary)" }}>
       <div className="flex flex-col gap-3 px-4 py-3 border-b"
         style={{ borderColor: "var(--color-border)" }}>
@@ -933,7 +933,7 @@ export function ResourcePage() {
             />
           </div>
         ) : instructions.trim() ? (
-          <div className="rounded-2xl border p-4 min-h-[120px]"
+          <div className="rounded-2xl border p-4 h-full"
             style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}>
             <MarkdownRenderer content={instructions} />
           </div>
@@ -1077,7 +1077,7 @@ export function ResourcePage() {
             />
           </div>
         ) : memory.trim() ? (
-          <div className="rounded-2xl border p-4 min-h-[120px]"
+          <div className="rounded-2xl border p-4 h-full"
             style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}>
             <MarkdownRenderer content={memory} />
           </div>
@@ -1236,7 +1236,7 @@ export function ResourcePage() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.2 }}
-            className="min-h-[300px] xl:min-h-0 flex flex-col"
+            className="min-h-[300px] xl:min-h-0 flex flex-col h-full"
           >
             {mainPanel === "assets" && renderAssetsPanel({ isMain: true })}
             {mainPanel === "instructions" && renderInstructionsPanel({ isMain: true })}
