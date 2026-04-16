@@ -5,7 +5,7 @@ import {
   Trash2, Upload, Loader2, MoreHorizontal, Download, Eye,
   FolderOpen, Save, FileText, RefreshCw, Sparkles,
   Search, ArrowRight, Files, ShieldCheck, Clock3, Plus, X, Brain,
-  FolderPlus, ChevronRight, Pencil, Check, CornerLeftUp, Maximize2,
+  FolderPlus, ChevronRight, Pencil, Check, CornerLeftUp, Maximize2, Edit3,
 } from "lucide-react";
 import { useProject } from "../../context";
 import {
@@ -20,6 +20,7 @@ import {
 import {
   VSCodeIcon,
   FilePreviewDrawer,
+  MarkdownRenderer,
   getPreviewType,
   canPreviewFile,
   getExtBadge,
@@ -108,6 +109,7 @@ export function ResourcePage() {
   const [isLoadingInstructions, setIsLoadingInstructions] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [isEditingInstructions, setIsEditingInstructions] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [previewFile, setPreviewFile] = useState<{ file: ResourceFile; content: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -361,6 +363,7 @@ export function ResourcePage() {
       setSavedInstructions(instructions);
       setSaveMessage("Saved");
       setTimeout(() => setSaveMessage(null), 2000);
+      setIsEditingInstructions(false);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -796,7 +799,7 @@ export function ResourcePage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-semibold">Workspace Instructions</span>
-                {hasUnsaved && (
+                {isEditingInstructions && hasUnsaved && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
                     style={{ background: "color-mix(in srgb, var(--color-warning) 15%, transparent)", color: "var(--color-warning)" }}>
                     Unsaved
@@ -816,52 +819,68 @@ export function ResourcePage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => setInstructions(savedInstructions)} disabled={!hasUnsaved}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30 border"
-              style={{
-                borderColor: "var(--color-border)",
-                color: "var(--color-text-muted)",
-                background: "var(--color-bg)",
-              }}>
-              <X className="w-4 h-4" />
-              Cancel
-            </button>
-            <button onClick={handleSaveInstructions} disabled={isSaving || !hasUnsaved}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30"
-              style={{
-                color: hasUnsaved ? "white" : "var(--color-text-muted)",
-                background: hasUnsaved ? "var(--color-highlight)" : "var(--color-bg)",
-              }}>
-              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {hasUnsaved ? "Save Changes" : "Saved"}
-            </button>
+            {isEditingInstructions ? (
+              <>
+                <button
+                  onClick={() => { setInstructions(savedInstructions); setIsEditingInstructions(false); }}
+                  disabled={isSaving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30 border"
+                  style={{ borderColor: "var(--color-border)", color: "var(--color-text-muted)", background: "var(--color-bg)" }}
+                >
+                  <X className="w-4 h-4" />
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveInstructions}
+                  disabled={isSaving || !hasUnsaved}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-30"
+                  style={{ color: hasUnsaved ? "white" : "var(--color-text-muted)", background: hasUnsaved ? "var(--color-highlight)" : "var(--color-bg)" }}
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {hasUnsaved ? "Save Changes" : "Saved"}
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setIsEditingInstructions(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border"
+                style={{ borderColor: "var(--color-border)", color: "var(--color-text-muted)", background: "var(--color-bg)" }}
+                onMouseEnter={e => { e.currentTarget.style.color = "var(--color-text)"; e.currentTarget.style.background = "var(--color-bg-tertiary)"; }}
+                onMouseLeave={e => { e.currentTarget.style.color = "var(--color-text-muted)"; e.currentTarget.style.background = "var(--color-bg)"; }}
+              >
+                <Edit3 className="w-4 h-4" />
+                Edit
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          {INSTRUCTION_TEMPLATES.map((template) => (
-            <button
-              key={template.label}
-              onClick={() => insertTemplate(template.content)}
-              className="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
-              style={{
-                borderColor: "var(--color-border)",
-                color: "var(--color-text-muted)",
-                background: "color-mix(in srgb, var(--color-bg) 48%, transparent)",
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.borderColor = "var(--color-highlight)";
-                e.currentTarget.style.color = "var(--color-text)";
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.borderColor = "var(--color-border)";
-                e.currentTarget.style.color = "var(--color-text-muted)";
-              }}
-            >
-              {template.label}
-            </button>
-          ))}
-        </div>
+        {isEditingInstructions && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {INSTRUCTION_TEMPLATES.map((template) => (
+              <button
+                key={template.label}
+                onClick={() => insertTemplate(template.content)}
+                className="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  borderColor: "var(--color-border)",
+                  color: "var(--color-text-muted)",
+                  background: "color-mix(in srgb, var(--color-bg) 48%, transparent)",
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.borderColor = "var(--color-highlight)";
+                  e.currentTarget.style.color = "var(--color-text)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.borderColor = "var(--color-border)";
+                  e.currentTarget.style.color = "var(--color-text-muted)";
+                }}
+              >
+                {template.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {saveMessage && (
           <p className="mt-3 text-xs font-medium" style={{ color: saveMessage === "Saved" ? "var(--color-success)" : "var(--color-error)" }}>
@@ -870,12 +889,12 @@ export function ResourcePage() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 p-3">
+      <div className="flex-1 min-h-0 p-3 overflow-y-auto">
         {isLoadingInstructions ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="w-5 h-5 animate-spin" style={{ color: "var(--color-text-muted)" }} />
           </div>
-        ) : (
+        ) : isEditingInstructions ? (
           <div className="flex h-full min-h-[120px] flex-col rounded-2xl border"
             style={{
               borderColor: "var(--color-border)",
@@ -893,9 +912,7 @@ export function ResourcePage() {
                 <p className="text-xs font-medium" style={{ color: "var(--color-text)" }}>
                   {instructionLineCount > 0 ? `${instructionLineCount} ${instructionLineCount === 1 ? "line" : "lines"}` : "No content"}
                 </p>
-                <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                  Synced to task bootstrap
-                </p>
+                <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Synced to task bootstrap</p>
               </div>
             </div>
             <textarea
@@ -904,13 +921,28 @@ export function ResourcePage() {
               onChange={(e) => setInstructions(e.target.value)}
               placeholder={"# Workspace rules\n\nAdd shared expectations for every task in this Studio.\n\nExamples:\n- Always respond in Chinese\n- Use formal tone for reports\n- Output files in Markdown format\n- Reference data from resource/ when available"}
               className="w-full flex-1 resize-none outline-none px-4 py-3 text-[13px] font-mono leading-6"
-              style={{
-                background: "transparent",
-                color: "var(--color-text)",
-                caretColor: "var(--color-highlight)",
-              }}
+              style={{ background: "transparent", color: "var(--color-text)", caretColor: "var(--color-highlight)" }}
               spellCheck={false}
             />
+          </div>
+        ) : instructions.trim() ? (
+          <div className="rounded-2xl border p-4 min-h-[120px]"
+            style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}>
+            <MarkdownRenderer content={instructions} />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-3 h-full min-h-[120px] rounded-2xl border border-dashed"
+            style={{ borderColor: "var(--color-border)" }}>
+            <FileText className="w-8 h-8" style={{ color: "var(--color-text-muted)" }} />
+            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No instructions yet</p>
+            <button
+              onClick={() => setIsEditingInstructions(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border"
+              style={{ borderColor: "var(--color-border)", color: "var(--color-highlight)", background: "color-mix(in srgb, var(--color-highlight) 10%, transparent)" }}
+            >
+              <Edit3 className="w-4 h-4" />
+              Add Instructions
+            </button>
           </div>
         )}
       </div>
