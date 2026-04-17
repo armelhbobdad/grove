@@ -10,6 +10,7 @@ mod dialogs;
 mod diff;
 mod error;
 mod event;
+mod fs_link;
 mod git;
 mod hooks;
 mod model;
@@ -244,6 +245,12 @@ fn main() -> io::Result<()> {
     // 统一调度
     match command {
         Commands::Tui => {
+            #[cfg(windows)]
+            {
+                eprintln!("grove tui is not supported on Windows. Please use WSL2 or run `grove web` instead.");
+                std::process::exit(1);
+            }
+            #[cfg(not(windows))]
             run_tui()?;
         }
         Commands::Hooks { level } => {
@@ -260,6 +267,12 @@ fn main() -> io::Result<()> {
                 });
         }
         Commands::Fp => {
+            #[cfg(windows)]
+            {
+                eprintln!("grove fp is not supported on Windows. Please use WSL2.");
+                std::process::exit(1);
+            }
+            #[cfg(not(windows))]
             cli::fp::execute();
         }
         Commands::Web { port, no_open, dev } => {

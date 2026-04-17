@@ -65,6 +65,12 @@ pub fn try_daemonize(port: u16) -> bool {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
 
     let child = cmd.spawn();
 
@@ -85,6 +91,7 @@ pub fn try_daemonize(port: u16) -> bool {
 /// (/usr/bin:/bin:/usr/sbin:/sbin). This function expands it by querying the
 /// user's login shell and appending common installation directories so that
 /// tools like tmux, claude, fzf, etc. can be found.
+#[cfg(target_os = "macos")]
 fn expand_path_for_app_bundle() {
     let home = std::env::var("HOME").unwrap_or_default();
 
@@ -135,7 +142,8 @@ fn expand_path_for_app_bundle() {
 
 /// Execute the GUI desktop application
 pub async fn execute(port: u16) {
-    // Expand PATH before anything else so dependency checks work correctly
+    // Expand PATH before anything else so dependency checks work correctly (macOS only)
+    #[cfg(target_os = "macos")]
     expand_path_for_app_bundle();
     // Check for embedded assets
     if !api::has_embedded_assets() {

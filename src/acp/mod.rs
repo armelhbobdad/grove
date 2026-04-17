@@ -1010,7 +1010,8 @@ pub async fn get_or_start_session(
                     sessions.insert(key.clone(), handle.clone());
                 }
 
-                // 启动 socket listener（在 LocalSet 内 spawn_local）
+                // 启动 socket listener（在 LocalSet 内 spawn_local，Unix only）
+                #[cfg(unix)]
                 if let Some(chat_id) = &config.chat_id {
                     let sp = sock_path(&config.project_key, &config.task_id, chat_id);
                     tokio::task::spawn_local(run_socket_listener(sp, handle.clone()));
@@ -2037,7 +2038,8 @@ fn cleanup_socket_files(project_key: &str, task_id: &str, chat_id: &str) {
     let _ = std::fs::remove_file(session_json_path(project_key, task_id, chat_id));
 }
 
-/// Socket listener：接受连接，分发命令到 session handle
+/// Socket listener：接受连接，分发命令到 session handle（Unix only）
+#[cfg(unix)]
 async fn run_socket_listener(path: PathBuf, handle: Arc<AcpSessionHandle>) {
     // 清理可能残留的旧 sock 文件
     let _ = std::fs::remove_file(&path);
@@ -2078,7 +2080,8 @@ async fn run_socket_listener(path: PathBuf, handle: Arc<AcpSessionHandle>) {
     let _ = std::fs::remove_file(&path);
 }
 
-/// 处理单个 socket 连接：读一行命令，执行，写一行响应
+/// 处理单个 socket 连接：读一行命令，执行，写一行响应（Unix only）
+#[cfg(unix)]
 async fn handle_socket_connection(
     stream: tokio::net::UnixStream,
     handle: &AcpSessionHandle,
@@ -2176,26 +2179,29 @@ pub fn discover_session(
         return Some(SessionAccess::Local(handle));
     }
 
-    // Step 2: 检查 sock 文件
-    let sp = sock_path(project_key, task_id, chat_id);
-    if sp.exists() {
-        // 尝试同步 connect 探测 socket 是否存活
-        match std::os::unix::net::UnixStream::connect(&sp) {
-            Ok(_conn) => {
-                // Socket 存活，另一个进程持有
-                drop(_conn);
-                return Some(SessionAccess::Remote {
-                    sock_path: sp,
-                    chat_dir: chat_dir(project_key, task_id, chat_id),
-                    project_key: project_key.to_string(),
-                    task_id: task_id.to_string(),
-                    chat_id: chat_id.to_string(),
-                });
-            }
-            Err(_) => {
-                // Stale socket，清理
-                let _ = std::fs::remove_file(&sp);
-                let _ = std::fs::remove_file(session_json_path(project_key, task_id, chat_id));
+    // Step 2: 检查 sock 文件（Unix only）
+    #[cfg(unix)]
+    {
+        let sp = sock_path(project_key, task_id, chat_id);
+        if sp.exists() {
+            // 尝试同步 connect 探测 socket 是否存活
+            match std::os::unix::net::UnixStream::connect(&sp) {
+                Ok(_conn) => {
+                    // Socket 存活，另一个进程持有
+                    drop(_conn);
+                    return Some(SessionAccess::Remote {
+                        sock_path: sp,
+                        chat_dir: chat_dir(project_key, task_id, chat_id),
+                        project_key: project_key.to_string(),
+                        task_id: task_id.to_string(),
+                        chat_id: chat_id.to_string(),
+                    });
+                }
+                Err(_) => {
+                    // Stale socket，清理
+                    let _ = std::fs::remove_file(&sp);
+                    let _ = std::fs::remove_file(session_json_path(project_key, task_id, chat_id));
+                }
             }
         }
     }
@@ -2209,40 +2215,49 @@ pub async fn send_socket_command(
     sock: &std::path::Path,
     cmd: &SocketCommand,
 ) -> crate::error::Result<SocketResponse> {
-    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt};
+    #[cfg(unix)]
+    {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt};
 
-    let stream = tokio::net::UnixStream::connect(sock)
-        .await
-        .map_err(|e| crate::error::GroveError::Session(format!("Socket connect failed: {}", e)))?;
+        let stream = tokio::net::UnixStream::connect(sock).await.map_err(|e| {
+            crate::error::GroveError::Session(format!("Socket connect failed: {}", e))
+        })?;
 
-    let (reader, mut writer) = stream.into_split();
+        let (reader, mut writer) = stream.into_split();
 
-    let cmd_json = serde_json::to_string(cmd).map_err(|e| {
-        crate::error::GroveError::Session(format!("Failed to serialize command: {}", e))
-    })?;
+        let cmd_json = serde_json::to_string(cmd).map_err(|e| {
+            crate::error::GroveError::Session(format!("Failed to serialize command: {}", e))
+        })?;
 
-    writer
-        .write_all(cmd_json.as_bytes())
-        .await
-        .map_err(|e| crate::error::GroveError::Session(format!("Socket write failed: {}", e)))?;
-    writer
-        .write_all(b"\n")
-        .await
-        .map_err(|e| crate::error::GroveError::Session(format!("Socket write failed: {}", e)))?;
-    writer
-        .shutdown()
-        .await
-        .map_err(|e| crate::error::GroveError::Session(format!("Socket shutdown failed: {}", e)))?;
+        writer.write_all(cmd_json.as_bytes()).await.map_err(|e| {
+            crate::error::GroveError::Session(format!("Socket write failed: {}", e))
+        })?;
+        writer.write_all(b"\n").await.map_err(|e| {
+            crate::error::GroveError::Session(format!("Socket write failed: {}", e))
+        })?;
+        writer.shutdown().await.map_err(|e| {
+            crate::error::GroveError::Session(format!("Socket shutdown failed: {}", e))
+        })?;
 
-    let mut buf_reader = tokio::io::BufReader::new(reader);
-    let mut resp_line = String::new();
-    buf_reader
-        .read_line(&mut resp_line)
-        .await
-        .map_err(|e| crate::error::GroveError::Session(format!("Socket read failed: {}", e)))?;
+        let mut buf_reader = tokio::io::BufReader::new(reader);
+        let mut resp_line = String::new();
+        buf_reader
+            .read_line(&mut resp_line)
+            .await
+            .map_err(|e| crate::error::GroveError::Session(format!("Socket read failed: {}", e)))?;
 
-    serde_json::from_str(resp_line.trim())
-        .map_err(|e| crate::error::GroveError::Session(format!("Invalid socket response: {}", e)))
+        serde_json::from_str(resp_line.trim()).map_err(|e| {
+            crate::error::GroveError::Session(format!("Invalid socket response: {}", e))
+        })
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (sock, cmd);
+        Err(crate::error::GroveError::Session(
+            "Cross-process ACP sessions are not supported on Windows".to_string(),
+        ))
+    }
 }
 
 /// 解析后的 Agent 信息

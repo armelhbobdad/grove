@@ -204,7 +204,7 @@ jobs:
   # Build Linux desktop GUI (x86_64)
   build-linux-gui-x64:
     needs: [create-release, build-frontend]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Download frontend dist
@@ -246,6 +246,41 @@ jobs:
         run: |
           gh release upload ${{ needs.create-release.outputs.tag }} --clobber \
             target/x86_64-unknown-linux-gnu/release/grove-${{ needs.create-release.outputs.tag }}-x86_64-unknown-linux-gnu-gui.tar.gz
+
+  # Build for Windows (x86_64)
+  build-windows-x64:
+    needs: [create-release, build-frontend]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: grove-web/dist
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64
+          add-job-id-key: false
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Package
+        shell: bash
+        run: |
+          cd target/x86_64-pc-windows-msvc/release
+          7z a grove-${{ needs.create-release.outputs.tag }}-x86_64-pc-windows-msvc.zip grove.exe
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload ${{ needs.create-release.outputs.tag }} --clobber \
+            target/x86_64-pc-windows-msvc/release/grove-${{ needs.create-release.outputs.tag }}-x86_64-pc-windows-msvc.zip
 
   # Build macOS universal .app + DMG (arm64 + x86_64 combined)
   build-macos-dmg:
@@ -292,7 +327,7 @@ jobs:
 
   # Publish the release
   publish-release:
-    needs: [create-release, build-macos-arm, build-macos-intel, build-linux-x64, build-linux-arm, build-linux-gui-x64, build-macos-dmg]
+    needs: [create-release, build-macos-arm, build-macos-intel, build-linux-x64, build-linux-arm, build-linux-gui-x64, build-macos-dmg, build-windows-x64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

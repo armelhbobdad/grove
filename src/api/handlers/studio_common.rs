@@ -49,11 +49,10 @@ pub fn list_workdir_entries(dir: &std::path::Path) -> Vec<WorkDirectoryEntry> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if !meta.file_type().is_symlink() {
+        if fs::symlink_metadata(&path).is_err() {
+            continue;
+        }
+        if !crate::fs_link::is_link(&path) {
             continue;
         }
         let target = match fs::read_link(&path) {
@@ -125,8 +124,8 @@ pub fn validate_symlink_entry(dir: &std::path::Path, name: &str) -> Result<PathB
     if !canonical_parent.starts_with(&canonical_base) {
         return Err("Access denied".to_string());
     }
-    let meta = fs::symlink_metadata(&path).map_err(|_| "Work Directory not found".to_string())?;
-    if !meta.file_type().is_symlink() {
+    let _ = fs::symlink_metadata(&path).map_err(|_| "Work Directory not found".to_string())?;
+    if !crate::fs_link::is_link(&path) {
         return Err("Entry is not a symlink".to_string());
     }
     Ok(path)
@@ -382,22 +381,14 @@ pub fn create_workdir_symlink(
     let link_name = create_unique_symlink_name(workdir_dir, &target);
     let link_path = workdir_dir.join(&link_name);
 
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&target, &link_path).map_err(|e| {
+    crate::fs_link::create_link(&target, &link_path).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
-                error: format!("Failed to create symlink: {e}"),
+                error: format!("Failed to create link: {e}"),
             }),
         )
     })?;
-
-    #[cfg(not(unix))]
-    {
-        return Err(ApiError::not_implemented(
-            "Work Directory is currently only supported on Unix-like systems",
-        ));
-    }
 
     Ok(WorkDirectoryEntry {
         name: link_name,

@@ -41,11 +41,10 @@ fn list_dir_recursive(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let link_meta = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if link_meta.file_type().is_symlink() {
+        if fs::symlink_metadata(&path).is_err() {
+            continue;
+        }
+        if crate::fs_link::is_link(&path) {
             continue;
         }
         let meta = match entry.metadata() {

@@ -599,34 +599,25 @@ fn create_task_inner(
         let resource_link = task_dir.join("resource");
         let project_resource = studio_dir.join("resource");
         if !resource_link.exists() && project_resource.exists() {
-            #[cfg(unix)]
-            {
-                let _ = std::os::unix::fs::symlink(&project_resource, &resource_link);
-            }
+            let _ = crate::fs_link::create_link(&project_resource, &resource_link);
         }
 
         // Symlink instructions.md → project instructions.md (read-only)
         let instructions_link = task_dir.join("instructions.md");
         let project_instructions = studio_dir.join("instructions.md");
         if !instructions_link.exists() && project_instructions.exists() {
-            #[cfg(unix)]
-            {
-                let _ = std::os::unix::fs::symlink(&project_instructions, &instructions_link);
-            }
+            let _ = crate::fs_link::create_link(&project_instructions, &instructions_link);
         }
 
         // Symlink memory.md → project memory.md (read-write)
         let memory_link = task_dir.join("memory.md");
         let project_memory = studio_dir.join("memory.md");
-        // Ensure the target file exists so the symlink has a valid target
+        // Ensure the target file exists so the link has a valid target
         if !project_memory.exists() {
             let _ = std::fs::write(&project_memory, "");
         }
         if !memory_link.exists() {
-            #[cfg(unix)]
-            {
-                let _ = std::os::unix::fs::symlink(&project_memory, &memory_link);
-            }
+            let _ = crate::fs_link::create_link(&project_memory, &memory_link);
         }
 
         // Generate AGENTS.md
@@ -697,16 +688,15 @@ fn create_task_inner(
         std::fs::write(task_dir.join("AGENTS.md"), &agents_md)?;
 
         // Symlink CLAUDE.md and GEMINI.md → AGENTS.md
-        #[cfg(unix)]
         {
             let agents_path = task_dir.join("AGENTS.md");
             let claude_md = task_dir.join("CLAUDE.md");
             let gemini_md = task_dir.join("GEMINI.md");
             if !claude_md.exists() {
-                let _ = std::os::unix::fs::symlink(&agents_path, &claude_md);
+                let _ = crate::fs_link::create_link(&agents_path, &claude_md);
             }
             if !gemini_md.exists() {
-                let _ = std::os::unix::fs::symlink(&agents_path, &gemini_md);
+                let _ = crate::fs_link::create_link(&agents_path, &gemini_md);
             }
         }
 

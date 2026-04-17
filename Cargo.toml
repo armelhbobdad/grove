@@ -102,6 +102,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 base64 = "0.22"
 url = "2"
 
+[target.'cfg(windows)'.dependencies]
+junction = "1.2"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 
@@ -117,6 +120,8 @@ targets = [
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
 ]
 # Which actions to run on pull requests
 pr-run-mode = "skip"

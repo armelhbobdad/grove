@@ -362,9 +362,10 @@ pub fn get_single_file_diff(
     .unwrap_or(false);
 
     let raw = if is_untracked {
+        let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
         git::git_cmd_allow_exit1(
             worktree_path,
-            &["diff", "--no-index", "-U3", "--", "/dev/null", file_path],
+            &["diff", "--no-index", "-U3", "--", null_device, file_path],
         )?
     } else if let Some(to) = to_ref {
         let range = format!("{}..{}", from_ref.unwrap_or("HEAD"), to);

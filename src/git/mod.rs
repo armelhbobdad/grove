@@ -829,9 +829,10 @@ pub fn diff_stat(worktree_path: &str, target: &str) -> Result<Vec<DiffStatEntry>
         .collect();
 
     for path in &untracked_set {
+        let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
         let output = git_cmd_allow_exit1(
             worktree_path,
-            &["diff", "--no-index", "--numstat", "--", "/dev/null", path],
+            &["diff", "--no-index", "--numstat", "--", null_device, path],
         );
         if let Ok(numstat_out) = output {
             let parts: Vec<&str> = numstat_out.trim().split('\t').collect();
@@ -1104,21 +1105,7 @@ pub fn create_worktree_symlinks(
         }
 
         // 创建符号链接
-        let result = {
-            #[cfg(unix)]
-            {
-                std::os::unix::fs::symlink(&source, &target)
-            }
-            #[cfg(windows)]
-            {
-                let is_dir = source.is_dir();
-                if is_dir {
-                    std::os::windows::fs::symlink_dir(&source, &target)
-                } else {
-                    std::os::windows::fs::symlink_file(&source, &target)
-                }
-            }
-        };
+        let result = crate::fs_link::create_link(&source, &target);
 
         match result {
             Ok(_) => {

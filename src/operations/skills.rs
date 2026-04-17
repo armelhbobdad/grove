@@ -476,10 +476,7 @@ pub fn install_skill(req: &InstallRequest) -> Result<InstallResult> {
             }
         }
 
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&actual_skill_dir, &symlink_path)?;
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&actual_skill_dir, &symlink_path)?;
+        crate::fs_link::create_link(&actual_skill_dir, &symlink_path)?;
 
         new_refs.push(ScopeAgentRef {
             agent_id: agent_entry.agent_id.clone(),
