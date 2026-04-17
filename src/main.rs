@@ -5,7 +5,6 @@ mod api;
 mod app;
 #[cfg(not(windows))]
 mod async_ops_state;
-#[cfg(not(windows))]
 mod check;
 mod cli;
 #[cfg(not(windows))]
@@ -35,7 +34,6 @@ mod ui;
 mod ui_state;
 mod update;
 mod watcher;
-#[cfg(not(windows))]
 mod zellij;
 
 use std::io::{self, Write};
@@ -121,6 +119,7 @@ fn ensure_storage_version() {
 }
 
 /// 启动 TUI 界面
+#[cfg(not(windows))]
 fn run_tui() -> io::Result<()> {
     // 环境检查
     let result = check::check_environment();
@@ -163,13 +162,13 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // Set up panic hook to restore terminal state on panic
+    // Set up panic hook to restore terminal state on panic (TUI only)
+    #[cfg(not(windows))]
     let original_hook = panic::take_hook();
+    #[cfg(not(windows))]
     panic::set_hook(Box::new(move |panic_info| {
-        // Restore terminal state
         let _ = execute!(io::stdout(), DisableMouseCapture);
         ratatui::restore();
-        // Call the original panic hook
         original_hook(panic_info);
     }));
 
@@ -402,6 +401,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     let mut last_refresh = Instant::now();
 
