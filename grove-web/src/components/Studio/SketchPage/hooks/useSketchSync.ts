@@ -30,6 +30,43 @@ export function useSketchSync(
   const [remoteTick, setRemoteTick] = useState(0);
   const pendingRef = useRef<unknown | null>(null);
   const timerRef = useRef<number | null>(null);
+  // Snapshot the (projectId, taskId, sketchId) that the pending save belongs to,
+  // so the flush still targets the correct sketch after the caller switches tabs.
+  const pendingTargetRef = useRef<{ projectId: string; taskId: string; sketchId: string } | null>(null);
+
+  const flushPendingSave = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const payload = pendingRef.current;
+    const target = pendingTargetRef.current;
+    pendingRef.current = null;
+    pendingTargetRef.current = null;
+    if (payload == null || !target) return;
+    // Fire and forget — browsers typically complete in-flight fetches on unload.
+    void putSketchScene(target.projectId, target.taskId, target.sketchId, payload).catch(
+      (e) => console.error("sketch flush save failed", e),
+    );
+  }, []);
+
+  // Flush when the active sketch (or project/task) changes — pending edits belong
+  // to the previous sketch and must not be dropped.
+  useEffect(() => {
+    return () => {
+      flushPendingSave();
+    };
+  }, [projectId, taskId, sketchId, flushPendingSave]);
+
+  // Flush on page unload.
+  useEffect(() => {
+    const onBeforeUnload = () => flushPendingSave();
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      flushPendingSave();
+    };
+  }, [flushPendingSave]);
 
   // Keep onIndexChanged in a ref so WS effect doesn't re-open on every parent render.
   const indexChangedRef = useRef(onIndexChanged);
@@ -134,14 +171,17 @@ export function useSketchSync(
     (next: unknown) => {
       if (!sketchId) return;
       pendingRef.current = next;
+      pendingTargetRef.current = { projectId, taskId, sketchId };
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(async () => {
         const payload = pendingRef.current;
+        const target = pendingTargetRef.current;
         pendingRef.current = null;
+        pendingTargetRef.current = null;
         timerRef.current = null;
-        if (payload == null) return;
+        if (payload == null || !target) return;
         try {
-          await putSketchScene(projectId, taskId, sketchId, payload);
+          await putSketchScene(target.projectId, target.taskId, target.sketchId, payload);
         } catch (e) {
           console.error("sketch save failed", e);
         }
