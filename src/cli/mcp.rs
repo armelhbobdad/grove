@@ -138,9 +138,22 @@ fn filter_tools(all: Vec<Tool>) -> Vec<Tool> {
         "grove_add_comment",
         "grove_complete_task",
     ]);
+    // Tools usable from both inside and outside a task (sketch tools take
+    // explicit project_id/task_id and are used by worker agents in-task as
+    // well as by the orchestrator).
+    let dual_use_tools: HashSet<&'static str> = HashSet::from([
+        "grove_sketch_list",
+        "grove_sketch_new",
+        "grove_sketch_read",
+        "grove_sketch_patch",
+        "grove_sketch_replace",
+    ]);
     if get_task_context().is_some() {
         all.into_iter()
-            .filter(|t| task_scoped_tools.contains(t.name.as_ref()))
+            .filter(|t| {
+                task_scoped_tools.contains(t.name.as_ref())
+                    || dual_use_tools.contains(t.name.as_ref())
+            })
             .collect()
     } else {
         all.into_iter()
@@ -373,6 +386,47 @@ pub struct ListChatsParams {
     pub task_id: String,
     /// Optional fuzzy query for filtering by chat name
     pub query: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SketchListParams {
+    pub project_id: String,
+    pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SketchReadParams {
+    pub project_id: String,
+    pub task_id: String,
+    pub sketch_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SketchNewParams {
+    pub project_id: String,
+    pub task_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SketchPatchParams {
+    pub project_id: String,
+    pub task_id: String,
+    pub sketch_id: String,
+    #[serde(default)]
+    pub created: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub updated: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub deleted: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SketchReplaceParams {
+    pub project_id: String,
+    pub task_id: String,
+    pub sketch_id: String,
+    pub scene: serde_json::Value,
 }
 
 // ============================================================================
@@ -658,6 +712,66 @@ impl GroveMcpServer {
         ensure_not_in_grove_task()?;
         let p = params.0;
         list_chats_impl(p).await
+    }
+
+    /// List Excalidraw sketches in a Studio task
+    #[tool(
+        name = "grove_sketch_list",
+        description = "List Excalidraw sketches in a Studio task. Returns an array of { id, name, created_at, updated_at }."
+    )]
+    async fn grove_sketch_list(
+        &self,
+        params: Parameters<SketchListParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        blocking_json_result(move || {
+            let (_project, key) = find_project_key(&p.project_id)?;
+            let index = crate::storage::sketches::load_index(&key, &p.task_id)
+                .map_err(|e| mcp_err(&e.to_string()))?;
+            Ok(json!({ "sketches": index.sketches }))
+        })
+        .await
+    }
+
+    /// Read the full Excalidraw scene JSON for a sketch
+    #[tool(
+        name = "grove_sketch_read",
+        description = "Read the full Excalidraw scene JSON for a sketch. Call this before any update/delete tool to learn current element ids."
+    )]
+    async fn grove_sketch_read(
+        &self,
+        params: Parameters<SketchReadParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        blocking_json_result(move || {
+            let (_project, key) = find_project_key(&p.project_id)?;
+            let body = crate::storage::sketches::load_scene(&key, &p.task_id, &p.sketch_id)
+                .map_err(|e| mcp_err(&e.to_string()))?;
+            let value: serde_json::Value =
+                serde_json::from_str(&body).map_err(|e| mcp_err(&e.to_string()))?;
+            Ok(value)
+        })
+        .await
+    }
+
+    /// Create a new empty sketch
+    #[tool(
+        name = "grove_sketch_new",
+        description = "Create a new empty sketch in a Studio task. Returns the new sketch's metadata."
+    )]
+    async fn grove_sketch_new(
+        &self,
+        params: Parameters<SketchNewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        blocking_json_result(move || {
+            let (_project, key) = find_project_key(&p.project_id)?;
+            let meta = crate::storage::sketches::create_sketch(&key, &p.task_id, &p.name)
+                .map_err(|e| mcp_err(&e.to_string()))?;
+            broadcast_index_changed(&key, &p.task_id);
+            Ok(serde_json::to_value(meta).unwrap())
+        })
+        .await
     }
 
     /// Read user-written notes for the current task
@@ -1193,6 +1307,61 @@ async fn blocking_json(
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
     ok_json(value)
+}
+
+/// Variant of `blocking_json` whose closure returns `Result<Value, McpError>`.
+/// Used by tools that need the `?` operator for concise error propagation.
+async fn blocking_json_result(
+    f: impl FnOnce() -> Result<serde_json::Value, McpError> + Send + 'static,
+) -> Result<CallToolResult, McpError> {
+    let value = tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))??;
+    ok_json(value)
+}
+
+fn mcp_err(msg: &str) -> McpError {
+    McpError::invalid_request(msg.to_string(), None)
+}
+
+/// Resolve a project id (hash or similar) to its `(RegisteredProject, project_key)`.
+/// Mirrors the pattern used by `resolve_project_for_mcp` but returns the whole project
+/// record so callers can use additional fields when needed.
+fn find_project_key(
+    project_id: &str,
+) -> Result<(crate::storage::workspace::RegisteredProject, String), McpError> {
+    let project = match load_project_by_id(project_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => return Err(mcp_err("Project not found")),
+        Err(e) => {
+            return Err(McpError::internal_error(
+                format!("Failed to load project: {e}"),
+                None,
+            ))
+        }
+    };
+    let key = workspace::project_hash(&project.path);
+    Ok((project, key))
+}
+
+fn broadcast_index_changed(project: &str, task_id: &str) {
+    use crate::api::handlers::tasks::sketch_events::{broadcast_sketch_event, SketchEvent};
+    broadcast_sketch_event(SketchEvent::IndexChanged {
+        project: project.to_string(),
+        task_id: task_id.to_string(),
+    });
+}
+
+fn broadcast_scene_updated(project: &str, task_id: &str, sketch_id: &str) {
+    use crate::api::handlers::tasks::sketch_events::{
+        broadcast_sketch_event, SketchEvent, SketchEventSource,
+    };
+    broadcast_sketch_event(SketchEvent::SketchUpdated {
+        project: project.to_string(),
+        task_id: task_id.to_string(),
+        sketch_id: sketch_id.to_string(),
+        source: SketchEventSource::Agent,
+    });
 }
 
 fn error_json(error: &str, message: impl Into<String>) -> serde_json::Value {
