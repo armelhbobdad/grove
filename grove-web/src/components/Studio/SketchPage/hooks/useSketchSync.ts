@@ -8,6 +8,7 @@ interface SketchEvent {
   task_id?: string;
   sketch_id?: string;
   source?: "user" | "agent";
+  scene?: unknown;
 }
 
 interface UseSketchSyncResult {
@@ -150,6 +151,13 @@ export function useSketchSync(
         ) {
           const activeId = sketchIdRef.current;
           if (!activeId) return;
+          if (data.scene !== undefined) {
+            // Backend includes the full scene in the event — no refetch needed.
+            setScene(data.scene);
+            setRemoteTick((t) => t + 1);
+            return;
+          }
+          // Defensive fallback for older backends that don't ship the scene.
           try {
             const fresh = await getSketchScene(projectId, taskId, activeId);
             setScene(fresh);
