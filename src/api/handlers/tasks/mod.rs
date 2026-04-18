@@ -6,6 +6,7 @@ pub mod file_explorer;
 pub mod git_ops;
 pub mod notes;
 pub mod review;
+pub mod sketch_events;
 pub mod types;
 
 // Re-export all public items so routing table needs zero changes.
