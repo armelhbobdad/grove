@@ -51,6 +51,13 @@ without affecting other tasks or the main codebase.
 9. **grove_send_prompt** — Send prompt / respond to permission / cancel turn
 10. **grove_list_chats** — List chat sessions for a task
 
+### Task Sketches (Excalidraw)
+11. **grove_sketch_list** — List sketches in a task
+12. **grove_sketch_new** — Create a new empty sketch
+13. **grove_sketch_read** — Read scene elements (call before modifying)
+14. **grove_sketch_patch** — Create / update / delete elements
+15. **grove_sketch_replace** — Overwrite the whole scene
+
 ## Orchestration Workflow
 1. Find or register the target project
 2. Call `grove_list_agents` to see available worker agents
