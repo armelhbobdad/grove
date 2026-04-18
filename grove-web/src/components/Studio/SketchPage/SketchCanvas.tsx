@@ -1,7 +1,10 @@
-import { useEffect, useRef } from "react";
-import { Excalidraw } from "@excalidraw/excalidraw";
+import React, { Suspense, useEffect, useRef } from "react";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import "@excalidraw/excalidraw/index.css";
+
+const Excalidraw = React.lazy(() =>
+  import("@excalidraw/excalidraw").then((m) => ({ default: m.Excalidraw })),
+);
 
 interface Props {
   scene: unknown | null;
@@ -35,34 +38,45 @@ export function SketchCanvas({ scene, remoteTick, onChange, onExcalidrawAPI }: P
   const initial = scene as ExcalidrawScene | null;
   return (
     <div className="w-full h-full">
-      <Excalidraw
-        initialData={
-          initial
-            ? {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                elements: (initial.elements ?? []) as any,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                appState: (initial.appState ?? {}) as any,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                files: (initial.files ?? {}) as any,
-              }
-            : undefined
+      <Suspense
+        fallback={
+          <div
+            className="flex items-center justify-center h-full text-sm"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            Loading canvas…
+          </div>
         }
-        excalidrawAPI={(api) => {
-          apiRef.current = api;
-          onExcalidrawAPI?.(api);
-        }}
-        onChange={(elements, appState, files) => {
-          onChange({
-            type: "excalidraw",
-            version: 2,
-            source: "grove",
-            elements,
-            appState,
-            files,
-          });
-        }}
-      />
+      >
+        <Excalidraw
+          initialData={
+            initial
+              ? {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  elements: (initial.elements ?? []) as any,
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  appState: (initial.appState ?? {}) as any,
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  files: (initial.files ?? {}) as any,
+                }
+              : undefined
+          }
+          excalidrawAPI={(api) => {
+            apiRef.current = api;
+            onExcalidrawAPI?.(api);
+          }}
+          onChange={(elements, appState, files) => {
+            onChange({
+              type: "excalidraw",
+              version: 2,
+              source: "grove",
+              elements,
+              appState,
+              files,
+            });
+          }}
+        />
+      </Suspense>
     </div>
   );
 }
