@@ -774,6 +774,53 @@ impl GroveMcpServer {
         .await
     }
 
+    /// Apply element-level changes to a sketch
+    #[tool(
+        name = "grove_sketch_patch",
+        description = "Apply element-level changes to a sketch: create (append), update (shallow merge by id), delete (by id). Use grove_sketch_read first to learn current element ids."
+    )]
+    async fn grove_sketch_patch(
+        &self,
+        params: Parameters<SketchPatchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        blocking_json_result(move || {
+            let (_project, key) = find_project_key(&p.project_id)?;
+            crate::storage::sketches::apply_element_patch(
+                &key,
+                &p.task_id,
+                &p.sketch_id,
+                &p.created,
+                &p.updated,
+                &p.deleted,
+            )
+            .map_err(|e| mcp_err(&e.to_string()))?;
+            broadcast_scene_updated(&key, &p.task_id, &p.sketch_id);
+            Ok(json!({ "ok": true }))
+        })
+        .await
+    }
+
+    /// Overwrite a sketch's entire scene
+    #[tool(
+        name = "grove_sketch_replace",
+        description = "Overwrite a sketch's entire scene. Use for large rewrites where patch would be noisier than replace."
+    )]
+    async fn grove_sketch_replace(
+        &self,
+        params: Parameters<SketchReplaceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        blocking_json_result(move || {
+            let (_project, key) = find_project_key(&p.project_id)?;
+            crate::storage::sketches::replace_scene(&key, &p.task_id, &p.sketch_id, &p.scene)
+                .map_err(|e| mcp_err(&e.to_string()))?;
+            broadcast_scene_updated(&key, &p.task_id, &p.sketch_id);
+            Ok(json!({ "ok": true }))
+        })
+        .await
+    }
+
     /// Read user-written notes for the current task
     #[tool(
         name = "grove_read_notes",

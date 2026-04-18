@@ -175,6 +175,72 @@ pub fn save_index(project: &str, task_id: &str, index: &SketchIndex) -> Result<(
     Ok(())
 }
 
+/// Apply a patch to an existing Excalidraw scene.
+/// `created` is a list of new element objects to append.
+/// `updated` is a map of element id → partial patch object (shallow merge).
+/// `deleted` is a list of element ids to remove.
+pub fn apply_element_patch(
+    project: &str,
+    task_id: &str,
+    sketch_id: &str,
+    created: &[serde_json::Value],
+    updated: &serde_json::Map<String, serde_json::Value>,
+    deleted: &[String],
+) -> Result<String> {
+    let raw = load_scene(project, task_id, sketch_id)?;
+    let mut scene: serde_json::Value = serde_json::from_str(&raw)?;
+    let elements = scene
+        .get_mut("elements")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| crate::error::GroveError::storage("scene.elements missing"))?;
+
+    // Deletes
+    elements.retain(|el| {
+        let id = el
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        !deleted.iter().any(|d| d == id)
+    });
+
+    // Updates (shallow merge of provided fields)
+    for el in elements.iter_mut() {
+        let id = el
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(String::from);
+        if let Some(id) = id {
+            if let Some(patch) = updated.get(&id) {
+                if let (Some(el_obj), Some(patch_obj)) = (el.as_object_mut(), patch.as_object()) {
+                    for (k, v) in patch_obj.iter() {
+                        el_obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Creates
+    for el in created {
+        elements.push(el.clone());
+    }
+
+    let out = serde_json::to_string(&scene)?;
+    save_scene(project, task_id, sketch_id, &out)?;
+    Ok(out)
+}
+
+/// Overwrite a sketch's entire scene with the given JSON value.
+pub fn replace_scene(
+    project: &str,
+    task_id: &str,
+    sketch_id: &str,
+    scene: &serde_json::Value,
+) -> Result<()> {
+    let body = serde_json::to_string(scene)?;
+    save_scene(project, task_id, sketch_id, &body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +377,58 @@ mod tests {
         assert!(index.sketches.is_empty());
         let dir = sketches_dir(&env.project, &env.task_id).unwrap();
         assert!(!sketch_path_in(&dir, &meta.id).exists());
+    }
+
+    #[test]
+    fn apply_patch_creates_updates_deletes() {
+        let env = TestEnv::new();
+        let meta = create_sketch(&env.project, &env.task_id, "p").unwrap();
+        // Seed one element
+        let seed = serde_json::json!({
+            "type": "excalidraw", "version": 2, "source": "grove",
+            "elements": [{"id":"a","type":"rectangle","x":0,"y":0}],
+            "appState": {}, "files": {}
+        });
+        replace_scene(&env.project, &env.task_id, &meta.id, &seed).unwrap();
+
+        let mut updates = serde_json::Map::new();
+        updates.insert("a".into(), serde_json::json!({"x": 42}));
+        let creates = vec![serde_json::json!({"id":"b","type":"ellipse","x":10,"y":10})];
+        let deletes: Vec<String> = vec![];
+        apply_element_patch(
+            &env.project,
+            &env.task_id,
+            &meta.id,
+            &creates,
+            &updates,
+            &deletes,
+        )
+        .unwrap();
+
+        let raw = load_scene(&env.project, &env.task_id, &meta.id).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let els = v["elements"].as_array().unwrap();
+        assert_eq!(els.len(), 2);
+        assert_eq!(els.iter().find(|e| e["id"] == "a").unwrap()["x"], 42);
+
+        // Also verify deletion works
+        let empty_updates = serde_json::Map::new();
+        let empty_creates: Vec<serde_json::Value> = vec![];
+        let dels = vec!["a".to_string()];
+        apply_element_patch(
+            &env.project,
+            &env.task_id,
+            &meta.id,
+            &empty_creates,
+            &empty_updates,
+            &dels,
+        )
+        .unwrap();
+        let raw2 = load_scene(&env.project, &env.task_id, &meta.id).unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&raw2).unwrap();
+        let els2 = v2["elements"].as_array().unwrap();
+        assert_eq!(els2.len(), 1);
+        assert_eq!(els2[0]["id"], "b");
     }
 
     #[test]
