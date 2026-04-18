@@ -7,6 +7,7 @@ pub mod git_ops;
 pub mod notes;
 pub mod review;
 pub mod sketch_events;
+pub mod sketch_ws;
 pub mod sketches;
 pub mod types;
 

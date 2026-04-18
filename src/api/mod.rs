@@ -231,6 +231,10 @@ pub fn create_api_router() -> Router {
             "/projects/{id}/tasks/{taskId}/sketches/{sketchId}/rename",
             post(handlers::tasks::rename_sketch),
         )
+        .route(
+            "/projects/{id}/tasks/{taskId}/sketches/ws",
+            get(handlers::tasks::sketch_ws::ws_handler),
+        )
         // Git operations API
         .route(
             "/projects/{id}/tasks/{taskId}/sync",
