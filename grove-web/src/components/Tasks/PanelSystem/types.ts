@@ -4,7 +4,7 @@
 
 // 面板类型枚举
 export type PanelType = 'terminal' | 'chat' | 'review' | 'editor'
-  | 'stats' | 'git' | 'notes' | 'comments' | 'artifacts';
+  | 'stats' | 'git' | 'notes' | 'comments' | 'artifacts' | 'sketch';
 
 // 面板实例配置
 export interface PanelInstanceConfig {

@@ -5,7 +5,7 @@ import type { IJsonModel, ITabRenderValues, ITabSetRenderValues, IJsonRowNode, I
 import {
   Terminal, MessageSquare, Code, FileCode, BarChart3, GitBranch, FileText,
   MessageCircle, X, XCircle, Trash2,
-  Plus, Maximize, Minimize2, FolderOpen,
+  Plus, Maximize, Minimize2, FolderOpen, Pencil,
 } from 'lucide-react';
 import 'flexlayout-react/style/light.css';
 import './flexlayout-theme.css';
@@ -18,6 +18,7 @@ import { TaskCodeReview } from '../TaskView/TaskCodeReview';
 import { TaskEditor } from '../TaskView/TaskEditor';
 import { StatsTab, GitTab, NotesTab, CommentsTab, ArtifactsTab } from '../TaskInfoPanel/tabs';
 import type { ArtifactPreviewRequest } from '../TaskInfoPanel/tabs';
+import { SketchPage } from '../../Studio/SketchPage';
 import { ContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { useConfig, useProject } from '../../../context';
 
@@ -219,6 +220,7 @@ export const FlexLayoutContainer = forwardRef<
     notes: 0,
     comments: 0,
     artifacts: 0,
+    sketch: 0,
   });
 
   // Get panel label
@@ -233,6 +235,7 @@ export const FlexLayoutContainer = forwardRef<
       notes: 'Notes',
       comments: 'Comments',
       artifacts: 'Artifacts',
+      sketch: 'Sketch',
     };
     return labels[type];
   }, []);
@@ -583,6 +586,8 @@ export const FlexLayoutContainer = forwardRef<
         return { icon: MessageCircle, color: 'var(--color-error)' };
       case 'artifacts':
         return { icon: FolderOpen, color: 'var(--color-highlight)' };
+      case 'sketch':
+        return { icon: Pencil, color: 'var(--color-accent)' };
       default:
         return { icon: Terminal, color: 'var(--color-text-muted)' };
     }
@@ -676,6 +681,7 @@ export const FlexLayoutContainer = forwardRef<
     }
     if (isStudio) {
       items.push({ id: 'artifacts', label: 'Artifacts', icon: FolderOpen, onClick: () => addPanel('artifacts'), shortcut: 'f' });
+      items.push({ id: 'sketch', label: 'Sketch', icon: Pencil, onClick: () => addPanel('sketch') });
     }
     if (terminalAvailable) {
       items.push({ id: 'terminal', label: 'Terminal', icon: Terminal, onClick: () => addPanel('terminal'), shortcut: 't' });
@@ -847,6 +853,13 @@ export const FlexLayoutContainer = forwardRef<
         return (
           <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
             <ArtifactsTab projectId={projectId} task={task} previewRequest={artifactPreviewRequest} lastChatIdleAt={lastChatIdleAt} isChatBusy={isChatBusy} />
+          </div>
+        );
+
+      case 'sketch':
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
+            <SketchPage projectId={projectId} taskId={task.id} />
           </div>
         );
 
