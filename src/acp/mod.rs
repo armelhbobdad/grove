@@ -1077,7 +1077,17 @@ async fn run_acp_session(
         writer = Box::new(w);
     } else {
         // Local: 子进程
-        let mut proc = tokio::process::Command::new(&config.agent_command)
+        // Resolve the program through PATH+PATHEXT before spawning. On Windows
+        // `CreateProcessW` doesn't search PATHEXT, so a bare "opencode" fails
+        // even when `opencode.cmd` (an npm shim) is on PATH. Pre-resolving to
+        // an absolute path makes spawn behave consistently with the shell.
+        let resolved = crate::check::resolve_program(&config.agent_command).ok_or_else(|| {
+            crate::error::GroveError::Session(format!(
+                "Failed to spawn ACP agent '{}': program not found on PATH",
+                config.agent_command
+            ))
+        })?;
+        let mut proc = tokio::process::Command::new(&resolved)
             .args(&config.agent_args)
             .current_dir(&config.working_dir)
             .stdin(std::process::Stdio::piped())
@@ -1088,8 +1098,10 @@ async fn run_acp_session(
             .spawn()
             .map_err(|e| {
                 crate::error::GroveError::Session(format!(
-                    "Failed to spawn ACP agent '{}': {}",
-                    config.agent_command, e
+                    "Failed to spawn ACP agent '{}' ({}): {}",
+                    config.agent_command,
+                    resolved.display(),
+                    e
                 ))
             })?;
 
