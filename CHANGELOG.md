@@ -5,7 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.10] - 2026-04-17
+## [0.9.0] - 2026-04-19
+
+### Added
+
+- **Sketches (Excalidraw) panel** — new first-class Sketch panel type integrates Excalidraw into FlexLayout: per-task sketch storage under the task workdir, tab bar with right-click rename/delete, multi-client live updates over WebSocket, and lazy-loaded bundle to keep the main chunk small
+- **Sketch REST & WS API** — list/create/delete/rename endpoints, scene GET/PUT, element-level PATCH, and a broadcast channel that ships scene payloads inside `SketchUpdated` events so clients update without refetching
+- **Sketch MCP tools** — `sketch_list`, `sketch_read`, `sketch_new`, `sketch_patch`, and `sketch_replace` exposed via MCP, with management instructions and a `using-grove-sketch` skill
+- **Run in Terminal** — open a task's tmux session in the system terminal, plus modernized code blocks in chat rendering
+
+### Improved
+
+- **Windows support** — hardened install script, native notifications, and platform gating across `grove web`, `grove mcp`, `grove acp`, and `grove gui`; agent detection now works on Windows
+
+### Fixed
+
+- **Terminal panel regression** — terminal panel chrome restored and task re-entry no longer drops the active session
+- **Sketch data integrity** — path-traversal validation on `sketch_id`, pending-save flush on unmount/tab switch, and realtime resilience hardening
+
+
 
 ### Added
 

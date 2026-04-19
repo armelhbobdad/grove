@@ -228,8 +228,11 @@ export function useSketchSync(
   useEffect(() => {
     // Reset connection state for the new (project, task) pair so the
     // "Reconnecting…" pill doesn't reflect the previous task's state while
-    // the new socket handshakes.
-    setWsConnected(undefined);
+    // the new socket handshakes. Deferred via microtask so the effect body
+    // doesn't synchronously trigger a cascading render.
+    queueMicrotask(() => {
+      if (!closed) setWsConnected(undefined);
+    });
     let closed = false;
     let ws: WebSocket | null = null;
     let retryTimer: number | null = null;

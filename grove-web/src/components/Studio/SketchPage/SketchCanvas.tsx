@@ -40,12 +40,12 @@ const LazyExcalidraw = React.lazy(async () => {
     // drives itself imperatively. Parent re-renders on every keystroke pass
     // a fresh `initialData` object (reference-new), which would otherwise
     // re-run `convertToExcalidrawElements` over all elements on each
-    // keystroke. Cache the result in a ref so the conversion runs exactly
-    // once per mount, then hand Excalidraw a stable reference.
-    const transformedRef = React.useRef<
+    // keystroke. Use a lazy `useState` initializer so the conversion runs
+    // exactly once per mount, then hand Excalidraw a stable reference.
+    const [transformed] = React.useState<
       { elements: unknown[]; appState?: unknown; files?: unknown } | undefined
-    >(undefined);
-    if (transformedRef.current === undefined && props.initialData) {
+    >(() => {
+      if (!props.initialData) return undefined;
       const data = props.initialData as {
         elements?: unknown[];
         appState?: unknown;
@@ -55,9 +55,8 @@ const LazyExcalidraw = React.lazy(async () => {
       // Second arg keeps existing ids stable — critical so labels produced
       // by a prior load (with auto-generated ids) don't duplicate.
       const elements = convertToExcalidrawElements(raw, { regenerateIds: false });
-      transformedRef.current = { ...data, elements };
-    }
-    const transformed = transformedRef.current;
+      return { ...data, elements };
+    });
     const { initialData: _omit, ...rest } = props;
     void _omit;
     return (
