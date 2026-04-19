@@ -335,3 +335,25 @@ body.blitz-command-pressed .blitz-shortcut {
 .markdown-code-block .hljs-punctuation {
   color: var(--color-text-muted);
 }
+
+/* xterm.js visual cleanup:
+   1. .xterm-viewport has `overflow-y: scroll` + `background-color: #000` by
+      default, which on Mac reserves scrollbar track space that shows as a
+      thin black vertical stripe at the right edge. Hide the native scrollbar
+      and clear the black bg.
+   2. .xterm-scrollable-element draws its own custom scroll shadows (.shadow)
+      and scrollbar overlay (.scrollbar) — remove them too. */
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+  scrollbar-width: none;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.xterm .xterm-scrollable-element > .shadow,
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+  box-shadow: none !important;
+}

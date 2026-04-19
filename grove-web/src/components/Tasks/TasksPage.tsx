@@ -169,7 +169,10 @@ export function TasksPage({ initialTaskId, initialViewMode, onNavigationConsumed
   useEffect(() => {
     if (!exitWorkspaceSignal) return;
     if (inWorkspaceRef.current) pageHandlers.handleCloseTask();
-  }, [exitWorkspaceSignal, pageHandlers]);
+    // pageHandlers intentionally omitted: it's recreated every render, which
+    // would re-fire this effect after re-entering Workspace and immediately
+    // close it. handleCloseTask is useCallback-stable.
+  }, [exitWorkspaceSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset workspace state when project changes (sidebar switch or notification navigation)
   useEffect(() => {

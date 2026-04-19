@@ -63,7 +63,7 @@ export function MultiTabTerminalPanel({
   }, [tabs, activeId, onTabsChange]);
 
   return (
-    <div className={`ide-panel-slot ide-panel-slot--${side}`}>
+    <div className={`ide-panel-slot ide-panel-slot--${side} ide-panel-slot--terminal`}>
       {/* Tab bar */}
       <div className="ide-terminal-tabbar">
         {tabs.map((tab) => (
