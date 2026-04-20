@@ -164,7 +164,7 @@ jobs:
         if: matrix.cache-key == 'linux-x64-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Install Linux GUI dependencies
-        if: matrix.cache-key == 'linux-x64-gnu-gui'
+        if: matrix.cache-key == 'ci-linux-x64-gnu-gui'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
