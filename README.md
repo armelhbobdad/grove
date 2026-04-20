@@ -1,309 +1,126 @@
 # Grove
 
-**AI Development, Start to Ship.**
+### Where humans and AI agents build together.
+**AI development, for everyone — not just coders.**
 
-[![Website](https://img.shields.io/badge/website-grove-10b981?style=flat&logo=github)](https://garrickz2.github.io/grove/)
+[![Website](https://img.shields.io/badge/website-grove-3f6b3f?style=flat&logo=github)](https://garrickz2.github.io/grove/)
 [![Crates.io](https://img.shields.io/crates/v/grove-rs.svg)](https://crates.io/crates/grove-rs)
 [![Downloads](https://img.shields.io/crates/d/grove-rs.svg)](https://crates.io/crates/grove-rs)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 
-![Grove](docs/images/hero.png)
+![Grove](docs/images/home-hero-studio.png)
 
-Write a spec, let AI code it, review together, merge with confidence. Each task gets its own Git worktree and tmux/Zellij session — isolated, organized, always ready to resume.
+Grove is a workspace for you and your AI development team. Write a spec, send a sketch, hold a button and talk — every major coding agent runs in parallel, every change goes through review, every merge is a decision someone made. From your terminal, your browser, your desktop, or your phone.
 
-**Works with:** Claude Code · CodeX · Gemini · Copilot · Trae · Kimi · Qwen · OpenCode · any agent via MCP
-
----
-
-## Quick Start
-
-**Install:**
-```bash
-# macOS / Linux / WSL
-brew tap GarrickZ2/grove && brew install grove
-# or
-curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | sh
-# or
-cargo install grove-rs
-```
-```powershell
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/GarrickZ2/grove/master/install.ps1 | iex
-# or
-cargo install grove-rs
-```
-
-**macOS App:** [Download .dmg](https://github.com/GarrickZ2/grove/releases/latest) — drag to Applications, includes GUI + Web UI + TUI.
-
-**Run:**
-```bash
-cd your-project
-grove          # Resumes last mode (TUI on first run)
-grove tui      # TUI
-grove web      # Web UI (http://localhost:3001)
-grove gui      # Desktop GUI
-grove mobile   # Remote access (phone/tablet via LAN)
-```
-
-Running `grove` without arguments launches the last mode you used. First time? It starts the TUI. After `grove web --port 8080`, the next `grove` reopens the web UI on port 8080.
-
----
-
-## Every AI Gets Its Own World
-
-Each task lives in a fully isolated workspace — its own git branch, its own session, its own spec. Run multiple agents in parallel without conflicts.
-
-<p align="center">
-  <img src="docs/images/create.gif" alt="Create a task" width="720">
-</p>
-
-- **Own Branch** — Dedicated git worktree per task. Branches never collide.
-- **Own Session** — Each task in its own tmux or Zellij session. Context stays intact.
-- **Own Spec** — Write instructions before the agent starts. Clear intent, focused output.
-
----
-
-## Work With AI, Your Way
-
-Two modes, one workspace. Chat interactively or let agents run autonomously in the terminal.
-
-| | |
-|---|---|
-| ![Chat Mode](docs/images/chat-mode.png) | ![CLI Mode](docs/images/cli-mode.png) |
-| **Chat** — A familiar chat interface for every agent. Different agents, same experience. | **CLI** — The way coding agents were designed to run. Full terminal, native experience. |
-
----
-
-## Review Together. Ship With Confidence.
-
-Comment on any line, discuss in threads, approve or reject — every merge is a conscious decision. Then merge in one step: rebase, merge, and clean up with no manual git gymnastics.
-
-![Code Review](docs/images/diff-review.png)
-
-![Merge and Ship](docs/images/ship-merge.png)
-
----
-
-## Skills
-
-Browse a library of skills, install with one click, and every agent gets smarter automatically.
-
-<p align="center">
-  <img src="docs/images/skills-demo.gif" alt="Skills" width="720">
-</p>
-
-- Browse and install in one click
-- Global or project-level scope
-- Works with all agents via MCP
-
----
-
-## Three Interfaces
-
-### TUI — `grove tui`
-
-Keyboard-first terminal interface. Create tasks, write specs, launch agents, and ship — all without leaving your terminal.
-
-![Grove TUI](docs/images/tui-grove.png)
-
-| Key | Action |
-|-----|--------|
-| `n` | New task |
-| `Enter` | Open task in tmux/Zellij |
-| `Space` | Action menu |
-| `j/k` | Navigate |
-| `Tab` | Switch tabs |
-| `/` | Search |
-| `p` | Toggle preview panel |
-| `t` | Change theme |
-| `?` | Help |
-| `q` | Quit |
-
-### Web UI — `grove web`
-
-Full-featured web interface embedded in the binary — no separate frontend deployment. Two modes: **Zen** (single-project focus) and **Blitz** (cross-project task aggregation).
-
-![Grove Web](docs/images/grove-web.png)
-
-```bash
-grove web                  # Start on port 3001
-grove web --port 8080      # Custom port
-```
-
-Binds to `localhost` only — designed for desktop use on the same machine, no authentication required. To access Grove from other devices, use `grove mobile` instead.
-
-### GUI — `grove gui`
-
-Native desktop app powered by Tauri 2 WebView. Same frontend as Grove Web, runs in a native window.
-
-![Grove GUI](docs/images/grove-gui.png)
-
-GUI availability per platform:
-
-- **macOS** — Included by default in the prebuilt release binaries and the `.dmg` app. Just run `grove gui`.
-- **Linux** — A separate GUI-enabled build is published as `*-unknown-linux-gnu-gui.tar.gz`. Install it via `GROVE_GUI=1` (see Install section). Requires WebKitGTK/GTK runtime libraries.
-- **Windows** — **Not** included in the prebuilt `grove.exe` release binary. To use the GUI on Windows, install from source with the `gui` feature: `cargo install grove-rs --features gui`. Tauri uses the system WebView2 runtime, which ships with Windows 10/11 by default (no extra install needed).
-
-For any platform, `cargo install grove-rs --features gui` builds Grove with GUI support locally.
-
----
-
-## And There's More
-
-| Feature | |
-|---------|---|
-| **AutoLink** | Automatically symlink heavy dependencies across worktrees so every task is ready to run instantly. |
-| **Flexible Layout** | Drag, split, and resize panels. Build the workspace that fits your flow. |
-| **Blitz View** | All tasks, all projects, one view. Switch between agents instantly. |
-| **Stay Notified** | Get alerts when agents finish, need review, or hit errors. |
-| **Builtin Editor** | Edit files, browse the tree, and manage code — all inside Grove's web interface. |
-| **Statistics** | Track tasks shipped, agent activity, and project health at a glance. |
-| **11 Themes** | Dracula, Nord, Gruvbox, Tokyo Night, Catppuccin, and more. Auto dark/light detection. |
-
----
-
-## Access Grove Remotely
-
-Use `grove mobile` to access Grove from your phone, tablet, or any device on the network. Authentication uses HMAC-SHA256 signatures — the secret key never travels over the wire. Run Grove on a Mac Mini at home, then manage your tasks from anywhere — your laptop, phone, or tablet.
-
-```bash
-grove mobile                    # LAN IP, HMAC auth
-grove mobile --tls              # + self-signed TLS
-grove mobile --cert a.pem --key a.key  # + your own certificate
-grove mobile --public           # bind 0.0.0.0 (all interfaces)
-grove mobile --host 10.0.0.5    # bind specific IP
-```
-
-A QR code is printed in the terminal — scan it to connect instantly with the secret key embedded.
-
-**`grove mobile` (default)** — Every request is signed with HMAC-SHA256. The secret key stays on your devices and is never sent over the network, so captured traffic cannot be used to forge new requests. On a trusted home or office network this is secure and frictionless. However, traffic content is unencrypted (HTTP), meaning someone on the same network *could* see the data in transit. For most private LANs this is a non-issue.
-
-**`grove mobile --tls`** — Adds HTTPS encryption via a self-signed certificate. All traffic is encrypted — no one on the network can read or tamper with it, even on untrusted networks (coffee shops, shared Wi-Fi). The trade-off: your browser will show a certificate warning on first visit, and you'll need to manually trust it (especially painful on iOS). Use this when you don't fully trust the network.
-
-**`grove mobile --cert cert.pem --key key.pem`** — Bring your own domain and CA-signed certificate for the best experience: full HTTPS encryption with no browser warnings. If you have a domain pointing to your machine (e.g. via Tailscale, Cloudflare Tunnel, or local DNS), this is the smoothest and most secure way to access Grove remotely.
-
----
-
-## Agent Hooks
-
-Get notified when AI agents finish, need attention, or hit errors.
-
-```bash
-grove hooks notice    # Task completed
-grove hooks warn      # Needs attention
-grove hooks critical  # Something's wrong
-```
-
-Press `h` in Grove to configure sound and notification settings.
-
----
-
-## MCP Server
-
-Built-in MCP server. AI agents can manage projects and tasks, read notes, reply to reviews, and complete tasks autonomously.
-
-Add to your Claude Code MCP config (`~/.claude/config.json`):
-
-```json
-{
-  "mcpServers": {
-    "grove": {
-      "command": "grove",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Management tools (only available when NOT in a Grove task):
-
-| Tool | Description |
-|------|-------------|
-| `grove_add_project_by_path` | Register a Git project by local path (idempotent) |
-| `grove_list_projects` | List all registered projects |
-| `grove_create_task` | Create a new task/worktree under a project |
-| `grove_list_tasks` | List active tasks under a project |
-
-Execution tools (only available inside a Grove task):
-
-| Tool | Description |
-|------|-------------|
-| `grove_status` | Check if running inside a Grove task, get context |
-| `grove_read_notes` | Read user-provided task notes |
-| `grove_read_review` | Read code review comments with status |
-| `grove_reply_review` | Reply to review comments (supports batch) |
-| `grove_add_comment` | Create review comments on specific code locations |
-| `grove_complete_task` | Complete task: commit → rebase → merge → archive |
+> Grove treats **Studio** — the space where designers, PMs, and brand folks shape the product alongside AI — as a first-class surface. Code review is rigorous. But the product isn't just "a review tool that also has chat."
 
 ---
 
 ## Install
 
-Single binary with embedded web frontend. No runtime dependencies beyond Git and a terminal multiplexer.
+Single binary with the Web IDE embedded. Only Git and a terminal multiplexer on Unix.
 
-**Homebrew**:
 ```bash
+# Homebrew
 brew tap GarrickZ2/grove && brew install grove
-```
 
-**Shell** (macOS / Linux / WSL — auto-detect platform):
-```bash
+# Shell (macOS / Linux / WSL)
 curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | sh
 
-# Linux desktop GUI build
-curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | GROVE_GUI=1 sh
-
-# Custom install path (default: /usr/local/bin)
-INSTALL_DIR=~/.local/bin curl -sSL https://raw.githubusercontent.com/GarrickZ2/grove/master/install.sh | sh
-```
-
-> WSL users: use the shell installer above — Grove runs natively under WSL with the Linux binary.
-
-**Windows** (PowerShell):
-```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/GarrickZ2/grove/master/install.ps1 | iex
 
-# Custom install path (default: %LOCALAPPDATA%\Programs\Grove)
-$env:GROVE_INSTALL_DIR = "C:\Tools\Grove"; irm https://raw.githubusercontent.com/GarrickZ2/grove/master/install.ps1 | iex
-
-# or via cargo
-cargo install grove-rs
+# Cargo
+cargo install grove-rs                 # TUI + Web + MCP
+cargo install grove-rs --features gui  # + native desktop GUI
 ```
 
-The PowerShell script downloads `grove.exe` and adds the install directory to your user `PATH` automatically (no admin required). Note: IDE/Terminal application detection is not yet supported on Windows.
+**Prebuilt binaries** — macOS `.dmg`, Windows `.exe`, Linux `.tar.gz` / `.AppImage`: [Latest release ↗](https://github.com/GarrickZ2/grove/releases/latest)
 
-**macOS App**:
+**Run:**
 
-Download the `.dmg` from [GitHub Releases](https://github.com/GarrickZ2/grove/releases/latest), open it, and drag Grove to Applications. Universal binary — runs natively on Apple Silicon and Intel Macs.
-
-**Linux GUI dependencies**:
 ```bash
-# Debian/Ubuntu
-sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2
+cd your-project
+grove          # Smart start — resumes your last mode
+grove web      # Browser IDE on http://localhost:3001
+grove gui      # Native desktop window (Tauri)
+grove mobile   # LAN access for phone / tablet with HMAC auth
+grove tui      # Keyboard-first terminal UI
 ```
 
-**Cargo**:
-```bash
-cargo install grove-rs                   # TUI + Web UI
-cargo install grove-rs --features gui    # + native desktop GUI
-```
+---
 
-**From Source**:
-```bash
-git clone https://github.com/GarrickZ2/grove.git
-cd grove && cargo build --release
-cp target/release/grove /usr/local/bin/
-```
+## What Grove gives you
+
+### 🌿 Every agent, in parallel
+
+Grove speaks ACP — ten agents built in, three more (Hermes, Kiro, OpenClaw) with first-class icons ready for custom configs. Each task runs in its own Git worktree with its own session, so ten agents can work at once without collision.
+
+**Built-in:** Claude Code · Codex · Gemini CLI · GitHub Copilot · Cursor Agent · Junie · Trae CLI · Kimi · Qwen · OpenCode
+**Ready for ACP:** Hermes · Kiro · OpenClaw
+**Bring your own:** any binary that speaks ACP over stdio, or any HTTP endpoint.
+
+### 🎨 Studio — for everyone on the team
+
+Studio is the room inside Grove where non-coders join the AI workflow. Upload shared assets (hard-linked across worktrees), edit Project Memory and Workspace Instructions without touching the CLI, draw on a real Excalidraw canvas agents can read, and watch artifacts (D2 diagrams, Mermaid, images, code, HTML) render inline as the agents produce them.
+
+![Studio sketch](docs/images/studio-sketch.png)
+
+### 🚢 Every merge, a decision
+
+Review isn't just a diff. It's a threaded, resolvable, AI-assisted workspace. Comment on any line, discuss, let the AI fixer resolve your comments in a batch, and ship in one step — commit → rebase → merge → archive, with cross-branch safety and squash-merge detection built in.
+
+![Code review](docs/images/code-review.png)
+
+### 🌐 Anywhere — TUI · Web · GUI · Mobile · Voice
+
+One binary, four surfaces:
+- **Web IDE** — the main event. FlexLayout with 10 panel types, IDE Layout mode, Studio, ⌘K command palette.
+- **Desktop (Tauri)** — the same IDE in a native window. macOS DMG; Linux / Windows via feature flag.
+- **Mobile** — LAN access with HMAC request signing, QR-code onboarding, optional TLS.
+- **TUI** — the original keyboard-first surface. Still here, still fast.
+
+Plus **Radio** — a walkie-talkie for your phone. Hold to speak; the transcript lands in the right chat or terminal in real time.
+
+### 🧩 Skills, MCP, your own
+
+Install a skill once, every installed agent gets smarter. Expose Grove via `grove mcp` so an orchestrator agent can manage your tasks. Plug in any custom agent with a launch command or URL. Notification hooks on every platform.
+
+---
+
+## Who Grove is for
+
+Grove serves three kinds of people on the same project:
+
+- **Power developers** — Web IDE with FlexLayout, Blitz across projects, 10 agents in parallel; TUI when you want it.
+- **Visual thinkers** — IDE Layout, Sketch canvases agents can read, click-through reviews, inline D2 / Mermaid.
+- **Non-technical collaborators** — Studio to manage assets and memory; Radio to drive AI by voice from a phone. No terminal. No git. Still shipping.
+
+---
+
+## Dig deeper
+
+| | |
+|---|---|
+| 🌿 **[Agents →](https://garrickz2.github.io/grove/agents.html)**<br>Every coding agent, in parallel. | 🎨 **[Studio →](https://garrickz2.github.io/grove/studio.html)**<br>For everyone on the team. |
+| 🌐 **[Anywhere →](https://garrickz2.github.io/grove/anywhere.html)**<br>TUI · Web · GUI · Mobile · Voice. | 🚢 **[Workflow →](https://garrickz2.github.io/grove/workflow.html)**<br>Spec to ship, with rigor. |
+| 🧩 **[Extend →](https://garrickz2.github.io/grove/extend.html)**<br>Skills · MCP · Yours. | 📜 **[Capabilities →](docs/capabilities.md)**<br>Full feature reference. |
 
 ---
 
 ## Requirements
 
 - Git 2.20+
-- tmux 3.0+ or Zellij (tmux/Zellij not required on Windows)
+- tmux 3.0+ or Zellij *(not required on Windows)*
 - macOS 12+, Linux, or Windows 10/11
+
+**Linux GUI runtime deps** (Debian/Ubuntu):
+
+```bash
+sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2
+```
 
 ## License
 

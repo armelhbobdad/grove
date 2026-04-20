@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 440" role="img" aria-label="Grove workflow: Spec, Develop, Review, Ship, Measure">
+  <defs>
+    <style>
+      .paper { fill: #eef0e6; }
+      .ink { fill: #18241e; }
+      .ink-2 { fill: #3a4a40; }
+      .moss { fill: #2d4a2d; }
+      .moss-bright { fill: #3f6b3f; }
+      .line-soft { stroke: #c9ccbd; stroke-width: 1.5; fill: none; }
+      .line-moss { stroke: #3f6b3f; stroke-width: 2; fill: none; }
+      .serif { font-family: 'Fraunces', 'Times New Roman', serif; font-variation-settings: "opsz" 144, "SOFT" 30; font-weight: 500; }
+      .serif-it { font-family: 'Fraunces', 'Times New Roman', serif; font-style: italic; font-weight: 400; }
+      .sans { font-family: 'Inter', -apple-system, sans-serif; font-weight: 500; }
+      .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 500; }
+    </style>
+  </defs>
+
+  <rect class="paper" width="1400" height="440"/>
+
+  <!-- long hairline spine -->
+  <path class="line-soft" stroke-dasharray="3 6" d="M 110 210 H 1290"/>
+
+  <!-- arrow tip at end -->
+  <path class="line-moss" d="M 1280 200 L 1298 210 L 1280 220"/>
+  <!-- return loop hint -->
+  <path class="line-soft" stroke-dasharray="2 4" d="M 1298 210 C 1340 260, 1340 380, 700 400 C 60 380, 60 260, 102 210"/>
+
+  <!-- Step template positions: x = 170, 430, 690, 950, 1210 -->
+
+  <!-- 01 SPEC -->
+  <g transform="translate(170,210)">
+    <circle r="34" class="paper" stroke="#3f6b3f" stroke-width="2"/>
+    <text class="mono ink" font-size="11" text-anchor="middle" y="-50" letter-spacing="2">§ 01</text>
+    <text class="serif moss" font-size="22" text-anchor="middle" y="6">Spec</text>
+    <text class="sans ink-2" font-size="13" text-anchor="middle" y="76">Write the brief.</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="98">What we're building,</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="116">and why.</text>
+  </g>
+
+  <!-- 02 DEVELOP -->
+  <g transform="translate(430,210)">
+    <circle r="34" class="paper" stroke="#3f6b3f" stroke-width="2"/>
+    <text class="mono ink" font-size="11" text-anchor="middle" y="-50" letter-spacing="2">§ 02</text>
+    <text class="serif moss" font-size="22" text-anchor="middle" y="6">Develop</text>
+    <text class="sans ink-2" font-size="13" text-anchor="middle" y="76">Agents draft.</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="98">In parallel worktrees,</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="116">never colliding.</text>
+  </g>
+
+  <!-- 03 REVIEW -->
+  <g transform="translate(690,210)">
+    <circle r="40" class="moss"/>
+    <circle r="40" cx="0" cy="0" fill="none" stroke="#2d4a2d" stroke-width="2"/>
+    <text class="mono paper" font-size="11" text-anchor="middle" y="-58" letter-spacing="2" fill="#18241e">§ 03</text>
+    <text class="serif" font-size="24" text-anchor="middle" y="7" fill="#eef0e6">Review</text>
+    <text class="sans ink-2" font-size="13" text-anchor="middle" y="82">Humans + AI, inline.</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="104">Every diff, a decision</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="122">someone made.</text>
+  </g>
+
+  <!-- 04 SHIP -->
+  <g transform="translate(950,210)">
+    <circle r="34" class="paper" stroke="#3f6b3f" stroke-width="2"/>
+    <text class="mono ink" font-size="11" text-anchor="middle" y="-50" letter-spacing="2">§ 04</text>
+    <text class="serif moss" font-size="22" text-anchor="middle" y="6">Ship</text>
+    <text class="sans ink-2" font-size="13" text-anchor="middle" y="76">One-step merge.</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="98">Worktree gone,</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="116">history kept.</text>
+  </g>
+
+  <!-- 05 MEASURE -->
+  <g transform="translate(1210,210)">
+    <circle r="34" class="paper" stroke="#3f6b3f" stroke-width="2"/>
+    <text class="mono ink" font-size="11" text-anchor="middle" y="-50" letter-spacing="2">§ 05</text>
+    <text class="serif moss" font-size="22" text-anchor="middle" y="6">Measure</text>
+    <text class="sans ink-2" font-size="13" text-anchor="middle" y="76">Stats per agent.</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="98">Who reviews,</text>
+    <text class="serif-it ink-2" font-size="14" text-anchor="middle" y="116">who ships, who waits.</text>
+  </g>
+
+  <!-- top-row step numbers subtle -->
+</svg>

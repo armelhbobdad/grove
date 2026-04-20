@@ -338,18 +338,20 @@ All tmux operations are wrapped in `src/tmux/mod.rs`.
 
 ## CLI Subcommands
 
-Grove has two CLI subcommand groups (defined in `src/cli/`):
+CLI subcommands are defined in `src/cli/`:
 
 - `grove hooks <level>` — send notification hooks (notice/warn/critical)
-- `grove agent <command>` — AI agent workflow commands (status/summary/todo/notes)
+- `grove mcp` — run Grove as an MCP server for orchestrator agents
+- `grove acp` — headless ACP bridge
+- `grove register` / `grove remove` — manage registered projects
+- `grove migrate` — migrate legacy storage
 
 ### AI Integration Flow
 
-When a task is created (`create_new_task` in `app.rs`):
-1. Git worktree is created
-2. `cli::init::setup_worktree()` generates `GROVE.md` and injects into `CLAUDE.md`/`AGENTS.md`
-3. tmux session is created with `GROVE_*` environment variables
-4. Agent reads `GROVE.md` instructions and uses `grove agent` CLI to track progress
+When a task is created:
+1. Git worktree is created (Coding Task) or folder structure under `~/.grove/studios/<project>/tasks/<task>/` (Studio Task)
+2. tmux/Zellij session is created with `GROVE_*` environment variables (`GROVE_PROJECT`, `GROVE_TASK_ID`, `GROVE_TASK_NAME`, `GROVE_BRANCH`, `GROVE_TARGET`, `GROVE_PROJECT_NAME`)
+3. Agents running inside the task read these env vars and can call Grove via the built-in MCP server for context (read notes, reply to reviews, complete the task)
 
 ## TODO
 

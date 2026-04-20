@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" role="img" aria-label="Grove worktree layout: one main branch with parallel worktrees, one agent per branch">
+  <defs>
+    <style>
+      .paper { fill: #eef0e6; }
+      .ink { fill: #18241e; }
+      .ink-2 { fill: #3a4a40; }
+      .ink-3 { fill: #6b7266; }
+      .moss { fill: #2d4a2d; }
+      .moss-bright { fill: #3f6b3f; }
+      .trunk { stroke: #2d4a2d; stroke-width: 3; fill: none; }
+      .branch-live { stroke: #3f6b3f; stroke-width: 2; fill: none; }
+      .branch-idle { stroke: #a9ae9c; stroke-width: 1.5; fill: none; stroke-dasharray: 2 4; }
+      .serif { font-family: 'Fraunces', serif; font-variation-settings: "opsz" 144, "SOFT" 30; font-weight: 500; }
+      .serif-it { font-family: 'Fraunces', serif; font-style: italic; font-weight: 400; }
+      .sans { font-family: 'Inter', -apple-system, sans-serif; font-weight: 500; }
+      .mono { font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+    </style>
+  </defs>
+
+  <rect class="paper" width="900" height="500"/>
+
+  <!-- Title margin note -->
+  <text class="mono ink-3" x="40" y="44" font-size="11" letter-spacing="2">§ GIT · WORKTREES</text>
+
+  <!-- Trunk (main branch) -->
+  <path class="trunk" d="M 130 80 V 440"/>
+  <!-- main commit dots -->
+  <circle cx="130" cy="110" r="5" class="moss"/>
+  <circle cx="130" cy="175" r="5" class="moss"/>
+  <circle cx="130" cy="245" r="5" class="moss"/>
+  <circle cx="130" cy="330" r="5" class="moss"/>
+  <circle cx="130" cy="410" r="5" class="moss"/>
+
+  <!-- Trunk label -->
+  <text class="mono ink" x="130" y="470" font-size="12" text-anchor="middle" letter-spacing="1">main</text>
+  <text class="serif-it ink-3" x="130" y="62" font-size="14" text-anchor="middle">your project</text>
+
+  <!-- Branches -->
+  <!-- Branch 1: auth-refactor · Claude · busy -->
+  <path class="branch-live" d="M 130 110 C 210 110, 240 130, 300 130 H 560"/>
+  <circle cx="560" cy="130" r="6" fill="#d77757"/>
+  <text class="serif ink" x="580" y="128" font-size="19">auth-refactor</text>
+  <text class="mono ink-3" x="580" y="150" font-size="11">Claude Code · busy</text>
+
+  <!-- Branch 2: perf-hotfix · Codex · busy -->
+  <path class="branch-live" d="M 130 175 C 220 175, 250 205, 300 205 H 560"/>
+  <circle cx="560" cy="205" r="6" fill="#111111"/>
+  <text class="serif ink" x="580" y="203" font-size="19">perf-hotfix</text>
+  <text class="mono ink-3" x="580" y="225" font-size="11">Codex · busy</text>
+
+  <!-- Branch 3: landing-copy · Gemini · review -->
+  <path class="branch-live" d="M 130 245 C 225 245, 255 280, 300 280 H 560"/>
+  <circle cx="560" cy="280" r="6" fill="#4285f4"/>
+  <text class="serif ink" x="580" y="278" font-size="19">landing-copy</text>
+  <text class="mono ink-3" x="580" y="300" font-size="11">Gemini · review open</text>
+
+  <!-- Branch 4: sketch-panel · Cursor · idle -->
+  <path class="branch-idle" d="M 130 330 C 225 330, 255 355, 300 355 H 560"/>
+  <circle cx="560" cy="355" r="6" fill="none" stroke="#6b7266" stroke-width="1.5"/>
+  <text class="serif ink-2" x="580" y="353" font-size="19">sketch-panel</text>
+  <text class="mono ink-3" x="580" y="375" font-size="11">Cursor · idle</text>
+
+  <!-- Branch 5: notes-export · merged -->
+  <path class="branch-live" d="M 130 410 C 225 410, 255 425, 300 425 H 520 C 540 425, 540 410, 518 408"/>
+  <circle cx="130" cy="410" r="5" class="moss"/>
+  <text class="serif ink-2" x="580" y="423" font-size="19">notes-export</text>
+  <text class="mono ink-3" x="580" y="445" font-size="11">merged · 2h ago ✓</text>
+
+  <!-- Divider column hint -->
+  <line x1="280" y1="90" x2="280" y2="440" stroke="#c9ccbd" stroke-width="1" stroke-dasharray="2 4"/>
+  <text class="mono ink-3" x="280" y="80" font-size="10" text-anchor="middle" letter-spacing="2">~/.grove/worktrees/</text>
+
+  <!-- Legend -->
+  <g transform="translate(40, 440)">
+    <circle cx="5" cy="-4" r="4" fill="#3f6b3f"/>
+    <text class="mono ink-3" x="18" y="0" font-size="11">live branch</text>
+    <circle cx="5" cy="14" r="4" fill="none" stroke="#6b7266" stroke-width="1.5"/>
+    <text class="mono ink-3" x="18" y="18" font-size="11">idle</text>
+  </g>
+</svg>

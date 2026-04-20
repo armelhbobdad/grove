@@ -60,3 +60,6 @@ coverage/
 test_autolink.rs
 examples/test_autolink.rs
 .worktrees/
+
+# Superpowers brainstorm cache
+.superpowers/
