@@ -219,7 +219,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: linux-x64-gnu-gui
+          key: release-linux-x64-gnu-gui
           add-job-id-key: false
       - name: Install Linux GUI dependencies
         run: |
@@ -265,10 +265,10 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: windows-x64
+          key: release-windows-x64-gui
           add-job-id-key: false
-      - name: Build
-        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Build (with GUI support)
+        run: cargo build --release --target x86_64-pc-windows-msvc --features gui
       - name: Package
         shell: bash
         run: |
