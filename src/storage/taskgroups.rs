@@ -554,10 +554,10 @@ pub fn remove_task_from_all_groups(project_id: &str, task_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    /// All tests share the DB, so we serialize them.
-    static FILE_LOCK: Mutex<()> = Mutex::new(());
+    // Shared with other test modules that touch the DB;
+    // see `crate::storage::database::test_lock` for rationale.
+    use crate::storage::database::test_lock as FILE_LOCK_FN;
 
     /// Helper that creates a group and ensures it gets deleted on drop.
     struct TestGroup {
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_create_and_load_group() {
-        let _lock = FILE_LOCK.lock().unwrap();
+        let _lock = FILE_LOCK_FN();
         let (guard, group) = TestGroup::create("test_create_load", Some("blue".into()));
 
         assert_eq!(group.name, "test_create_load");
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_update_group() {
-        let _lock = FILE_LOCK.lock().unwrap();
+        let _lock = FILE_LOCK_FN();
         let (guard, _group) = TestGroup::create("test_update_orig", None);
 
         // Update name only
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn test_delete_group() {
-        let _lock = FILE_LOCK.lock().unwrap();
+        let _lock = FILE_LOCK_FN();
         let group = create_group("test_delete_me".into(), None).unwrap();
         let id = group.id.clone();
 
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn test_upsert_and_remove_slot() {
-        let _lock = FILE_LOCK.lock().unwrap();
+        let _lock = FILE_LOCK_FN();
         let (guard, _group) = TestGroup::create("test_slots", None);
 
         // Add a slot at position 1
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_slot_sorting() {
-        let _lock = FILE_LOCK.lock().unwrap();
+        let _lock = FILE_LOCK_FN();
         let (guard, _group) = TestGroup::create("test_slot_sort", None);
 
         // Insert slots in reverse order: 5, 3, 1, 9, 2

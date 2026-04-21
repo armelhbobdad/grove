@@ -236,9 +236,6 @@ mod tests {
     use super::*;
     use crate::storage::taskgroups;
 
-    /// Serialization lock — share with storage tests to avoid file contention
-    static FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// RAII guard that deletes a group on drop
     struct TestGroup {
         id: String,
@@ -249,8 +246,10 @@ mod tests {
         }
     }
 
+    // Use the crate-wide shared test lock so storage and handler tests serialize
+    // together (see `crate::storage::database::test_lock` for rationale).
     fn acquire_lock() -> std::sync::MutexGuard<'static, ()> {
-        FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        crate::storage::database::test_lock()
     }
 
     #[tokio::test]

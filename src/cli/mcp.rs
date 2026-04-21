@@ -2973,11 +2973,15 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::OnceLock;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::sync::Mutex;
 
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    // MCP tests mutate HOME and the global DB connection — serialize with every
+    // other test module that does the same (storage + handler tests) via the
+    // crate-wide `test_lock` in `crate::storage::database`. Previously this
+    // module had its own `tokio::sync::Mutex`, which only serialized MCP tests
+    // among themselves; concurrent taskgroups tests flipped the DB path under
+    // us and produced flaky failures.
+    use crate::storage::database::test_lock;
 
     // ---- EnvGuard: RAII env-var restore (panic-safe) ----
 
@@ -3166,7 +3170,7 @@ mod tests {
     }
 
     fn with_isolated_home<T>(f: impl FnOnce(&Path) -> T) -> T {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3408,7 +3412,7 @@ mod tests {
 
     #[test]
     fn filter_tools_outside_task_returns_orchestrator_surface() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         let mut env = EnvGuard::new();
         env.remove("GROVE_TASK_ID");
@@ -3457,7 +3461,7 @@ mod tests {
 
     #[test]
     fn filter_tools_inside_task_with_unknown_project_returns_common_only() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         let mut env = EnvGuard::new();
         env.set("GROVE_TASK_ID", "task-1");
@@ -3503,7 +3507,7 @@ mod tests {
 
     #[test]
     fn get_instructions_switches_on_task_context() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         // Outside task → management instructions
         {
@@ -3534,7 +3538,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_newline_protocol_smoke_test() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3582,7 +3586,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_management_tools_rejected_inside_task_context() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3695,7 +3699,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_grove_status_returns_full_context() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3736,7 +3740,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_execution_tools_roundtrip() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3868,7 +3872,7 @@ mod tests {
     /// Read operations (read_notes, read_review) degrade gracefully.
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_execution_tools_with_nonexistent_task() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3972,7 +3976,7 @@ mod tests {
     /// grove_edit_note: management tool roundtrip — write notes, read back via worker context.
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_edit_note_roundtrip() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
