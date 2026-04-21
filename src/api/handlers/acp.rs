@@ -503,12 +503,13 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                         .map(|(id, name)| ModelOption { id, name })
                         .collect(),
                     current_model_id: meta.current_model_id,
-                    // Thought-level is not persisted in SessionMetadata (MVP).
-                    // A fresh ConfigOptionUpdate after reconnect will populate the UI;
-                    // there may be a brief window where the dropdown is empty.
-                    available_thought_levels: Vec::new(),
-                    current_thought_level_id: None,
-                    thought_level_config_id: None,
+                    available_thought_levels: meta
+                        .available_thought_levels
+                        .into_iter()
+                        .map(|(id, name)| ThoughtLevelOption { id, name })
+                        .collect(),
+                    current_thought_level_id: meta.current_thought_level_id,
+                    thought_level_config_id: meta.thought_level_config_id,
                     prompt_capabilities: meta.prompt_capabilities,
                 }
             })

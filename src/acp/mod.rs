@@ -289,6 +289,12 @@ pub struct SessionMetadata {
     pub available_models: Vec<(String, String)>,
     pub current_model_id: Option<String>,
     #[serde(default)]
+    pub available_thought_levels: Vec<(String, String)>,
+    #[serde(default)]
+    pub current_thought_level_id: Option<String>,
+    #[serde(default)]
+    pub thought_level_config_id: Option<String>,
+    #[serde(default)]
     pub prompt_capabilities: PromptCapabilitiesData,
     #[serde(default)]
     pub available_commands: Vec<CommandInfo>,
@@ -311,6 +317,10 @@ pub enum SocketCommand {
     },
     SetModel {
         model_id: String,
+    },
+    SetThoughtLevel {
+        config_id: String,
+        value_id: String,
     },
     RespondPermission {
         option_id: String,
@@ -1864,6 +1874,9 @@ impl AcpSessionHandle {
                     current_mode_id,
                     available_models,
                     current_model_id,
+                    available_thought_levels,
+                    current_thought_level_id,
+                    thought_level_config_id,
                     prompt_capabilities,
                     ..
                 } => {
@@ -1880,12 +1893,29 @@ impl AcpSessionHandle {
                             current_mode_id: current_mode_id.clone(),
                             available_models: available_models.clone(),
                             current_model_id: current_model_id.clone(),
+                            available_thought_levels: available_thought_levels.clone(),
+                            current_thought_level_id: current_thought_level_id.clone(),
+                            thought_level_config_id: thought_level_config_id.clone(),
                             prompt_capabilities: prompt_capabilities.clone(),
                             available_commands: existing
                                 .map(|meta| meta.available_commands)
                                 .unwrap_or_default(),
                         },
                     );
+                }
+                AcpUpdate::ThoughtLevelsUpdate {
+                    available,
+                    current,
+                    config_id,
+                } => {
+                    if let Some(mut meta) =
+                        read_session_metadata(&self.project_key, &self.task_id, chat_id)
+                    {
+                        meta.available_thought_levels = available.clone();
+                        meta.current_thought_level_id = current.clone();
+                        meta.thought_level_config_id = config_id.clone();
+                        write_session_metadata(&self.project_key, &self.task_id, chat_id, &meta);
+                    }
                 }
                 AcpUpdate::AvailableCommands { commands } => {
                     let mut meta = read_session_metadata(&self.project_key, &self.task_id, chat_id)
@@ -1897,6 +1927,9 @@ impl AcpSessionHandle {
                             current_mode_id: None,
                             available_models: Vec::new(),
                             current_model_id: None,
+                            available_thought_levels: Vec::new(),
+                            current_thought_level_id: None,
+                            thought_level_config_id: None,
                             prompt_capabilities: PromptCapabilitiesData::default(),
                             available_commands: Vec::new(),
                         });
@@ -2392,6 +2425,15 @@ async fn dispatch_socket_command(handle: &AcpSessionHandle, cmd: SocketCommand) 
             },
         },
         SocketCommand::SetModel { model_id } => match handle.set_model(model_id).await {
+            Ok(()) => SocketResponse::Ok,
+            Err(e) => SocketResponse::Error {
+                message: e.to_string(),
+            },
+        },
+        SocketCommand::SetThoughtLevel {
+            config_id,
+            value_id,
+        } => match handle.set_thought_level(config_id, value_id).await {
             Ok(()) => SocketResponse::Ok,
             Err(e) => SocketResponse::Error {
                 message: e.to_string(),
