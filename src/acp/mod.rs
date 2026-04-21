@@ -81,6 +81,13 @@ enum AcpCommand {
     SetModel {
         model_id: String,
     },
+    /// Change a thought-level / reasoning-effort selector (0.11 SessionConfigOption).
+    /// config_id identifies which option (agents choose their own id, e.g. "effort_level");
+    /// value_id is the chosen value's id.
+    SetThoughtLevel {
+        config_id: String,
+        value_id: String,
+    },
 }
 
 /// 从 agent 接收的流式更新
@@ -96,6 +103,17 @@ pub enum AcpUpdate {
         current_mode_id: Option<String>,
         available_models: Vec<(String, String)>,
         current_model_id: Option<String>,
+        /// Available values for the thought-level / reasoning-effort selector.
+        /// Empty vec means the agent does not expose one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        available_thought_levels: Vec<(String, String)>,
+        /// Currently selected thought-level value id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_thought_level_id: Option<String>,
+        /// Config option id for the thought-level selector (agent-chosen, e.g. "effort_level").
+        /// Frontend must echo this back when calling SetThoughtLevel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thought_level_config_id: Option<String>,
         prompt_capabilities: PromptCapabilitiesData,
     },
     /// Agent 消息文本片段
@@ -143,6 +161,17 @@ pub enum AcpUpdate {
     },
     /// Mode 变更通知
     ModeChanged { mode_id: String },
+    /// Thought-level selector updated (push from agent via ConfigOptionUpdate,
+    /// or echo after a SetThoughtLevel roundtrip). Empty available vec means
+    /// the agent dropped the selector.
+    ThoughtLevelsUpdate {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        available: Vec<(String, String)>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_id: Option<String>,
+    },
     /// Agent Plan 更新（结构化 TODO 列表）
     PlanUpdate { entries: Vec<PlanEntryData> },
     /// 可用 Slash Commands 更新
@@ -825,9 +854,54 @@ async fn handle_session_notification(
                 .collect();
             state.handle.emit(AcpUpdate::AvailableCommands { commands });
         }
+        acp::SessionUpdate::ConfigOptionUpdate(update) => {
+            // Agent pushed a fresh list of SessionConfigOptions. Re-extract
+            // the thought-level selector and forward to UI. Unrelated option
+            // categories (Mode/Model/Other) are ignored here — Mode/Model have
+            // their own CurrentModeUpdate / session-response paths.
+            let (available, current, config_id) = extract_thought_level(&update.config_options);
+            state.handle.emit(AcpUpdate::ThoughtLevelsUpdate {
+                available,
+                current,
+                config_id,
+            });
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// Find the first config option with category == ThoughtLevel, extract its
+/// select options + current value + config id. Returns (available, current, config_id).
+/// MVP: only Ungrouped Select kind is exposed; Grouped / Boolean are ignored so
+/// the UI has a single predictable shape.
+fn extract_thought_level(
+    config_options: &[acp::SessionConfigOption],
+) -> (Vec<(String, String)>, Option<String>, Option<String>) {
+    for opt in config_options {
+        if !matches!(
+            opt.category,
+            Some(acp::SessionConfigOptionCategory::ThoughtLevel)
+        ) {
+            continue;
+        }
+        let acp::SessionConfigKind::Select(select) = &opt.kind else {
+            continue;
+        };
+        let acp::SessionConfigSelectOptions::Ungrouped(entries) = &select.options else {
+            continue;
+        };
+        let available: Vec<(String, String)> = entries
+            .iter()
+            .map(|e| (e.value.to_string(), e.name.clone()))
+            .collect();
+        return (
+            available,
+            Some(select.current_value.to_string()),
+            Some(opt.id.to_string()),
+        );
+    }
+    (vec![], None, None)
 }
 
 /// 将 ContentBlock 转换为文本
@@ -1362,6 +1436,9 @@ async fn drive_session(
     let current_mode_id;
     let available_models;
     let current_model_id;
+    let available_thought_levels;
+    let current_thought_level_id;
+    let thought_level_config_id;
 
     macro_rules! create_new_session {
         () => {{
@@ -1383,6 +1460,11 @@ async fn drive_session(
             persist_session_id(&sid);
             (available_modes, current_mode_id) = extract_modes(&resp.modes);
             (available_models, current_model_id) = extract_models(&resp.models);
+            (
+                available_thought_levels,
+                current_thought_level_id,
+                thought_level_config_id,
+            ) = extract_thought_level(resp.config_options.as_deref().unwrap_or(&[]));
             sid
         }};
     }
@@ -1412,6 +1494,11 @@ async fn drive_session(
             Ok(resp) => {
                 (available_modes, current_mode_id) = extract_modes(&resp.modes);
                 (available_models, current_model_id) = extract_models(&resp.models);
+                (
+                    available_thought_levels,
+                    current_thought_level_id,
+                    thought_level_config_id,
+                ) = extract_thought_level(resp.config_options.as_deref().unwrap_or(&[]));
                 saved_id
             }
             Err(_) => create_new_session!(),
@@ -1449,6 +1536,9 @@ async fn drive_session(
         current_mode_id,
         available_models,
         current_model_id,
+        available_thought_levels,
+        current_thought_level_id,
+        thought_level_config_id,
         prompt_capabilities,
     });
 
@@ -1518,6 +1608,13 @@ async fn drive_session(
                                     let _ = conn.send_request(acp::SetSessionModelRequest::new(
                                         session_id_arc.clone(),
                                         acp::ModelId::new(model_id),
+                                    )).block_task().await;
+                                }
+                                AcpCommand::SetThoughtLevel { config_id, value_id } => {
+                                    let _ = conn.send_request(acp::SetSessionConfigOptionRequest::new(
+                                        session_id_arc.clone(),
+                                        acp::SessionConfigId::new(config_id),
+                                        acp::SessionConfigValueId::new(value_id),
                                     )).block_task().await;
                                 }
                                 AcpCommand::Prompt { text, attachments, .. } => {
@@ -1614,6 +1711,19 @@ async fn drive_session(
                     .send_request(acp::SetSessionModelRequest::new(
                         session_id_arc.clone(),
                         acp::ModelId::new(model_id),
+                    ))
+                    .block_task()
+                    .await;
+            }
+            AcpCommand::SetThoughtLevel {
+                config_id,
+                value_id,
+            } => {
+                let _ = conn
+                    .send_request(acp::SetSessionConfigOptionRequest::new(
+                        session_id_arc.clone(),
+                        acp::SessionConfigId::new(config_id),
+                        acp::SessionConfigValueId::new(value_id),
                     ))
                     .block_task()
                     .await;
@@ -1878,6 +1988,21 @@ impl AcpSessionHandle {
     pub async fn set_model(&self, model_id: String) -> crate::error::Result<()> {
         self.cmd_tx
             .send(AcpCommand::SetModel { model_id })
+            .await
+            .map_err(|_| crate::error::GroveError::Session("ACP session closed".to_string()))
+    }
+
+    /// 切换 thought-level / reasoning-effort(0.11 通用 SessionConfigOption)
+    pub async fn set_thought_level(
+        &self,
+        config_id: String,
+        value_id: String,
+    ) -> crate::error::Result<()> {
+        self.cmd_tx
+            .send(AcpCommand::SetThoughtLevel {
+                config_id,
+                value_id,
+            })
             .await
             .map_err(|_| crate::error::GroveError::Session("ACP session closed".to_string()))
     }

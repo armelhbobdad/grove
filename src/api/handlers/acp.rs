@@ -42,6 +42,11 @@ enum ClientMessage {
     SetModel {
         model_id: String,
     },
+    /// Change the thought-level / reasoning-effort selector
+    SetThoughtLevel {
+        config_id: String,
+        value_id: String,
+    },
     /// Respond to a permission request
     PermissionResponse {
         option_id: String,
@@ -87,6 +92,12 @@ enum ServerMessage {
         current_mode_id: Option<String>,
         available_models: Vec<ModelOption>,
         current_model_id: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        available_thought_levels: Vec<ThoughtLevelOption>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_thought_level_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought_level_config_id: Option<String>,
         prompt_capabilities: PromptCapabilitiesData,
     },
     MessageChunk {
@@ -141,6 +152,14 @@ enum ServerMessage {
     ModeChanged {
         mode_id: String,
     },
+    ThoughtLevelsUpdate {
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        available: Vec<ThoughtLevelOption>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        config_id: Option<String>,
+    },
     PlanUpdate {
         entries: Vec<PlanEntryMsg>,
     },
@@ -178,6 +197,12 @@ struct ModeOption {
 
 #[derive(Debug, Serialize, Clone)]
 struct ModelOption {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct ThoughtLevelOption {
     id: String,
     name: String,
 }
@@ -238,6 +263,9 @@ impl From<AcpUpdate> for ServerMessage {
                 current_mode_id,
                 available_models,
                 current_model_id,
+                available_thought_levels,
+                current_thought_level_id,
+                thought_level_config_id,
                 prompt_capabilities,
             } => ServerMessage::SessionReady {
                 session_id,
@@ -253,6 +281,12 @@ impl From<AcpUpdate> for ServerMessage {
                     .map(|(id, name)| ModelOption { id, name })
                     .collect(),
                 current_model_id,
+                available_thought_levels: available_thought_levels
+                    .into_iter()
+                    .map(|(id, name)| ThoughtLevelOption { id, name })
+                    .collect(),
+                current_thought_level_id,
+                thought_level_config_id,
                 prompt_capabilities,
             },
             AcpUpdate::MessageChunk { text } => ServerMessage::MessageChunk { text },
@@ -316,6 +350,18 @@ impl From<AcpUpdate> for ServerMessage {
                 terminal,
             },
             AcpUpdate::ModeChanged { mode_id } => ServerMessage::ModeChanged { mode_id },
+            AcpUpdate::ThoughtLevelsUpdate {
+                available,
+                current,
+                config_id,
+            } => ServerMessage::ThoughtLevelsUpdate {
+                available: available
+                    .into_iter()
+                    .map(|(id, name)| ThoughtLevelOption { id, name })
+                    .collect(),
+                current,
+                config_id,
+            },
             AcpUpdate::PlanUpdate { entries } => ServerMessage::PlanUpdate {
                 entries: entries
                     .into_iter()
@@ -457,6 +503,12 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                         .map(|(id, name)| ModelOption { id, name })
                         .collect(),
                     current_model_id: meta.current_model_id,
+                    // Thought-level is not persisted in SessionMetadata (MVP).
+                    // A fresh ConfigOptionUpdate after reconnect will populate the UI;
+                    // there may be a brief window where the dropdown is empty.
+                    available_thought_levels: Vec::new(),
+                    current_thought_level_id: None,
+                    thought_level_config_id: None,
                     prompt_capabilities: meta.prompt_capabilities,
                 }
             })
@@ -472,6 +524,9 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                     current_mode_id: None,
                     available_models: Vec::new(),
                     current_model_id: None,
+                    available_thought_levels: Vec::new(),
+                    current_thought_level_id: None,
+                    thought_level_config_id: None,
                     prompt_capabilities: PromptCapabilitiesData::default(),
                 }
             });
@@ -632,6 +687,14 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                             }
                             ClientMessage::SetModel { model_id } => {
                                 let _ = handle_for_input.set_model(model_id).await;
+                            }
+                            ClientMessage::SetThoughtLevel {
+                                config_id,
+                                value_id,
+                            } => {
+                                let _ = handle_for_input
+                                    .set_thought_level(config_id, value_id)
+                                    .await;
                             }
                             ClientMessage::PermissionResponse { option_id } => {
                                 if !handle_for_input.respond_permission(option_id) {

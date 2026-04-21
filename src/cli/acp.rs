@@ -156,6 +156,7 @@ pub async fn execute(agent: String, cwd: String) {
                     AcpUpdate::Busy { .. }
                     | AcpUpdate::UserMessage { .. }
                     | AcpUpdate::ModeChanged { .. }
+                    | AcpUpdate::ThoughtLevelsUpdate { .. }
                     | AcpUpdate::PlanUpdate { .. }
                     | AcpUpdate::AvailableCommands { .. }
                     | AcpUpdate::PermissionResponse { .. }
