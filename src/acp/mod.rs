@@ -7,8 +7,17 @@
 
 pub mod adapter;
 
-use acp::Agent; // Required for .initialize(), .new_session(), .prompt(), .cancel()
-use agent_client_protocol as acp;
+// ACP 0.11 migration shim.
+//
+// 0.11 把消息类型搬进 `agent_client_protocol::schema`,运行时/角色类型
+// (Client、Agent、ConnectionTo、ByteStreams、Error、Result)留在 crate 根。
+// 这个本地模块把两边重新拍平到单一的 `acp::*` 命名空间,让本文件以及 adapter
+// 的大量调用点保持原写法(`acp::SessionNotification` 等)。
+#[allow(clippy::module_inception)]
+mod acp {
+    pub use agent_client_protocol::schema::*;
+    pub use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error, Result};
+}
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -359,8 +368,12 @@ struct TerminalState {
     exit_notify: Arc<tokio::sync::Notify>,
 }
 
-/// Grove 的 ACP Client 实现
-struct GroveAcpClient {
+/// Grove ACP client 共享状态。
+///
+/// 在 0.11 SDK 里 handler 不再是 trait 方法,而是注册到 `Client.builder()` 上的
+/// 独立闭包。每个 handler 闭包通过 `Arc::clone` 捕获一份这个结构体,所以字段要么
+/// 本身就是 `Send + Sync`、要么包在 `Mutex` 里。
+struct AcpClientState {
     handle: Arc<AcpSessionHandle>,
     working_dir: PathBuf,
     terminals: Arc<Mutex<HashMap<String, TerminalState>>>,
@@ -381,467 +394,435 @@ struct GroveAcpClient {
     pending_plan_tool_ids: Mutex<Vec<String>>,
 }
 
-#[async_trait::async_trait(?Send)]
-impl acp::Client for GroveAcpClient {
-    async fn request_permission(
-        &self,
-        args: acp::RequestPermissionRequest,
-    ) -> acp::Result<acp::RequestPermissionResponse> {
-        // 序列化：同一时刻只能有一个 permission 等待用户响应。
-        // 如果 Agent 并行调用多个 tool 且各自需要 permission，后来的请求会排队
-        // 等前一个 permission 被用户回答后才发给前端。
-        let _guard = self.handle.permission_lock.lock().await;
+/// 权限请求 handler。序列化:同一时刻只能有一个 permission 等待用户响应,
+/// 后续请求会在 `permission_lock` 上排队。
+async fn handle_request_permission(
+    state: &AcpClientState,
+    args: acp::RequestPermissionRequest,
+) -> acp::Result<acp::RequestPermissionResponse> {
+    let _guard = state.handle.permission_lock.lock().await;
 
-        let desc = args.tool_call.fields.title.clone().unwrap_or_default();
-        let options: Vec<PermOptionData> = args
-            .options
-            .iter()
-            .map(|o| PermOptionData {
-                option_id: o.option_id.to_string(),
-                name: o.name.clone(),
-                kind: match o.kind {
-                    acp::PermissionOptionKind::AllowOnce => "allow_once".to_string(),
-                    acp::PermissionOptionKind::AllowAlways => "allow_always".to_string(),
-                    acp::PermissionOptionKind::RejectOnce => "reject_once".to_string(),
-                    acp::PermissionOptionKind::RejectAlways => "reject_always".to_string(),
-                    _ => format!("{:?}", o.kind).to_lowercase(),
-                },
-            })
-            .collect();
-
-        // 创建 oneshot channel 等待用户响应
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.handle.pending_permission.lock().unwrap().replace(tx);
-
-        // 发送权限请求给前端
-        self.handle.emit(AcpUpdate::PermissionRequest {
-            description: desc.clone(),
-            options,
-        });
-
-        // 发送系统通知（声音 + 横幅 + hooks.toml）
-        notify_acp_event(
-            &self.project_key,
-            &self.task_id,
-            "Permission Required",
-            &desc,
-            "Purr",
-        );
-
-        // 等待用户选择
-        match rx.await {
-            Ok(option_id) => Ok(acp::RequestPermissionResponse::new(
-                acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
-                    option_id,
-                )),
-            )),
-            Err(_) => Ok(acp::RequestPermissionResponse::new(
-                acp::RequestPermissionOutcome::Cancelled,
-            )),
-        }
-    }
-
-    async fn write_text_file(
-        &self,
-        _args: acp::WriteTextFileRequest,
-    ) -> acp::Result<acp::WriteTextFileResponse> {
-        Err(acp::Error::method_not_found())
-    }
-
-    async fn read_text_file(
-        &self,
-        _args: acp::ReadTextFileRequest,
-    ) -> acp::Result<acp::ReadTextFileResponse> {
-        Err(acp::Error::method_not_found())
-    }
-
-    async fn create_terminal(
-        &self,
-        args: acp::CreateTerminalRequest,
-    ) -> acp::Result<acp::CreateTerminalResponse> {
-        let id = format!(
-            "term_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let cwd = args.cwd.unwrap_or_else(|| self.working_dir.clone());
-
-        // Agent 发来的 command 可能是完整 shell 命令字符串（含 &&、|、;、空格参数等），
-        let shell_cmd = if args.args.is_empty() {
-            args.command.clone()
-        } else {
-            format!("{} {}", args.command, args.args.join(" "))
-        };
-
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-        let mut cmd = tokio::process::Command::new(&shell);
-        cmd.arg("-l").arg("-i").arg("-c").arg(&shell_cmd);
-        cmd.current_dir(&cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-
-        for env_var in &args.env {
-            cmd.env(&env_var.name, &env_var.value);
-        }
-
-        let child = cmd.spawn().map_err(|e| {
-            acp::Error::internal_error().data(format!("Failed to spawn '{}': {}", shell_cmd, e))
-        })?;
-
-        let exit_notify = Arc::new(tokio::sync::Notify::new());
-        let (kill_tx, kill_rx) = mpsc::channel(1);
-
-        let state = TerminalState {
-            kill_tx,
-            output: Vec::new(),
-            truncated: false,
-            output_byte_limit: args.output_byte_limit,
-            exit_status: None,
-            exit_notify: exit_notify.clone(),
-        };
-
-        self.terminals.lock().unwrap().insert(id.clone(), state);
-
-        let terminals = self.terminals.clone();
-        let term_id = id.clone();
-        tokio::task::spawn_local(async move {
-            drive_terminal(terminals, term_id, child, kill_rx, exit_notify).await;
-        });
-
-        Ok(acp::CreateTerminalResponse::new(id))
-    }
-
-    async fn terminal_output(
-        &self,
-        args: acp::TerminalOutputRequest,
-    ) -> acp::Result<acp::TerminalOutputResponse> {
-        let terms = self.terminals.lock().unwrap();
-        let tid = &*args.terminal_id.0;
-        let state = terms
-            .get(tid)
-            .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
-
-        let resp = acp::TerminalOutputResponse::new(
-            String::from_utf8_lossy(&state.output),
-            state.truncated,
-        );
-        Ok(if let Some(ref es) = state.exit_status {
-            resp.exit_status(es.clone())
-        } else {
-            resp
+    let desc = args.tool_call.fields.title.clone().unwrap_or_default();
+    let options: Vec<PermOptionData> = args
+        .options
+        .iter()
+        .map(|o| PermOptionData {
+            option_id: o.option_id.to_string(),
+            name: o.name.clone(),
+            kind: match o.kind {
+                acp::PermissionOptionKind::AllowOnce => "allow_once".to_string(),
+                acp::PermissionOptionKind::AllowAlways => "allow_always".to_string(),
+                acp::PermissionOptionKind::RejectOnce => "reject_once".to_string(),
+                acp::PermissionOptionKind::RejectAlways => "reject_always".to_string(),
+                _ => format!("{:?}", o.kind).to_lowercase(),
+            },
         })
+        .collect();
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    state.handle.pending_permission.lock().unwrap().replace(tx);
+
+    state.handle.emit(AcpUpdate::PermissionRequest {
+        description: desc.clone(),
+        options,
+    });
+
+    notify_acp_event(
+        &state.project_key,
+        &state.task_id,
+        "Permission Required",
+        &desc,
+        "Purr",
+    );
+
+    match rx.await {
+        Ok(option_id) => Ok(acp::RequestPermissionResponse::new(
+            acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(option_id)),
+        )),
+        Err(_) => Ok(acp::RequestPermissionResponse::new(
+            acp::RequestPermissionOutcome::Cancelled,
+        )),
+    }
+}
+
+async fn handle_create_terminal(
+    state: &AcpClientState,
+    args: acp::CreateTerminalRequest,
+) -> acp::Result<acp::CreateTerminalResponse> {
+    let id = format!(
+        "term_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let cwd = args.cwd.unwrap_or_else(|| state.working_dir.clone());
+
+    // Agent 发来的 command 可能是完整 shell 命令字符串(含 &&、|、;、空格参数等)。
+    let shell_cmd = if args.args.is_empty() {
+        args.command.clone()
+    } else {
+        format!("{} {}", args.command, args.args.join(" "))
+    };
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+    let mut cmd = tokio::process::Command::new(&shell);
+    cmd.arg("-l").arg("-i").arg("-c").arg(&shell_cmd);
+    cmd.current_dir(&cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    for env_var in &args.env {
+        cmd.env(&env_var.name, &env_var.value);
     }
 
-    async fn release_terminal(
-        &self,
-        args: acp::ReleaseTerminalRequest,
-    ) -> acp::Result<acp::ReleaseTerminalResponse> {
-        let mut terms = self.terminals.lock().unwrap();
+    let child = cmd.spawn().map_err(|e| {
+        acp::Error::internal_error().data(format!("Failed to spawn '{}': {}", shell_cmd, e))
+    })?;
+
+    let exit_notify = Arc::new(tokio::sync::Notify::new());
+    let (kill_tx, kill_rx) = mpsc::channel(1);
+
+    let term_state = TerminalState {
+        kill_tx,
+        output: Vec::new(),
+        truncated: false,
+        output_byte_limit: args.output_byte_limit,
+        exit_status: None,
+        exit_notify: exit_notify.clone(),
+    };
+
+    state
+        .terminals
+        .lock()
+        .unwrap()
+        .insert(id.clone(), term_state);
+
+    let terminals = state.terminals.clone();
+    let term_id = id.clone();
+    // 0.11 handler 要求 Send,但 drive_terminal 的 future 是 Send;用 tokio::spawn
+    // 而不是 spawn_local 避免对 LocalSet 的隐式依赖。
+    tokio::spawn(async move {
+        drive_terminal(terminals, term_id, child, kill_rx, exit_notify).await;
+    });
+
+    Ok(acp::CreateTerminalResponse::new(id))
+}
+
+async fn handle_terminal_output(
+    state: &AcpClientState,
+    args: acp::TerminalOutputRequest,
+) -> acp::Result<acp::TerminalOutputResponse> {
+    let terms = state.terminals.lock().unwrap();
+    let tid = &*args.terminal_id.0;
+    let term = terms
+        .get(tid)
+        .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
+
+    let resp =
+        acp::TerminalOutputResponse::new(String::from_utf8_lossy(&term.output), term.truncated);
+    Ok(if let Some(ref es) = term.exit_status {
+        resp.exit_status(es.clone())
+    } else {
+        resp
+    })
+}
+
+async fn handle_release_terminal(
+    state: &AcpClientState,
+    args: acp::ReleaseTerminalRequest,
+) -> acp::Result<acp::ReleaseTerminalResponse> {
+    let mut terms = state.terminals.lock().unwrap();
+    let tid = &*args.terminal_id.0;
+    if let Some(term) = terms.remove(tid) {
+        let _ = term.kill_tx.try_send(());
+    }
+    Ok(acp::ReleaseTerminalResponse::default())
+}
+
+async fn handle_wait_for_terminal_exit(
+    state: &AcpClientState,
+    args: acp::WaitForTerminalExitRequest,
+) -> acp::Result<acp::WaitForTerminalExitResponse> {
+    let notify = {
+        let terms = state.terminals.lock().unwrap();
         let tid = &*args.terminal_id.0;
-        if let Some(state) = terms.remove(tid) {
-            let _ = state.kill_tx.try_send(());
+        let term = terms
+            .get(tid)
+            .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
+        if let Some(ref status) = term.exit_status {
+            return Ok(acp::WaitForTerminalExitResponse::new(status.clone()));
         }
-        Ok(acp::ReleaseTerminalResponse::default())
-    }
+        term.exit_notify.clone()
+    };
+    notify.notified().await;
 
-    async fn wait_for_terminal_exit(
-        &self,
-        args: acp::WaitForTerminalExitRequest,
-    ) -> acp::Result<acp::WaitForTerminalExitResponse> {
-        let notify = {
-            let terms = self.terminals.lock().unwrap();
-            let tid = &*args.terminal_id.0;
-            let state = terms
-                .get(tid)
-                .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
-            if let Some(ref status) = state.exit_status {
-                return Ok(acp::WaitForTerminalExitResponse::new(status.clone()));
+    let terms = state.terminals.lock().unwrap();
+    let tid = &*args.terminal_id.0;
+    let term = terms
+        .get(tid)
+        .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
+    Ok(acp::WaitForTerminalExitResponse::new(
+        term.exit_status.clone().unwrap_or_default(),
+    ))
+}
+
+async fn handle_kill_terminal(
+    state: &AcpClientState,
+    args: acp::KillTerminalRequest,
+) -> acp::Result<acp::KillTerminalResponse> {
+    let terms = state.terminals.lock().unwrap();
+    let tid = &*args.terminal_id.0;
+    let term = terms
+        .get(tid)
+        .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
+    let _ = term.kill_tx.try_send(());
+    Ok(acp::KillTerminalResponse::default())
+}
+
+async fn handle_session_notification(
+    state: &AcpClientState,
+    args: acp::SessionNotification,
+) -> acp::Result<(), acp::Error> {
+    match args.update {
+        acp::SessionUpdate::AgentMessageChunk(chunk) => {
+            let text = content_block_to_text(&chunk.content);
+            if let Ok(mut buf) = state.handle.last_assistant_text.lock() {
+                buf.push_str(&text);
             }
-            state.exit_notify.clone()
-        };
-        // Lock dropped before await
-        notify.notified().await;
+            state.handle.emit(AcpUpdate::MessageChunk { text });
+        }
+        acp::SessionUpdate::AgentThoughtChunk(chunk) => {
+            let text = content_block_to_text(&chunk.content);
+            state.handle.emit(AcpUpdate::ThoughtChunk { text });
+        }
+        acp::SessionUpdate::ToolCall(tool_call) => {
+            let locations = tool_call
+                .locations
+                .iter()
+                .map(|l| (l.path.display().to_string(), l.line))
+                .collect();
+            state.handle.emit(AcpUpdate::ToolCall {
+                id: tool_call.tool_call_id.to_string(),
+                title: tool_call.title.clone(),
+                locations,
+                timestamp: Some(Utc::now()),
+            });
 
-        let terms = self.terminals.lock().unwrap();
-        let tid = &*args.terminal_id.0;
-        let state = terms
-            .get(tid)
-            .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
-        Ok(acp::WaitForTerminalExitResponse::new(
-            state.exit_status.clone().unwrap_or_default(),
-        ))
-    }
-
-    async fn kill_terminal(
-        &self,
-        args: acp::KillTerminalRequest,
-    ) -> acp::Result<acp::KillTerminalResponse> {
-        let terms = self.terminals.lock().unwrap();
-        let tid = &*args.terminal_id.0;
-        let state = terms
-            .get(tid)
-            .ok_or_else(|| acp::Error::invalid_params().data("Unknown terminal ID"))?;
-        let _ = state.kill_tx.try_send(());
-        Ok(acp::KillTerminalResponse::default())
-    }
-
-    async fn session_notification(
-        &self,
-        args: acp::SessionNotification,
-    ) -> acp::Result<(), acp::Error> {
-        match args.update {
-            acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                let text = content_block_to_text(&chunk.content);
-                if let Ok(mut buf) = self.handle.last_assistant_text.lock() {
-                    buf.push_str(&text);
-                }
-                self.handle.emit(AcpUpdate::MessageChunk { text });
-            }
-            acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-                let text = content_block_to_text(&chunk.content);
-                self.handle.emit(AcpUpdate::ThoughtChunk { text });
-            }
-            acp::SessionUpdate::ToolCall(tool_call) => {
-                let locations = tool_call
-                    .locations
-                    .iter()
-                    .map(|l| (l.path.display().to_string(), l.line))
-                    .collect();
-                self.handle.emit(AcpUpdate::ToolCall {
-                    id: tool_call.tool_call_id.to_string(),
-                    title: tool_call.title.clone(),
-                    locations,
-                    timestamp: Some(Utc::now()),
-                });
-
-                // 记录 Write 工具的 tool_call_id → file_path（用于 PlanFileUpdate 检测）
-                // 路径可能在第二个 ToolCall 事件才出现，所以每次有 locations 时更新
-                if tool_call.title.starts_with("Write") {
-                    if let Some(loc) = tool_call.locations.first() {
-                        self.write_tool_paths.lock().unwrap().insert(
-                            tool_call.tool_call_id.to_string(),
-                            loc.path.display().to_string(),
-                        );
-                    } else {
-                        // 第一个 ToolCall 可能没有 locations，先插入空路径占位
-                        self.write_tool_paths
-                            .lock()
-                            .unwrap()
-                            .entry(tool_call.tool_call_id.to_string())
-                            .or_default();
-                    }
-                }
-
-                // 追踪 plan-like 工具：Trae 的 `todo_write` / `update_plan` 不走
-                // ToolCallUpdate completed，而是用 SessionUpdate::Plan 代表完成。
-                let lower_title = tool_call.title.to_lowercase();
-                if matches!(
-                    lower_title.as_str(),
-                    "todo_write" | "todowrite" | "update_plan"
-                ) {
-                    self.pending_plan_tool_ids
+            // 记录 Write 工具的 tool_call_id → file_path(用于 PlanFileUpdate 检测)。
+            // 路径可能在第二个 ToolCall 事件才出现,所以每次有 locations 时更新。
+            if tool_call.title.starts_with("Write") {
+                if let Some(loc) = tool_call.locations.first() {
+                    state.write_tool_paths.lock().unwrap().insert(
+                        tool_call.tool_call_id.to_string(),
+                        loc.path.display().to_string(),
+                    );
+                } else {
+                    state
+                        .write_tool_paths
                         .lock()
                         .unwrap()
-                        .push(tool_call.tool_call_id.to_string());
-                }
-
-                // 缓存 Write/Edit 文件快照（locations 在第二个 ToolCall 事件才有路径）
-                let title = &tool_call.title;
-                if title.starts_with("Write") || title.starts_with("Edit") {
-                    if let Some(loc) = tool_call.locations.first() {
-                        let id_str = tool_call.tool_call_id.to_string();
-                        let mut snapshots = self.file_snapshots.lock().unwrap();
-                        // 只在尚未缓存时缓存（第一个 ToolCall 可能 locations 为空）
-                        snapshots.entry(id_str).or_insert_with(|| {
-                            let abs_path = loc.path.clone();
-                            let old_content = std::fs::read_to_string(&abs_path).ok();
-                            (abs_path, old_content)
-                        });
-                    }
+                        .entry(tool_call.tool_call_id.to_string())
+                        .or_default();
                 }
             }
-            acp::SessionUpdate::ToolCallUpdate(update) => {
-                let mut content = update
-                    .fields
-                    .content
-                    .as_ref()
-                    .and_then(|blocks| blocks.first())
-                    .map(|tc| self.adapter.tool_call_content_to_text(tc));
-                let status = update
-                    .fields
-                    .status
-                    .as_ref()
-                    .map(|s| format!("{:?}", s).to_lowercase())
-                    .unwrap_or_default();
-                let locations: Vec<(String, Option<u32>)> = update
-                    .fields
-                    .locations
-                    .as_ref()
-                    .map(|locs| {
-                        locs.iter()
-                            .map(|l| (l.path.display().to_string(), l.line))
-                            .collect()
-                    })
-                    .unwrap_or_default();
 
-                // 如果 ACP 没提供 content 且状态为 completed，从文件快照生成 diff
-                let is_completed = update
-                    .fields
-                    .status
-                    .as_ref()
-                    .is_some_and(|s| matches!(s, acp::ToolCallStatus::Completed));
-
-                if content.is_none() && is_completed {
-                    let snapshot = self
-                        .file_snapshots
-                        .lock()
-                        .unwrap()
-                        .remove(&update.tool_call_id.to_string());
-                    if let Some((abs_path, old_content)) = snapshot {
-                        if let Ok(new_text) = std::fs::read_to_string(&abs_path) {
-                            content = Some(adapter::generate_file_diff(
-                                &abs_path,
-                                old_content.as_deref(),
-                                &new_text,
-                            ));
-                        }
-                    }
-                }
-
-                // ToolCallUpdate 中也可能带 locations（路径可能只在中间的 update 出现），
-                // 及时更新 write_tool_paths 以便 completed 时能拿到正确路径
-                if !locations.is_empty() {
-                    let tc_id = update.tool_call_id.to_string();
-                    let mut paths = self.write_tool_paths.lock().unwrap();
-                    if let Some(existing) = paths.get_mut(&tc_id) {
-                        if existing.is_empty() {
-                            if let Some((p, _)) = locations.first() {
-                                *existing = p.clone();
-                            }
-                        }
-                    }
-                }
-
-                // 若这个 tool_id 是 plan-like（之前记过），并且本次 update
-                // 是终态，从 pending 表里移掉，避免 Plan 事件误触重复完成。
-                if matches!(
-                    status.as_str(),
-                    "completed" | "failed" | "error" | "cancelled"
-                ) {
-                    let tc_id = update.tool_call_id.to_string();
-                    let mut ids = self.pending_plan_tool_ids.lock().unwrap();
-                    if let Some(pos) = ids.iter().position(|x| x == &tc_id) {
-                        ids.swap_remove(pos);
-                    }
-                }
-
-                self.handle.emit(AcpUpdate::ToolCallUpdate {
-                    id: update.tool_call_id.to_string(),
-                    status: status.clone(),
-                    content,
-                    locations: locations.clone(),
-                });
-
-                // 检测 Plan File：Write 工具 completed 且在 plan mode 下写入 .md 文件
-                if is_completed {
-                    let tc_id = update.tool_call_id.to_string();
-                    let write_path = self.write_tool_paths.lock().unwrap().remove(&tc_id);
-                    if let Some(path) = write_path.filter(|p| !p.is_empty()) {
-                        if path.ends_with(".md") {
-                            let mode = self.handle.current_mode_id.lock().unwrap().clone();
-                            if mode
-                                .as_ref()
-                                .is_some_and(|m| m.to_lowercase().contains("plan"))
-                            {
-                                // 优先从 ACP ToolCallContent 提取原始内容（Diff.new_text）
-                                let plan_content = update
-                                    .fields
-                                    .content
-                                    .as_ref()
-                                    .and_then(|blocks| blocks.first())
-                                    .and_then(|tc| match tc {
-                                        acp::ToolCallContent::Diff(diff) => {
-                                            Some(diff.new_text.clone())
-                                        }
-                                        acp::ToolCallContent::Content(c) => {
-                                            Some(content_block_to_text(&c.content))
-                                        }
-                                        _ => None,
-                                    })
-                                    // Fallback：从本地文件系统读取
-                                    .or_else(|| std::fs::read_to_string(&path).ok());
-                                self.handle.emit(AcpUpdate::PlanFileUpdate {
-                                    path,
-                                    content: plan_content,
-                                });
-                            }
-                        }
-                    }
-                }
+            // 追踪 plan-like 工具:Trae 的 `todo_write` / `update_plan` 不走
+            // ToolCallUpdate completed,而是用 SessionUpdate::Plan 代表完成。
+            let lower_title = tool_call.title.to_lowercase();
+            if matches!(
+                lower_title.as_str(),
+                "todo_write" | "todowrite" | "update_plan"
+            ) {
+                state
+                    .pending_plan_tool_ids
+                    .lock()
+                    .unwrap()
+                    .push(tool_call.tool_call_id.to_string());
             }
-            acp::SessionUpdate::UserMessageChunk(_) => {
-                // Intentionally ignored: Grove already emits UserMessage
-                // when AcpCommand::Prompt is received (run_acp_session line ~1054).
-                // Processing this agent echo would duplicate every user message.
-            }
-            acp::SessionUpdate::CurrentModeUpdate(update) => {
-                let mode_id = update.current_mode_id.to_string();
-                *self.handle.current_mode_id.lock().unwrap() = Some(mode_id.clone());
-                self.handle.emit(AcpUpdate::ModeChanged { mode_id });
-            }
-            acp::SessionUpdate::Plan(plan) => {
-                let entries: Vec<PlanEntryData> = plan
-                    .entries
-                    .iter()
-                    .map(|e| PlanEntryData {
-                        content: e.content.clone(),
-                        status: format!("{:?}", e.status).to_lowercase(),
-                    })
-                    .collect();
-                self.handle.emit(AcpUpdate::PlanUpdate { entries });
-                // 给所有已观察到但还没收到 completed 的 plan-like tool_call 合成
-                // 一条 completed ToolCallUpdate，避免前端上 spinner 永远转。
-                let pending_ids: Vec<String> =
-                    std::mem::take(&mut *self.pending_plan_tool_ids.lock().unwrap());
-                for id in pending_ids {
-                    self.handle.emit(AcpUpdate::ToolCallUpdate {
-                        id,
-                        status: "completed".to_string(),
-                        content: None,
-                        locations: Default::default(),
+
+            // 缓存 Write/Edit 文件快照(locations 在第二个 ToolCall 事件才有路径)
+            let title = &tool_call.title;
+            if title.starts_with("Write") || title.starts_with("Edit") {
+                if let Some(loc) = tool_call.locations.first() {
+                    let id_str = tool_call.tool_call_id.to_string();
+                    let mut snapshots = state.file_snapshots.lock().unwrap();
+                    snapshots.entry(id_str).or_insert_with(|| {
+                        let abs_path = loc.path.clone();
+                        let old_content = std::fs::read_to_string(&abs_path).ok();
+                        (abs_path, old_content)
                     });
                 }
             }
-            acp::SessionUpdate::AvailableCommandsUpdate(update) => {
-                let commands = update
-                    .available_commands
-                    .iter()
-                    .map(|cmd| CommandInfo {
-                        name: cmd.name.clone(),
-                        description: cmd.description.clone(),
-                        input_hint: cmd.input.as_ref().and_then(|input| match input {
-                            acp::AvailableCommandInput::Unstructured(u) => Some(u.hint.clone()),
-                            _ => None,
-                        }),
-                    })
-                    .collect();
-                self.handle.emit(AcpUpdate::AvailableCommands { commands });
-            }
-            _ => {}
         }
-        Ok(())
-    }
+        acp::SessionUpdate::ToolCallUpdate(update) => {
+            let mut content = update
+                .fields
+                .content
+                .as_ref()
+                .and_then(|blocks| blocks.first())
+                .map(|tc| state.adapter.tool_call_content_to_text(tc));
+            let status = update
+                .fields
+                .status
+                .as_ref()
+                .map(|s| format!("{:?}", s).to_lowercase())
+                .unwrap_or_default();
+            let locations: Vec<(String, Option<u32>)> = update
+                .fields
+                .locations
+                .as_ref()
+                .map(|locs| {
+                    locs.iter()
+                        .map(|l| (l.path.display().to_string(), l.line))
+                        .collect()
+                })
+                .unwrap_or_default();
 
-    async fn ext_method(&self, _args: acp::ExtRequest) -> acp::Result<acp::ExtResponse> {
-        Err(acp::Error::method_not_found())
-    }
+            // 如果 ACP 没提供 content 且状态为 completed,从文件快照生成 diff
+            let is_completed = update
+                .fields
+                .status
+                .as_ref()
+                .is_some_and(|s| matches!(s, acp::ToolCallStatus::Completed));
 
-    async fn ext_notification(&self, _args: acp::ExtNotification) -> acp::Result<()> {
-        Ok(())
+            if content.is_none() && is_completed {
+                let snapshot = state
+                    .file_snapshots
+                    .lock()
+                    .unwrap()
+                    .remove(&update.tool_call_id.to_string());
+                if let Some((abs_path, old_content)) = snapshot {
+                    if let Ok(new_text) = std::fs::read_to_string(&abs_path) {
+                        content = Some(adapter::generate_file_diff(
+                            &abs_path,
+                            old_content.as_deref(),
+                            &new_text,
+                        ));
+                    }
+                }
+            }
+
+            // ToolCallUpdate 中也可能带 locations(路径可能只在中间的 update 出现),
+            // 及时更新 write_tool_paths 以便 completed 时能拿到正确路径
+            if !locations.is_empty() {
+                let tc_id = update.tool_call_id.to_string();
+                let mut paths = state.write_tool_paths.lock().unwrap();
+                if let Some(existing) = paths.get_mut(&tc_id) {
+                    if existing.is_empty() {
+                        if let Some((p, _)) = locations.first() {
+                            *existing = p.clone();
+                        }
+                    }
+                }
+            }
+
+            // 若这个 tool_id 是 plan-like(之前记过),并且本次 update 是终态,
+            // 从 pending 表里移掉,避免 Plan 事件误触重复完成。
+            if matches!(
+                status.as_str(),
+                "completed" | "failed" | "error" | "cancelled"
+            ) {
+                let tc_id = update.tool_call_id.to_string();
+                let mut ids = state.pending_plan_tool_ids.lock().unwrap();
+                if let Some(pos) = ids.iter().position(|x| x == &tc_id) {
+                    ids.swap_remove(pos);
+                }
+            }
+
+            state.handle.emit(AcpUpdate::ToolCallUpdate {
+                id: update.tool_call_id.to_string(),
+                status: status.clone(),
+                content,
+                locations: locations.clone(),
+            });
+
+            // 检测 Plan File:Write 工具 completed 且在 plan mode 下写入 .md 文件
+            if is_completed {
+                let tc_id = update.tool_call_id.to_string();
+                let write_path = state.write_tool_paths.lock().unwrap().remove(&tc_id);
+                if let Some(path) = write_path.filter(|p| !p.is_empty()) {
+                    if path.ends_with(".md") {
+                        let mode = state.handle.current_mode_id.lock().unwrap().clone();
+                        if mode
+                            .as_ref()
+                            .is_some_and(|m| m.to_lowercase().contains("plan"))
+                        {
+                            // 优先从 ACP ToolCallContent 提取原始内容(Diff.new_text)
+                            let plan_content = update
+                                .fields
+                                .content
+                                .as_ref()
+                                .and_then(|blocks| blocks.first())
+                                .and_then(|tc| match tc {
+                                    acp::ToolCallContent::Diff(diff) => Some(diff.new_text.clone()),
+                                    acp::ToolCallContent::Content(c) => {
+                                        Some(content_block_to_text(&c.content))
+                                    }
+                                    _ => None,
+                                })
+                                .or_else(|| std::fs::read_to_string(&path).ok());
+                            state.handle.emit(AcpUpdate::PlanFileUpdate {
+                                path,
+                                content: plan_content,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        acp::SessionUpdate::UserMessageChunk(_) => {
+            // Intentionally ignored: Grove already emits UserMessage
+            // when AcpCommand::Prompt is received in run_acp_session's loop.
+            // Processing this agent echo would duplicate every user message.
+        }
+        acp::SessionUpdate::CurrentModeUpdate(update) => {
+            let mode_id = update.current_mode_id.to_string();
+            *state.handle.current_mode_id.lock().unwrap() = Some(mode_id.clone());
+            state.handle.emit(AcpUpdate::ModeChanged { mode_id });
+        }
+        acp::SessionUpdate::Plan(plan) => {
+            let entries: Vec<PlanEntryData> = plan
+                .entries
+                .iter()
+                .map(|e| PlanEntryData {
+                    content: e.content.clone(),
+                    status: format!("{:?}", e.status).to_lowercase(),
+                })
+                .collect();
+            state.handle.emit(AcpUpdate::PlanUpdate { entries });
+            // 给所有已观察到但还没收到 completed 的 plan-like tool_call 合成
+            // 一条 completed ToolCallUpdate,避免前端上 spinner 永远转。
+            let pending_ids: Vec<String> =
+                std::mem::take(&mut *state.pending_plan_tool_ids.lock().unwrap());
+            for id in pending_ids {
+                state.handle.emit(AcpUpdate::ToolCallUpdate {
+                    id,
+                    status: "completed".to_string(),
+                    content: None,
+                    locations: Default::default(),
+                });
+            }
+        }
+        acp::SessionUpdate::AvailableCommandsUpdate(update) => {
+            let commands = update
+                .available_commands
+                .iter()
+                .map(|cmd| CommandInfo {
+                    name: cmd.name.clone(),
+                    description: cmd.description.clone(),
+                    input_hint: cmd.input.as_ref().and_then(|input| match input {
+                        acp::AvailableCommandInput::Unstructured(u) => Some(u.hint.clone()),
+                        _ => None,
+                    }),
+                })
+                .collect();
+            state.handle.emit(AcpUpdate::AvailableCommands { commands });
+        }
+        _ => {}
     }
+    Ok(())
 }
 
 /// 将 ContentBlock 转换为文本
@@ -1106,12 +1087,13 @@ pub async fn get_or_start_session(
 async fn run_acp_session(
     handle: Arc<AcpSessionHandle>,
     config: AcpStartConfig,
-    mut cmd_rx: mpsc::Receiver<AcpCommand>,
+    cmd_rx: mpsc::Receiver<AcpCommand>,
 ) -> crate::error::Result<()> {
     // 根据 agent_type 分支获取 reader/writer（使用 trait object 统一类型）
     let child: Option<tokio::process::Child>;
-    let writer: Box<dyn futures::AsyncWrite + Unpin>;
-    let reader: Box<dyn futures::AsyncRead + Unpin>;
+    // 0.11 ByteStreams 要求 Send + 'static;grove 的子进程 pipe 和 DuplexStream 都满足。
+    let writer: Box<dyn futures::AsyncWrite + Send + Unpin>;
+    let reader: Box<dyn futures::AsyncRead + Send + Unpin>;
 
     if config.agent_type == "remote" {
         // Remote: WebSocket 连接（通过 duplex 管道桥接为 AsyncRead/AsyncWrite）
@@ -1166,7 +1148,7 @@ async fn run_acp_session(
 
     let adapter = adapter::resolve_adapter(&config.agent_command);
 
-    let client = GroveAcpClient {
+    let state = Arc::new(AcpClientState {
         handle: handle.clone(),
         working_dir: config.working_dir.clone(),
         terminals: Arc::new(Mutex::new(HashMap::new())),
@@ -1177,44 +1159,115 @@ async fn run_acp_session(
         file_snapshots: Mutex::new(HashMap::new()),
         write_tool_paths: Mutex::new(HashMap::new()),
         pending_plan_tool_ids: Mutex::new(Vec::new()),
-    };
-
-    // 创建 ACP 连接
-    let (conn, handle_io) = acp::ClientSideConnection::new(client, writer, reader, |fut| {
-        tokio::task::spawn_local(fut);
     });
 
-    // 后台处理 I/O
-    tokio::task::spawn_local(handle_io);
+    let transport = acp::ByteStreams::new(writer, reader);
 
-    // 初始化连接
-    let init_resp = conn
-        .initialize(
-            acp::InitializeRequest::new(acp::ProtocolVersion::V1)
-                .client_capabilities(acp::ClientCapabilities::default().terminal(true))
-                .client_info(
-                    acp::Implementation::new("grove", env!("CARGO_PKG_VERSION")).title("Grove"),
-                ),
+    // 每个 handler 闭包通过 Arc::clone 捕获一份 state。0.11 要求 handler 的 F
+    // 本身是 Send,所以 state 必须是 Send + Sync(AcpClientState 已满足)。
+    let result = acp::Client
+        .builder()
+        .on_receive_notification(
+            {
+                let state = Arc::clone(&state);
+                async move |notif: acp::SessionNotification, _cx| {
+                    handle_session_notification(&state, notif).await
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
         )
-        .await
-        .map_err(|e| crate::error::GroveError::Session(format!("ACP initialize failed: {}", e)))?;
+        .on_receive_request(
+            {
+                let state = Arc::clone(&state);
+                async move |req: acp::RequestPermissionRequest, responder, _cx| {
+                    match handle_request_permission(&state, req).await {
+                        Ok(r) => responder.respond(r),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = Arc::clone(&state);
+                async move |req: acp::CreateTerminalRequest, responder, _cx| {
+                    match handle_create_terminal(&state, req).await {
+                        Ok(r) => responder.respond(r),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = Arc::clone(&state);
+                async move |req: acp::TerminalOutputRequest, responder, _cx| {
+                    match handle_terminal_output(&state, req).await {
+                        Ok(r) => responder.respond(r),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = Arc::clone(&state);
+                async move |req: acp::ReleaseTerminalRequest, responder, _cx| {
+                    match handle_release_terminal(&state, req).await {
+                        Ok(r) => responder.respond(r),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = Arc::clone(&state);
+                async move |req: acp::WaitForTerminalExitRequest, responder, _cx| {
+                    match handle_wait_for_terminal_exit(&state, req).await {
+                        Ok(r) => responder.respond(r),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = Arc::clone(&state);
+                async move |req: acp::KillTerminalRequest, responder, _cx| {
+                    match handle_kill_terminal(&state, req).await {
+                        Ok(r) => responder.respond(r),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .connect_with(transport, move |conn: acp::ConnectionTo<acp::Agent>| {
+            drive_session(handle, config, cmd_rx, conn)
+        })
+        .await;
 
-    let agent_name = init_resp
-        .agent_info
-        .as_ref()
-        .map(|i| i.name.clone())
-        .unwrap_or_else(|| "unknown".to_string());
-    let agent_version = init_resp
-        .agent_info
-        .as_ref()
-        .map(|i| i.version.clone())
-        .unwrap_or_else(|| "0.0.0".to_string());
+    // kill_on_drop 会清理子进程
+    drop(child);
 
-    // 检查 agent 是否支持 load_session
-    // Trae 错误地标识了不支持 load_session 且不返回 agent_info，但实际可以调用
-    let is_trae = config.agent_command.contains("trae");
-    let supports_load = init_resp.agent_capabilities.load_session || is_trae;
-    // Helper: extract modes/models from session response
+    result.map_err(|e| crate::error::GroveError::Session(format!("ACP session error: {}", e)))
+}
+
+/// 在 `connect_with` 的 `main_fn` 里运行 ACP 会话生命周期:initialize → 创建/恢复
+/// session → 命令循环。与 handler 不同,这里运行在一个独立的"spawned task"上下文,
+/// 可以安全使用 `SentRequest::block_task()`。
+async fn drive_session(
+    handle: Arc<AcpSessionHandle>,
+    config: AcpStartConfig,
+    mut cmd_rx: mpsc::Receiver<AcpCommand>,
+    conn: acp::ConnectionTo<acp::Agent>,
+) -> acp::Result<(), acp::Error> {
     fn extract_modes(
         modes: &Option<acp::SessionModeState>,
     ) -> (Vec<(String, String)>, Option<String>) {
@@ -1249,7 +1302,39 @@ async fn run_acp_session(
         }
     }
 
-    // 查找保存的 session_id（从 chat session 读取）
+    // Grove 内部错误 → acp::Error
+    fn to_acp_err(e: impl std::fmt::Display) -> acp::Error {
+        acp::Error::internal_error().data(format!("{}", e))
+    }
+
+    // 初始化连接
+    let init_resp = conn
+        .send_request(
+            acp::InitializeRequest::new(acp::ProtocolVersion::V1)
+                .client_capabilities(acp::ClientCapabilities::default().terminal(true))
+                .client_info(
+                    acp::Implementation::new("grove", env!("CARGO_PKG_VERSION")).title("Grove"),
+                ),
+        )
+        .block_task()
+        .await?;
+
+    let agent_name = init_resp
+        .agent_info
+        .as_ref()
+        .map(|i| i.name.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let agent_version = init_resp
+        .agent_info
+        .as_ref()
+        .map(|i| i.version.clone())
+        .unwrap_or_else(|| "0.0.0".to_string());
+
+    // Trae 错误地标识了不支持 load_session 且不返回 agent_info,但实际可以调用
+    let is_trae = config.agent_command.contains("trae");
+    let supports_load = init_resp.agent_capabilities.load_session || is_trae;
+
+    // 查找保存的 session_id(从 chat session 读取)
     let saved_id = config.chat_id.as_ref().and_then(|cid| {
         crate::storage::tasks::get_chat_session(&config.project_key, &config.task_id, cid)
             .ok()
@@ -1257,7 +1342,6 @@ async fn run_acp_session(
             .and_then(|c| c.acp_session_id)
     });
 
-    // Helper: persist session_id to chat storage
     let persist_session_id = |sid: &str| {
         if let Some(ref cid) = config.chat_id {
             let _ = crate::storage::tasks::update_chat_acp_session_id(
@@ -1269,16 +1353,13 @@ async fn run_acp_session(
         }
     };
 
-    // Track modes/models from session response
     let available_modes;
     let current_mode_id;
     let available_models;
     let current_model_id;
 
-    // Helper macro: new_session + persist + extract modes/models
     macro_rules! create_new_session {
         () => {{
-            // 清除旧的磁盘历史
             if let Some(ref cid) = config.chat_id {
                 crate::storage::chat_history::clear_history(
                     &config.project_key,
@@ -1286,15 +1367,13 @@ async fn run_acp_session(
                     cid,
                 );
             }
+            let mcp = grove_mcp_server(&config.env_vars).map_err(to_acp_err)?;
             let resp = conn
-                .new_session(
-                    acp::NewSessionRequest::new(&config.working_dir)
-                        .mcp_servers(vec![grove_mcp_server(&config.env_vars)?]),
+                .send_request(
+                    acp::NewSessionRequest::new(&config.working_dir).mcp_servers(vec![mcp]),
                 )
-                .await
-                .map_err(|e| {
-                    crate::error::GroveError::Session(format!("ACP new_session failed: {}", e))
-                })?;
+                .block_task()
+                .await?;
             let sid = resp.session_id.to_string();
             persist_session_id(&sid);
             (available_modes, current_mode_id) = extract_modes(&resp.modes);
@@ -1304,17 +1383,20 @@ async fn run_acp_session(
     }
 
     let session_id = if let (true, Some(saved_id)) = (supports_load, saved_id) {
-        // 抑制 agent 的回放通知（Grove 统一从磁盘回放）
+        // 抑制 agent 的回放通知(Grove 统一从磁盘回放)
         handle
             .suppress_emit
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let load_result = conn
-            .load_session(
+        let load_result = {
+            let mcp = grove_mcp_server(&config.env_vars).map_err(to_acp_err)?;
+            conn.send_request(
                 acp::LoadSessionRequest::new(acp::SessionId::new(&*saved_id), &config.working_dir)
-                    .mcp_servers(vec![grove_mcp_server(&config.env_vars)?]),
+                    .mcp_servers(vec![mcp]),
             )
-            .await;
-        // load_session spec 保证 response 在所有 replay notification 之后，
+            .block_task()
+            .await
+        };
+        // load_session spec 保证 response 在所有 replay notification 之后,
         // 额外等 300ms 作为安全余量
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         handle
@@ -1327,9 +1409,7 @@ async fn run_acp_session(
                 (available_models, current_model_id) = extract_models(&resp.models);
                 saved_id
             }
-            Err(_) => {
-                create_new_session!()
-            }
+            Err(_) => create_new_session!(),
         }
     } else {
         create_new_session!()
@@ -1337,7 +1417,6 @@ async fn run_acp_session(
 
     let session_id_arc = acp::SessionId::new(&*session_id);
 
-    // 提取 prompt capabilities
     let prompt_capabilities = PromptCapabilitiesData {
         image: init_resp.agent_capabilities.prompt_capabilities.image,
         audio: init_resp.agent_capabilities.prompt_capabilities.audio,
@@ -1347,7 +1426,6 @@ async fn run_acp_session(
             .embedded_context,
     };
 
-    // 存储 agent info（用于重连时回放历史）
     if let Ok(mut info) = handle.agent_info.write() {
         *info = Some((
             session_id.clone(),
@@ -1356,10 +1434,8 @@ async fn run_acp_session(
         ));
     }
 
-    // 初始化 current_mode_id（用于 PlanFileUpdate 检测）
     *handle.current_mode_id.lock().unwrap() = current_mode_id.clone();
 
-    // 通知会话就绪
     handle.emit(AcpUpdate::SessionReady {
         session_id,
         agent_name,
@@ -1380,7 +1456,6 @@ async fn run_acp_session(
                 sender,
                 terminal,
             } => {
-                // 记录用户消息到 history（重连时回放）
                 handle.emit(AcpUpdate::UserMessage {
                     text: text.clone(),
                     attachments: attachments.clone(),
@@ -1388,65 +1463,60 @@ async fn run_acp_session(
                     terminal,
                 });
                 handle.emit(AcpUpdate::Busy { value: true });
-                // 清空上轮累积文本
                 if let Ok(mut buf) = handle.last_assistant_text.lock() {
                     buf.clear();
                 }
 
-                // 构建 content blocks
                 let mut content_blocks: Vec<acp::ContentBlock> = vec![text.into()];
                 for block in &attachments {
                     content_blocks.push(to_acp_content_block(block));
                 }
 
-                // 使用 select! 让 Cancel 等命令在 prompt 运行期间也能被处理
-                let prompt_fut = conn.prompt(acp::PromptRequest::new(
-                    session_id_arc.clone(),
-                    content_blocks,
-                ));
+                // 用 SentRequest::block_task() 得到可被 select 的 future
+                let prompt_fut = conn
+                    .send_request(acp::PromptRequest::new(
+                        session_id_arc.clone(),
+                        content_blocks,
+                    ))
+                    .block_task();
                 tokio::pin!(prompt_fut);
 
-                // Cancel 超时：发送 cancel 后若 agent 无响应，超时强制退出
                 let cancel_deadline: std::cell::Cell<Option<tokio::time::Instant>> =
                     std::cell::Cell::new(None);
-                // 新 prompt 到达时暂存，等当前 prompt 结束后立即处理
                 let mut next_prompt: Option<(String, Vec<ContentBlockData>)> = None;
                 let mut got_kill = false;
 
                 let result = loop {
-                    // 计算超时 future
                     let deadline = cancel_deadline.get();
                     tokio::select! {
                         res = &mut prompt_fut => break res,
                         _ = tokio::time::sleep_until(deadline.unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(86400))), if deadline.is_some() => {
-                            // Cancel 超时：agent 无响应，强制退出
                             eprintln!("[ACP] Cancel timeout — agent unresponsive, forcing exit");
                             break Err(acp::Error::internal_error());
                         }
                         Some(inner_cmd) = cmd_rx.recv() => {
                             match inner_cmd {
                                 AcpCommand::Cancel => {
-                                    let _ = conn.cancel(acp::CancelNotification::new(session_id_arc.clone())).await;
-                                    // 10 秒超时：如果 agent 不响应 cancel，强制退出内循环
+                                    // 0.11: cancel 是 Notification,send_notification 是同步 API
+                                    let _ = conn.send_notification(acp::CancelNotification::new(session_id_arc.clone()));
                                     cancel_deadline.set(Some(tokio::time::Instant::now() + std::time::Duration::from_secs(10)));
                                 }
                                 AcpCommand::SetMode { mode_id } => {
                                     *handle.current_mode_id.lock().unwrap() = Some(mode_id.clone());
                                     handle.emit(AcpUpdate::ModeChanged { mode_id: mode_id.clone() });
-                                    let _ = conn.set_session_mode(acp::SetSessionModeRequest::new(
+                                    let _ = conn.send_request(acp::SetSessionModeRequest::new(
                                         session_id_arc.clone(),
                                         acp::SessionModeId::new(mode_id),
-                                    )).await;
+                                    )).block_task().await;
                                 }
                                 AcpCommand::SetModel { model_id } => {
-                                    let _ = conn.set_session_model(acp::SetSessionModelRequest::new(
+                                    let _ = conn.send_request(acp::SetSessionModelRequest::new(
                                         session_id_arc.clone(),
                                         acp::ModelId::new(model_id),
-                                    )).await;
+                                    )).block_task().await;
                                 }
                                 AcpCommand::Prompt { text, attachments, .. } => {
-                                    // 新 prompt 到达：cancel 当前，保存新 prompt 待处理
-                                    let _ = conn.cancel(acp::CancelNotification::new(session_id_arc.clone())).await;
+                                    let _ = conn.send_notification(acp::CancelNotification::new(session_id_arc.clone()));
                                     cancel_deadline.set(Some(tokio::time::Instant::now() + std::time::Duration::from_secs(10)));
                                     next_prompt = Some((text, attachments));
                                 }
@@ -1461,7 +1531,6 @@ async fn run_acp_session(
 
                 handle.emit(AcpUpdate::Busy { value: false });
 
-                // Kill 命令：跳出外层循环
                 if got_kill {
                     handle.emit(AcpUpdate::Error {
                         message: "Session killed".to_string(),
@@ -1471,7 +1540,6 @@ async fn run_acp_session(
 
                 match result {
                     Ok(resp) => {
-                        // 有 next_prompt 时不发 Complete 通知（即将开始新 prompt）
                         if next_prompt.is_none() {
                             handle.emit(AcpUpdate::Complete {
                                 stop_reason: format!("{:?}", resp.stop_reason),
@@ -1501,7 +1569,6 @@ async fn run_acp_session(
                     }
                 }
 
-                // 有暂存的新 prompt → 回注到命令 channel 优先处理
                 if let Some((text, attachments)) = next_prompt {
                     let _ = handle.cmd_tx.try_send(AcpCommand::Prompt {
                         text,
@@ -1509,23 +1576,20 @@ async fn run_acp_session(
                         sender: None,
                         terminal: false,
                     });
-                } else {
-                    // Auto-send next queued message (if any), unless queue is paused
-                    if !handle
-                        .queue_paused
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                    {
-                        if let Some(next_msg) = handle.pop_queue_front() {
-                            handle.emit(AcpUpdate::QueueUpdate {
-                                messages: handle.get_queue(),
-                            });
-                            handle.try_enqueue_prompt(next_msg.text, next_msg.attachments);
-                        }
+                } else if !handle
+                    .queue_paused
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    if let Some(next_msg) = handle.pop_queue_front() {
+                        handle.emit(AcpUpdate::QueueUpdate {
+                            messages: handle.get_queue(),
+                        });
+                        handle.try_enqueue_prompt(next_msg.text, next_msg.attachments);
                     }
                 }
             }
             AcpCommand::Cancel => {
-                // Agent 空闲时收到 Cancel，忽略
+                // Agent 空闲时收到 Cancel,忽略
             }
             AcpCommand::SetMode { mode_id } => {
                 *handle.current_mode_id.lock().unwrap() = Some(mode_id.clone());
@@ -1533,18 +1597,20 @@ async fn run_acp_session(
                     mode_id: mode_id.clone(),
                 });
                 let _ = conn
-                    .set_session_mode(acp::SetSessionModeRequest::new(
+                    .send_request(acp::SetSessionModeRequest::new(
                         session_id_arc.clone(),
                         acp::SessionModeId::new(mode_id),
                     ))
+                    .block_task()
                     .await;
             }
             AcpCommand::SetModel { model_id } => {
                 let _ = conn
-                    .set_session_model(acp::SetSessionModelRequest::new(
+                    .send_request(acp::SetSessionModelRequest::new(
                         session_id_arc.clone(),
                         acp::ModelId::new(model_id),
                     ))
+                    .block_task()
                     .await;
             }
             AcpCommand::Kill => {
@@ -1552,9 +1618,6 @@ async fn run_acp_session(
             }
         }
     }
-
-    // 清理子进程（如有）
-    drop(child);
 
     Ok(())
 }

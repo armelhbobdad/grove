@@ -1,6 +1,6 @@
 [package]
 name = "grove-rs"
-version = "0.9.2"
+version = "0.9.3"
 edition = "2021"
 description = "A Kanban-style TUI for parallel AI coding. Manage Git worktrees as tasks, run multiple agents in isolated tmux sessions, get notified via hooks."
 license = "MIT"
@@ -78,7 +78,7 @@ portable-pty = "0.8"
 futures = "0.3"
 
 # ACP (Agent Client Protocol)
-agent-client-protocol = { version = "0.10", features = ["unstable_session_model"] }
+agent-client-protocol = { version = "0.11", features = ["unstable_session_model"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
 tokio-stream = "0.1"
