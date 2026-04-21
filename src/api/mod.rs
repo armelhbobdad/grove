@@ -897,12 +897,21 @@ pub async fn start_server(
         });
     }
 
-    // Use graceful shutdown to flush FileWatcher data on Ctrl+C
+    // Graceful shutdown on Ctrl-C flushes FileWatcher data before exit.
+    // A second Ctrl-C short-circuits the graceful wait and force-exits —
+    // necessary because axum::serve keeps blocking while in-flight WebSocket
+    // connections stay open (e.g. ACP stream, walkie-talkie), and browsers
+    // won't close them on their own.
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c().await.ok();
-            println!("\nShutting down...");
+            println!("\nShutting down... (press Ctrl-C again to force exit)");
             shutdown_file_watchers();
+            tokio::spawn(async {
+                tokio::signal::ctrl_c().await.ok();
+                eprintln!("Forced exit.");
+                std::process::exit(130);
+            });
         })
         .await
         .map_err(std::io::Error::other)
