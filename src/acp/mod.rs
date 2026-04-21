@@ -595,7 +595,12 @@ async fn handle_session_notification(
         }
         acp::SessionUpdate::AgentThoughtChunk(chunk) => {
             let text = content_block_to_text(&chunk.content);
-            state.handle.emit(AcpUpdate::ThoughtChunk { text });
+            // Some agents (observed on claude-code-acp) send `text: ""` thought
+            // chunks as a "thinking" pulse without actual reasoning content.
+            // Skip them so the UI doesn't create an empty Thought bubble.
+            if !text.is_empty() {
+                state.handle.emit(AcpUpdate::ThoughtChunk { text });
+            }
         }
         acp::SessionUpdate::ToolCall(tool_call) => {
             let locations = tool_call
