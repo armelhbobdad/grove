@@ -612,6 +612,12 @@ pub struct SendPromptParams {
     pub mode_id: Option<String>,
     /// Switch agent model before sending prompt (e.g., "opus", "sonnet"). Only used with text.
     pub model_id: Option<String>,
+    /// Change the thought-level / reasoning-effort selector before sending prompt.
+    /// Must provide both `thought_level_config_id` (from grove_chat_status) and
+    /// `thought_level_value_id`. Only used with text.
+    pub thought_level_config_id: Option<String>,
+    /// Value id for the thought-level selector; pair with `thought_level_config_id`.
+    pub thought_level_value_id: Option<String>,
     /// Respond to a pending permission request with this option ID. Mutually exclusive with text and cancel.
     pub permission_option_id: Option<String>,
     /// Set to true to cancel the current agent turn. Mutually exclusive with text and permission_option_id.
@@ -1113,7 +1119,7 @@ impl GroveMcpServer {
     /// Send a prompt, respond to permission, or cancel a chat turn
     #[tool(
         name = "grove_send_prompt",
-        description = "Interact with a chat session. Three mutually exclusive actions: (1) `text` — send a prompt (optionally set mode_id/model_id). (2) `permission_option_id` — respond to a pending permission request. (3) `cancel: true` — cancel the current turn. Returns immediately. IMPORTANT: Always call grove_chat_status first to check the session state and available modes/models before sending."
+        description = "Interact with a chat session. Three mutually exclusive actions: (1) `text` — send a prompt (optionally set mode_id/model_id, or both thought_level_config_id + thought_level_value_id for reasoning-effort). (2) `permission_option_id` — respond to a pending permission request. (3) `cancel: true` — cancel the current turn. Returns immediately. IMPORTANT: Always call grove_chat_status first to check the session state and available modes/models/thought_levels before sending."
     )]
     async fn grove_send_prompt(
         &self,
@@ -1127,7 +1133,7 @@ impl GroveMcpServer {
     /// Query chat status (auto-connects the session if not running)
     #[tool(
         name = "grove_chat_status",
-        description = "Get the current state of a chat session. Auto-connects the agent if not already running. Returns: state (idle/busy/permission_needed), available_modes, available_models, turn_count, last_message, plan, and permission details. Always call this before grove_send_prompt to know the session state and what modes/models are available."
+        description = "Get the current state of a chat session. Auto-connects the agent if not already running. Returns: state (idle/busy/permission_needed), available_modes, available_models, available_thought_levels (+ current_thought_level_id / thought_level_config_id when the agent exposes one), turn_count, last_message, plan, and permission details. Always call this before grove_send_prompt to know the session state and available selectors."
     )]
     async fn grove_chat_status(
         &self,
@@ -2625,6 +2631,16 @@ async fn send_prompt_local(
             .map_err(|e| McpError::internal_error(format!("Failed to set model: {e}"), None))?;
     }
 
+    // Set thought level if both ids are provided
+    if let (Some(cfg_id), Some(val_id)) = (p.thought_level_config_id, p.thought_level_value_id) {
+        handle
+            .set_thought_level(cfg_id, val_id)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to set thought level: {e}"), None)
+            })?;
+    }
+
     handle
         .send_prompt(text, vec![], p.sender, false)
         .await
@@ -2672,6 +2688,26 @@ async fn send_prompt_remote(
             if let acp::SocketResponse::Error { message } = resp {
                 return Err(McpError::internal_error(
                     format!("Remote set_model failed: {}", message),
+                    None,
+                ));
+            }
+        }
+
+        // Set thought level if both ids provided
+        if let (Some(cfg_id), Some(val_id)) = (p.thought_level_config_id, p.thought_level_value_id)
+        {
+            let tl_cmd = acp::SocketCommand::SetThoughtLevel {
+                config_id: cfg_id,
+                value_id: val_id,
+            };
+            let resp = acp::send_socket_command(sock_path, &tl_cmd)
+                .await
+                .map_err(|e| {
+                    McpError::internal_error(format!("Socket set_thought_level failed: {e}"), None)
+                })?;
+            if let acp::SocketResponse::Error { message } = resp {
+                return Err(McpError::internal_error(
+                    format!("Remote set_thought_level failed: {}", message),
                     None,
                 ));
             }
@@ -2737,18 +2773,35 @@ async fn chat_status_from_handle(
     let (persist_project, persist_task, persist_chat) = handle.persist_info();
 
     // Try session metadata first (already exists for initialized sessions)
-    let modes_models = if let Some(ref cid) = persist_chat {
-        if let Some(meta) = acp::read_session_metadata(&persist_project, &persist_task, cid) {
-            Some((meta.available_modes, meta.available_models))
-        } else {
-            None
-        }
+    type Selectors = (
+        Vec<(String, String)>,
+        Vec<(String, String)>,
+        Vec<(String, String)>,
+        Option<String>,
+        Option<String>,
+    );
+    let from_meta: Option<Selectors> = if let Some(ref cid) = persist_chat {
+        acp::read_session_metadata(&persist_project, &persist_task, cid).map(|m| {
+            (
+                m.available_modes,
+                m.available_models,
+                m.available_thought_levels,
+                m.current_thought_level_id,
+                m.thought_level_config_id,
+            )
+        })
     } else {
         None
     };
 
-    let (available_modes, available_models) = if let Some(mm) = modes_models {
-        mm
+    let (
+        available_modes,
+        available_models,
+        available_thought_levels,
+        current_thought_level_id,
+        thought_level_config_id,
+    ) = if let Some(sel) = from_meta {
+        sel
     } else {
         // New session still initializing — wait for SessionReady via broadcast
         let mut rx = handle.subscribe();
@@ -2758,11 +2811,22 @@ async fn chat_status_from_handle(
                     Ok(acp::AcpUpdate::SessionReady {
                         available_modes,
                         available_models,
+                        available_thought_levels,
+                        current_thought_level_id,
+                        thought_level_config_id,
                         ..
-                    }) => return (available_modes, available_models),
+                    }) => {
+                        return (
+                            available_modes,
+                            available_models,
+                            available_thought_levels,
+                            current_thought_level_id,
+                            thought_level_config_id,
+                        );
+                    }
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        return (Vec::new(), Vec::new());
+                        return (Vec::new(), Vec::new(), Vec::new(), None, None);
                     }
                     Err(_) => {
                         // Lagged — messages were missed, retry
@@ -2785,7 +2849,14 @@ async fn chat_status_from_handle(
     };
     let compacted = chat_history::compact_events(history);
 
-    build_chat_status_json(&compacted, &available_modes, &available_models)
+    build_chat_status_json(
+        &compacted,
+        &available_modes,
+        &available_models,
+        &available_thought_levels,
+        current_thought_level_id.as_deref(),
+        thought_level_config_id.as_deref(),
+    )
 }
 
 /// Build chat status from disk (for remote sessions owned by another process)
@@ -2817,6 +2888,9 @@ async fn chat_status_from_disk(
         &compacted,
         &metadata.available_modes,
         &metadata.available_models,
+        &metadata.available_thought_levels,
+        metadata.current_thought_level_id.as_deref(),
+        metadata.thought_level_config_id.as_deref(),
     )
 }
 
@@ -2825,6 +2899,9 @@ fn build_chat_status_json(
     compacted: &[acp::AcpUpdate],
     available_modes: &[(String, String)],
     available_models: &[(String, String)],
+    available_thought_levels: &[(String, String)],
+    current_thought_level_id: Option<&str>,
+    thought_level_config_id: Option<&str>,
 ) -> Result<CallToolResult, McpError> {
     let last_message = extract_last_message(compacted);
     let plan = extract_last_plan(compacted);
@@ -2862,6 +2939,19 @@ fn build_chat_status_json(
         "available_modes": available_modes.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
         "available_models": available_models.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
     });
+
+    if !available_thought_levels.is_empty() {
+        result["available_thought_levels"] = json!(available_thought_levels
+            .iter()
+            .map(|(id, name)| json!({"id": id, "name": name}))
+            .collect::<Vec<_>>());
+    }
+    if let Some(id) = current_thought_level_id {
+        result["current_thought_level_id"] = json!(id);
+    }
+    if let Some(id) = thought_level_config_id {
+        result["thought_level_config_id"] = json!(id);
+    }
 
     if let Some(plan_entries) = plan {
         result["plan"] = plan_entries;
@@ -3051,11 +3141,15 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::OnceLock;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::sync::Mutex;
 
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    // MCP tests mutate HOME and the global DB connection — serialize with every
+    // other test module that does the same (storage + handler tests) via the
+    // crate-wide `test_lock` in `crate::storage::database`. Previously this
+    // module had its own `tokio::sync::Mutex`, which only serialized MCP tests
+    // among themselves; concurrent taskgroups tests flipped the DB path under
+    // us and produced flaky failures.
+    use crate::storage::database::test_lock;
 
     /// Regression: `focus` and `gap` in arrow bindings must round-trip
     /// through the typed `SketchElement` schema. Before the fix these fields
@@ -3272,7 +3366,7 @@ mod tests {
     }
 
     fn with_isolated_home<T>(f: impl FnOnce(&Path) -> T) -> T {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3514,7 +3608,7 @@ mod tests {
 
     #[test]
     fn filter_tools_outside_task_returns_orchestrator_surface() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         let mut env = EnvGuard::new();
         env.remove("GROVE_TASK_ID");
@@ -3563,7 +3657,7 @@ mod tests {
 
     #[test]
     fn filter_tools_inside_task_with_unknown_project_returns_common_only() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         let mut env = EnvGuard::new();
         env.set("GROVE_TASK_ID", "task-1");
@@ -3609,7 +3703,7 @@ mod tests {
 
     #[test]
     fn get_instructions_switches_on_task_context() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).blocking_lock();
+        let _guard = test_lock();
 
         // Outside task → management instructions
         {
@@ -3640,7 +3734,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_newline_protocol_smoke_test() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3688,7 +3782,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_management_tools_rejected_inside_task_context() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3801,7 +3895,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_grove_status_returns_full_context() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3842,7 +3936,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_execution_tools_roundtrip() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -3974,7 +4068,7 @@ mod tests {
     /// Read operations (read_notes, read_review) degrade gracefully.
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_execution_tools_with_nonexistent_task() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -4078,7 +4172,7 @@ mod tests {
     /// grove_edit_note: management tool roundtrip — write notes, read back via worker context.
     #[tokio::test(flavor = "current_thread")]
     async fn mcp_edit_note_roundtrip() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _guard = test_lock();
 
         let temp_home = unique_temp_dir("grove-mcp-home");
         std::fs::create_dir_all(&temp_home).unwrap();

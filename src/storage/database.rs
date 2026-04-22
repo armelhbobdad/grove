@@ -23,6 +23,24 @@ struct DbState {
 
 static DB: Mutex<Option<DbState>> = Mutex::new(None);
 
+/// Process-wide lock for tests that touch the database or HOME env var.
+///
+/// Grove keeps a single global DB connection (`DB` above) whose target path is
+/// derived from `grove_dir()` → `$HOME/.grove/grove.db`. Tests that override
+/// HOME to sandbox writes race each other: thread A flips HOME to `/tmp/a`,
+/// opens the DB there; thread B concurrently flips HOME to `/tmp/b` and
+/// re-opens the global DB at the new path, invisibly hijacking A's writes.
+///
+/// All test modules that mutate HOME or call `connection()` must serialize
+/// through this single shared mutex. Prior to consolidation each module had
+/// its own local `FILE_LOCK`, which only serialized tests within the same
+/// module — cross-module parallelism still produced flaky failures.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A guard that holds the DB mutex and exposes `&Connection`.
 /// Callers get this from `connection()` and use it like `&Connection` via `Deref`.
 pub struct DbGuard(std::sync::MutexGuard<'static, Option<DbState>>);
@@ -676,8 +694,7 @@ pub fn migrate_v20_fix_empty_slots() -> bool {
 mod tests {
     use super::*;
 
-    /// Process-wide lock for tests that mutate HOME env var.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Shared with other DB-touching test modules via `test_lock` above.
 
     /// RAII guard that restores HOME on drop (including panic unwind).
     struct HomeGuard(String);
@@ -693,7 +710,7 @@ mod tests {
     /// Run with: cargo test storage::database::tests::dry_run_migration -- --nocapture
     #[test]
     fn dry_run_migration() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
+        let _env_guard = test_lock();
         let real_grove = dirs::home_dir().unwrap().join(".grove");
         if !real_grove.exists() {
             eprintln!("[skip] No ~/.grove/ found, nothing to test");
