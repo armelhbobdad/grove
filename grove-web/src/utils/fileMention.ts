@@ -158,7 +158,13 @@ export function buildStudioMentionItems(
     }
     if (file.startsWith("input/")) {
       const name = stripPrefix(file, "input/");
-      if (name) {
+      if (name.endsWith("/")) {
+        // Directory symlink (working directory) — show as directory entry, don't expand.
+        const dirName = name.slice(0, -1);
+        if (dirName) {
+          push({ path: file.slice(0, -1), isDir: true, displayName: dirName, category: "Input · Folder" });
+        }
+      } else if (name) {
         const linky = isLink(name);
         push({
           path: file,
@@ -184,7 +190,12 @@ export function buildStudioMentionItems(
     }
     if (file.startsWith("resource/")) {
       const name = stripPrefix(file, "resource/");
-      if (name) {
+      if (name.endsWith("/")) {
+        const dirName = name.slice(0, -1);
+        if (dirName) {
+          push({ path: file.slice(0, -1), isDir: true, displayName: dirName, category: "Shared Resource · Folder" });
+        }
+      } else if (name) {
         const linky = isLink(name);
         push({
           path: file,

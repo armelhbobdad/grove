@@ -104,6 +104,55 @@ fn resolve_safe_path(
     Ok(target)
 }
 
+const IGNORED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    ".hg",
+    ".svn",
+    "target",
+    "__pycache__",
+    ".DS_Store",
+    ".Trash",
+    ".cache",
+    ".npm",
+    ".pnpm-store",
+    ".yarn",
+    ".turbo",
+    ".next",
+    ".nuxt",
+    "dist",
+    "build",
+    ".build",
+    "vendor",
+    "Pods",
+    ".gradle",
+    ".idea",
+    ".vscode",
+];
+
+/// Check if a path component represents a direct child of `input/`.
+/// Directories whose direct children should be treated as opaque when they
+/// are symlinks (recorded as directory entries, not recursed into).
+const SYMLINK_OPAQUE_PARENTS: &[&str] = &["input", "resource"];
+
+fn is_symlink_dir_child(entry: &walkdir::DirEntry, root: &std::path::Path) -> bool {
+    if !entry.path().is_symlink() {
+        return false;
+    }
+    if let Ok(rel) = entry.path().strip_prefix(root) {
+        let count = rel.components().count();
+        if count == 2 {
+            let mut comps = rel.components();
+            if let Some(std::path::Component::Normal(parent)) = comps.next() {
+                if let Some(parent_str) = parent.to_str() {
+                    return SYMLINK_OPAQUE_PARENTS.contains(&parent_str);
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Walk a directory tree and return relative paths (non-git fallback).
 ///
 /// `follow_links(true)` is required for Studio tasks: their `resource/`
@@ -112,26 +161,49 @@ fn resolve_safe_path(
 /// non-file and skip all of its contents — so `@` mentions would never
 /// surface resource files. Using `entry.path().is_file()` (instead of
 /// `file_type().is_file()`) also resolves through symlinks correctly.
+///
+/// Symlinks under `input/` and `resource/` that point to directories (working
+/// directory links) are recorded as directory-level entries with a trailing `/`
+/// suffix and NOT recursed into — avoids enumerating `.git`,
+/// `node_modules` etc. from large git repos.
 fn list_files_fs(root: &str) -> Vec<String> {
     let root_path = std::path::Path::new(root);
     let mut files = Vec::new();
-    // `max_depth` 做一个保守的兜底：follow_links(true) 下若碰到 `a -> b -> a`
-    // 这种软链循环，walkdir 自己的 loop detection 未必在所有版本都能准确
-    // 识别跨挂载点的 cycle，硬顶一个深度避免无限递归 / 过大的重复输出。
-    // 64 对 @ mention 文件枚举来说绰绰有余。
-    for entry in walkdir::WalkDir::new(root_path)
+    let mut symlink_dirs: Vec<String> = Vec::new();
+
+    let mut it = walkdir::WalkDir::new(root_path)
         .min_depth(1)
         .max_depth(64)
         .follow_links(true)
         .into_iter()
-        .filter_map(|e| e.ok())
-    {
+        .filter_entry(|entry| {
+            if entry.depth() > 0 {
+                if let Some(name) = entry.file_name().to_str() {
+                    if IGNORED_DIRS.contains(&name) && !entry.file_type().is_symlink() {
+                        return false;
+                    }
+                }
+            }
+            true
+        });
+
+    while let Some(Ok(entry)) = it.next() {
+        if is_symlink_dir_child(&entry, root_path) {
+            if let Ok(rel) = entry.path().strip_prefix(root_path) {
+                let rel_str = rel.to_string_lossy().to_string();
+                symlink_dirs.push(format!("{}/", rel_str));
+            }
+            it.skip_current_dir();
+            continue;
+        }
         if entry.path().is_file() {
             if let Ok(rel) = entry.path().strip_prefix(root_path) {
                 files.push(rel.to_string_lossy().to_string());
             }
         }
     }
+
+    files.extend(symlink_dirs);
     files.sort();
     files
 }

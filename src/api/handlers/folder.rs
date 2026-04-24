@@ -11,9 +11,7 @@ pub struct BrowseFolderResponse {
     pub path: Option<String>,
 }
 
-/// GET /api/v1/browse-folder - Open system folder picker dialog
 pub async fn browse_folder() -> Json<BrowseFolderResponse> {
-    // Use AppleScript on macOS to show folder picker
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("osascript")
@@ -31,10 +29,8 @@ pub async fn browse_folder() -> Json<BrowseFolderResponse> {
         }
     }
 
-    // On Linux, try zenity or kdialog
     #[cfg(target_os = "linux")]
     {
-        // Try zenity first
         let output = Command::new("zenity")
             .args([
                 "--file-selection",
@@ -52,7 +48,6 @@ pub async fn browse_folder() -> Json<BrowseFolderResponse> {
             }
         }
 
-        // Try kdialog if zenity failed
         let output = Command::new("kdialog")
             .args([
                 "--getexistingdirectory",
@@ -72,7 +67,6 @@ pub async fn browse_folder() -> Json<BrowseFolderResponse> {
         }
     }
 
-    // On Windows, use PowerShell's FolderBrowserDialog
     #[cfg(target_os = "windows")]
     {
         let script = "Add-Type -AssemblyName System.Windows.Forms; \
@@ -93,7 +87,6 @@ pub async fn browse_folder() -> Json<BrowseFolderResponse> {
         }
     }
 
-    // User cancelled or command failed
     Json(BrowseFolderResponse { path: None })
 }
 

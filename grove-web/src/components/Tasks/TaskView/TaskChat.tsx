@@ -1030,6 +1030,8 @@ export function TaskChat({
   const slashItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [taskFiles, setTaskFiles] = useState<string[]>([]);
   const [sketchMeta, setSketchMeta] = useState<SketchMeta[]>([]);
+  const taskFilesFetchTimeRef = useRef(0);
+  const taskFilesLoadingRef = useRef(false);
   const { selectedProject } = useProject();
   const { drafts: previewCommentDrafts, removeDraft: removePreviewCommentDraft, clearDrafts: clearPreviewCommentDrafts } = usePreviewComments();
   const isStudioProject = selectedProject?.projectType === "studio";
@@ -1239,15 +1241,40 @@ export function TaskChat({
     }
   }, [activeChat]);
 
-  // Load task files for @ mention
-  useEffect(() => {
-    getTaskFiles(projectId, task.id)
-      .then((res) => setTaskFiles(res.files))
-      .catch(() => {});
-  }, [projectId, task.id]);
+  // ─── @ mention file list with TTL cache (5s) ──────────────────────
+  const TASK_FILES_TTL_MS = 10_000;
 
-  // Studio projects: also load sketches so @ mentions can surface sketch
-  // *names* rather than the on-disk `sketch-<uuid>` directory segments.
+  const refreshTaskFilesIfNeeded = useCallback(() => {
+    if (taskFilesLoadingRef.current) return;
+    const now = Date.now();
+    if (now - taskFilesFetchTimeRef.current < TASK_FILES_TTL_MS) {
+      taskFilesFetchTimeRef.current = now;
+      return;
+    }
+    taskFilesLoadingRef.current = true;
+    taskFilesFetchTimeRef.current = now;
+
+    getTaskFiles(projectId, task.id)
+      .then((res) => {
+        setTaskFiles(res.files);
+      })
+      .catch(() => {})
+      .finally(() => {
+        taskFilesLoadingRef.current = false;
+      });
+
+    if (isStudioProject) {
+      listSketches(projectId, task.id).catch(() => {});
+    }
+  }, [projectId, task.id, isStudioProject]);
+
+  // Initial load on mount / task switch
+  useEffect(() => {
+    taskFilesFetchTimeRef.current = 0; // force stale on task switch
+    refreshTaskFilesIfNeeded();
+  }, [projectId, task.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Studio: also load sketches so @ mentions can surface sketch names
   useEffect(() => {
     if (!isStudioProject) {
       setSketchMeta([]);
@@ -2994,6 +3021,7 @@ export function TaskChat({
       if (/\s/.test(text[i])) break;
     }
     if (atIdx >= 0 && taskFiles.length > 0) {
+      refreshTaskFilesIfNeeded();
       setFileFilter(text.slice(atIdx + 1, offset));
       setShowFileMenu(true);
       setFileSelectedIdx(0);
@@ -3013,6 +3041,7 @@ export function TaskChat({
     isBusy,
     slashCommands.length,
     taskFiles.length,
+    refreshTaskFilesIfNeeded,
   ]);
 
   /** Insert a command chip at the current cursor position, replacing the /partial text */
