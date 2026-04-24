@@ -26,6 +26,7 @@ pub async fn execute(agent: String, cwd: String) {
 
     let config = AcpStartConfig {
         agent_command: resolved.command,
+        agent_name: resolved.agent_name,
         agent_args: resolved.args,
         working_dir,
         env_vars: HashMap::new(),

@@ -2488,6 +2488,7 @@ async fn start_chat_impl(p: StartChatParams) -> Result<CallToolResult, McpError>
 
     let acp_config = acp::AcpStartConfig {
         agent_command: resolved.command,
+        agent_name: resolved.agent_name,
         agent_args: resolved.args,
         working_dir,
         env_vars,
@@ -2540,6 +2541,7 @@ async fn resolve_session_access(
 
     let config = acp::AcpStartConfig {
         agent_command: resolved.command,
+        agent_name: resolved.agent_name,
         agent_args: resolved.args,
         working_dir,
         env_vars,

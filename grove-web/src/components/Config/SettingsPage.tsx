@@ -12,8 +12,6 @@ import {
   AlertTriangle,
   Info,
   ExternalLink,
-  CheckCircle2,
-  XCircle,
   RefreshCw,
   Palette,
   Settings,
@@ -184,9 +182,6 @@ const dependencyInfo: Record<string, { name: string; description: string; docsUr
   tmux: { name: "tmux", description: "Terminal multiplexer", docsUrl: "https://github.com/tmux/tmux/wiki" },
   zellij: { name: "Zellij", description: "Terminal multiplexer", docsUrl: "https://zellij.dev/documentation/" },
   fzf: { name: "fzf", description: "Fuzzy finder for file picker", docsUrl: "https://github.com/junegunn/fzf" },
-  "claude-agent-acp": { name: "Claude Agent ACP", description: "ACP adapter for Claude Code", docsUrl: "https://github.com/anthropics/claude-code" },
-  "claude-code-acp": { name: "Claude Code ACP (deprecated)", description: "Deprecated — please upgrade to claude-agent-acp", docsUrl: "https://github.com/anthropics/claude-code" },
-  "codex-acp": { name: "Codex ACP", description: "ACP adapter for OpenAI Codex", docsUrl: "https://github.com/zed-industries/codex-acp" },
 };
 
 type DependencyStatusType = "checking" | "installed" | "not_installed" | "error";
@@ -410,6 +405,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
   // Check agent command availability
   const checkAgentCommands = useCallback(async () => {
     const cmds = new Set<string>();
+    cmds.add("npx");
     for (const opt of agentOptions) {
       if (opt.terminalCheck) cmds.add(opt.terminalCheck);
       if (opt.acpCheck) cmds.add(opt.acpCheck);
@@ -552,16 +548,22 @@ export function SettingsPage({ config }: SettingsPageProps) {
     return a;
   }), [commandAvailability, hasAvailability]);
 
-  // Chat Agent 选项（仅 ACP 兼容 + 检测 acpCheck 命令，支持 fallback）
+  // Chat Agent 选项（仅 ACP 兼容 + 检测 acpCheck 命令，支持 fallback + npx）
   const chatAgentOptions = useMemo(() => agentOptions
     .filter(a => !!a.acpCheck || customAgentIds.includes(a.id))
     .map(a => {
       if (!hasAvailability) return a;
-      const cmd = a.acpCheck;
-      const fallback = a.acpFallback;
-      const available = (cmd && commandAvailability[cmd] === true) || (fallback && commandAvailability[fallback] === true);
-      if (cmd && !available) {
-        return { ...a, disabled: true, disabledReason: `${cmd} not found — install to enable` };
+      const terminalOk = a.terminalCheck ? commandAvailability[a.terminalCheck] !== false : true;
+      const acpOk = (a.acpCheck && commandAvailability[a.acpCheck]) || (a.acpFallback && commandAvailability[a.acpFallback]);
+      const npxOk = !!a.npxPackage && commandAvailability["npx"];
+      const available = terminalOk && (acpOk || npxOk);
+      if (a.acpCheck && !available) {
+        const missing = !terminalOk
+          ? a.terminalCheck
+          : !npxOk && !acpOk
+            ? "npx"
+            : a.acpCheck;
+        return { ...a, disabled: true, disabledReason: `${missing} not found — install to enable` };
       }
       return a;
     }), [commandAvailability, hasAvailability, customAgentIds]);
@@ -591,13 +593,14 @@ export function SettingsPage({ config }: SettingsPageProps) {
       }
     }
 
-    // Chat Agent (check both acpCheck and acpFallback)
+    // Chat Agent (check terminalCheck + acpCheck/acpFallback/npx)
     if (acpAgent) {
       const currentAgent = agentOptions.find(a => a.id === acpAgent);
-      const cmd = currentAgent?.acpCheck;
-      const fallback = currentAgent?.acpFallback;
-      const available = (cmd && commandAvailability[cmd] === true) || (fallback && commandAvailability[fallback] === true);
-      if (cmd && !available) {
+      const terminalOk = currentAgent?.terminalCheck ? commandAvailability[currentAgent.terminalCheck] !== false : true;
+      const acpOk = (currentAgent?.acpCheck && commandAvailability[currentAgent.acpCheck]) || (currentAgent?.acpFallback && commandAvailability[currentAgent.acpFallback]);
+      const npxOk = !!currentAgent?.npxPackage && commandAvailability["npx"];
+      const available = terminalOk && (acpOk || npxOk);
+      if (currentAgent?.acpCheck && !available) {
         const firstAvailable = chatAgentOptions.find(a => !a.disabled);
         setAcpAgent(firstAvailable?.id ?? "");
       }
@@ -672,123 +675,6 @@ env_vars = [
                 customAgents={customAgents}
                 onManageCustomAgents={() => setShowCustomAgentModal(true)}
               />
-            </div>
-
-            {/* ACP Adapter */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider select-none">ACP Adapter</div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { checkDependencies(); checkAgentCommands(); }}
-                  disabled={isChecking}
-                  className="!p-1 !h-auto"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? "animate-spin" : ""}`} />
-                </Button>
-              </div>
-              {(() => {
-                const agentAcpInstalled = depStates["claude-agent-acp"]?.status === "installed";
-                const codeAcpInstalled = depStates["claude-code-acp"]?.status === "installed";
-                const codexAcpInstalled = depStates["codex-acp"]?.status === "installed";
-                const needsUpgrade = !agentAcpInstalled && codeAcpInstalled;
-
-                return (
-                  <div className="space-y-1.5">
-                    {needsUpgrade && (
-                      <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5">
-                        <div className="flex items-center gap-2.5">
-                          <AlertCircle className="w-3.5 h-3.5 text-[var(--color-warning)]" />
-                          <div>
-                            <span className="text-sm text-[var(--color-text)]">Claude Agent ACP</span>
-                            <div className="text-[11px] text-[var(--color-warning)]">
-                              <code className="text-[11px]">claude-code-acp</code> renamed — upgrade to <code className="text-[11px]">claude-agent-acp</code>
-                            </div>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleCopy("upgrade-acp", "npm install -g @agentclientprotocol/claude-agent-acp")}
-                          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-border)] transition-colors"
-                        >
-                          <code className="text-[11px] text-[var(--color-text-muted)]">npm i -g @agentclientprotocol/claude-agent-acp</code>
-                          {copiedField === "upgrade-acp" ? (
-                            <Check className="w-3 h-3 text-[var(--color-success)]" />
-                          ) : (
-                            <Copy className="w-3 h-3 text-[var(--color-text-muted)]" />
-                          )}
-                        </button>
-                      </div>
-                    )}
-                    {!needsUpgrade && (
-                      <div className={`flex items-center justify-between px-3 py-2.5 rounded-lg border transition-all ${
-                        agentAcpInstalled
-                          ? "border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
-                          : "border-[var(--color-border)]/50 bg-[var(--color-bg-secondary)]"
-                      }`}>
-                        <div className="flex items-center gap-2.5">
-                          {depStates["claude-agent-acp"]?.status === "checking"
-                            ? <RefreshCw className="w-3.5 h-3.5 text-[var(--color-text-muted)] animate-spin" />
-                            : agentAcpInstalled
-                              ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)]" />
-                              : <XCircle className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                          }
-                          <span className="text-sm text-[var(--color-text)]">Claude Agent ACP</span>
-                        </div>
-                        {!agentAcpInstalled && depStates["claude-agent-acp"]?.installCommand && (
-                          <button
-                            onClick={() => handleCopy("install-claude-agent-acp", depStates["claude-agent-acp"].installCommand)}
-                            className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-border)] transition-colors"
-                            title={depStates["claude-agent-acp"].installCommand}
-                          >
-                            <code className="text-[11px] text-[var(--color-text-muted)]">{depStates["claude-agent-acp"].installCommand}</code>
-                            {copiedField === "install-claude-agent-acp" ? (
-                              <Check className="w-3 h-3 text-[var(--color-success)]" />
-                            ) : (
-                              <Copy className="w-3 h-3 text-[var(--color-text-muted)]" />
-                            )}
-                          </button>
-                        )}
-                        {agentAcpInstalled && depStates["claude-agent-acp"]?.version && (
-                          <span className="text-xs text-[var(--color-text-muted)]">v{depStates["claude-agent-acp"].version}</span>
-                        )}
-                      </div>
-                    )}
-                    <div className={`flex items-center justify-between px-3 py-2.5 rounded-lg border transition-all ${
-                      codexAcpInstalled
-                        ? "border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
-                        : "border-[var(--color-border)]/50 bg-[var(--color-bg-secondary)]"
-                    }`}>
-                      <div className="flex items-center gap-2.5">
-                        {depStates["codex-acp"]?.status === "checking"
-                          ? <RefreshCw className="w-3.5 h-3.5 text-[var(--color-text-muted)] animate-spin" />
-                          : codexAcpInstalled
-                            ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)]" />
-                            : <XCircle className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                        }
-                        <span className="text-sm text-[var(--color-text)]">Codex ACP</span>
-                      </div>
-                      {!codexAcpInstalled && depStates["codex-acp"]?.installCommand && (
-                        <button
-                          onClick={() => handleCopy("install-codex-acp", depStates["codex-acp"].installCommand)}
-                          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-border)] transition-colors"
-                          title={depStates["codex-acp"].installCommand}
-                        >
-                          <code className="text-[11px] text-[var(--color-text-muted)]">{depStates["codex-acp"].installCommand}</code>
-                          {copiedField === "install-codex-acp" ? (
-                            <Check className="w-3 h-3 text-[var(--color-success)]" />
-                          ) : (
-                            <Copy className="w-3 h-3 text-[var(--color-text-muted)]" />
-                          )}
-                        </button>
-                      )}
-                      {codexAcpInstalled && depStates["codex-acp"]?.version && (
-                        <span className="text-xs text-[var(--color-text-muted)]">v{depStates["codex-acp"].version}</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
           </div>
         </Section>

@@ -353,6 +353,8 @@ pub enum SessionAccess {
 /// ACP 启动配置
 pub struct AcpStartConfig {
     pub agent_command: String,
+    /// Agent logical name — used for adapter routing.
+    pub agent_name: String,
     pub agent_args: Vec<String>,
     pub working_dir: PathBuf,
     pub env_vars: HashMap<String, String>,
@@ -1257,7 +1259,7 @@ async fn run_acp_session(
         child = Some(proc);
     }
 
-    let adapter = adapter::resolve_adapter(&config.agent_command);
+    let adapter = adapter::resolve_adapter(&config.agent_name, &config.agent_command);
 
     let state = Arc::new(AcpClientState {
         handle: handle.clone(),
@@ -2589,6 +2591,8 @@ pub async fn send_socket_command(
 /// 解析后的 Agent 信息
 pub struct ResolvedAgent {
     pub agent_type: String,
+    /// Agent logical name (e.g. "claude", "codex") — used for adapter routing.
+    pub agent_name: String,
     pub command: String,
     pub args: Vec<String>,
     pub url: Option<String>,
@@ -2605,20 +2609,23 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
     // 1. Built-in agents
     match agent_name.to_lowercase().as_str() {
         "claude" => {
-            // Prefer claude-agent-acp (new name), fallback to claude-code-acp (deprecated).
-            // If neither is on PATH, return None so callers can surface a clear
-            // "agent not installed" error instead of a generic spawn ENOENT later.
-            let command = if command_exists("claude-agent-acp") {
-                "claude-agent-acp"
+            let (command, args): (&str, Vec<String>) = if command_exists("claude-agent-acp") {
+                ("claude-agent-acp", vec![])
             } else if command_exists("claude-code-acp") {
-                "claude-code-acp"
+                ("claude-code-acp", vec![])
+            } else if command_exists("npx") {
+                (
+                    "npx",
+                    vec!["-y".into(), "@agentclientprotocol/claude-agent-acp".into()],
+                )
             } else {
                 return None;
             };
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "claude".into(),
                 command: command.into(),
-                args: vec![],
+                args,
                 url: None,
                 auth_header: None,
             });
@@ -2626,6 +2633,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "traecli" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "traecli".into(),
                 command: "traecli".into(),
                 args: vec!["acp".into(), "serve".into()],
                 url: None,
@@ -2633,10 +2641,18 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
             });
         }
         "codex" => {
+            let (command, args): (&str, Vec<String>) = if command_exists("codex-acp") {
+                ("codex-acp", vec![])
+            } else if command_exists("npx") {
+                ("npx", vec!["-y".into(), "@zed-industries/codex-acp".into()])
+            } else {
+                return None;
+            };
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
-                command: "codex-acp".into(),
-                args: vec![],
+                agent_name: "codex".into(),
+                command: command.into(),
+                args,
                 url: None,
                 auth_header: None,
             });
@@ -2644,6 +2660,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "kimi" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "kimi".into(),
                 command: "kimi".into(),
                 args: vec!["acp".into()],
                 url: None,
@@ -2653,6 +2670,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "gemini" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "gemini".into(),
                 command: "gemini".into(),
                 args: vec!["--experimental-acp".into()],
                 url: None,
@@ -2662,6 +2680,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "qwen" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "qwen".into(),
                 command: "qwen".into(),
                 args: vec!["--experimental-acp".into()],
                 url: None,
@@ -2671,6 +2690,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "opencode" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "opencode".into(),
                 command: "opencode".into(),
                 args: vec!["acp".into()],
                 url: None,
@@ -2680,6 +2700,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "copilot" | "gh copilot" | "gh-copilot" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "copilot".into(),
                 command: "copilot".into(),
                 args: vec!["--acp".into()],
                 url: None,
@@ -2689,6 +2710,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         "junie" => {
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "junie".into(),
                 command: "junie".into(),
                 args: vec!["--acp".into(), "true".into()],
                 url: None,
@@ -2696,9 +2718,6 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
             });
         }
         "cursor" | "cursor-agent" => {
-            // Auto-detect: prefer "cursor-agent", fall back to "agent".
-            // Return None when neither candidate exists so the UI can show a
-            // clear install hint instead of a spawn failure later.
             let command = if command_exists("cursor-agent") {
                 "cursor-agent"
             } else if command_exists("agent") {
@@ -2708,6 +2727,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
             };
             return Some(ResolvedAgent {
                 agent_type: "local".into(),
+                agent_name: "cursor".into(),
                 command: command.into(),
                 args: vec!["acp".into()],
                 url: None,
@@ -2725,6 +2745,7 @@ pub fn resolve_agent(agent_name: &str) -> Option<ResolvedAgent> {
         .find(|a| a.id == agent_name)
         .map(|a| ResolvedAgent {
             agent_type: a.agent_type.clone(),
+            agent_name: a.id.clone(),
             command: a.command.clone().unwrap_or_default(),
             args: a.args.clone(),
             url: a.url.clone(),

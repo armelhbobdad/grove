@@ -95,20 +95,6 @@ const ALL_DEPENDENCIES: &[DependencyDef] = &[
         install_command: FZF_INSTALL_CMD,
     },
     DependencyDef {
-        name: "claude-agent-acp",
-        check_cmd: "claude-agent-acp",
-        check_args: &[],
-        install_command: "npm install -g @agentclientprotocol/claude-agent-acp",
-    },
-    // Note: claude-code-acp is the deprecated package name. resolve_agent("claude")
-    // falls back to it transparently, so we don't surface it as a separate dep.
-    DependencyDef {
-        name: "codex-acp",
-        check_cmd: "codex-acp",
-        check_args: &[],
-        install_command: "npm install -g @zed-industries/codex-acp",
-    },
-    DependencyDef {
         name: "d2",
         check_cmd: "d2",
         check_args: &["--version"],
@@ -130,35 +116,7 @@ fn current_dependencies() -> Vec<&'static DependencyDef> {
         .collect()
 }
 
-/// ACP adapter dependency names
-// kept in sync with the entries in ALL_DEPENDENCIES: identifies adapters that
-// must NOT be spawned with `--version` (they enter ACP stdio mode and block).
-// Deliberately *different* from ACP_AGENT_COMMANDS below — that one is the
-// broader set of agent CLIs that GROVE_TEST_NO_ACP forces to "not present" in
-// the /check-commands endpoint.
-const ACP_DEP_NAMES: &[&str] = &["claude-agent-acp", "claude-code-acp", "codex-acp"];
-
 fn check_dependency(dep: &DependencyDef) -> DependencyStatus {
-    // ACP adapters 不能用 `--version` 探测（多数会直接进入 stdio 等待 ACP 握手并阻塞），
-    // 因此仅通过 PATH 存在性判断；不存在 / 不需运行的情况优先短路。
-    if ACP_DEP_NAMES.contains(&dep.name) {
-        let installed = if std::env::var("GROVE_TEST_NO_ACP").is_ok() {
-            false
-        } else {
-            crate::check::command_exists(dep.check_cmd)
-        };
-        return DependencyStatus {
-            name: dep.name.to_string(),
-            installed,
-            version: if installed {
-                Some("installed".to_string())
-            } else {
-                None
-            },
-            install_command: dep.install_command.to_string(),
-        };
-    }
-
     // tmux / zellij 用 check.rs 中的函数支持 GROVE_TEST_NO_* 环境变量
     let test_overrides = match dep.name {
         "tmux" if !crate::check::check_tmux_available() => Some(false),
@@ -294,6 +252,7 @@ const ACP_AGENT_COMMANDS: &[&str] = &[
     "claude-agent-acp",
     "claude-code-acp",
     "codex-acp",
+    "npx",
     "gemini",
     "copilot",
     "opencode",

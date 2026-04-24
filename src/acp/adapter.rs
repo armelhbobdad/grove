@@ -163,17 +163,17 @@ fn strip_system_reminders(text: &str) -> String {
     result.trim().to_string()
 }
 
-/// Resolve the appropriate adapter based on the agent command.
-pub fn resolve_adapter(agent_command: &str) -> Box<dyn AgentContentAdapter> {
-    let cmd = agent_command.rsplit('/').next().unwrap_or(agent_command);
-    // Match anywhere in the command tail so launchers like
-    // `node claude-code-acp.js` or `claude-code-acp@1.2.3` still resolve
-    // to the Claude adapter and get system-reminder stripping applied.
-    if cmd.contains("claude-code-acp") || cmd.contains("claude-agent-acp") {
-        Box::new(ClaudeAdapter)
-    } else {
-        Box::new(DefaultAdapter)
+/// Resolve the appropriate adapter based on the agent name, falling back to
+/// command-string matching for custom agents whose id isn't a known builtin.
+pub fn resolve_adapter(agent_name: &str, agent_command: &str) -> Box<dyn AgentContentAdapter> {
+    if agent_name == "claude" {
+        return Box::new(ClaudeAdapter);
     }
+    let cmd_tail = agent_command.rsplit('/').next().unwrap_or(agent_command);
+    if cmd_tail.contains("claude-code-acp") || cmd_tail.contains("claude-agent-acp") {
+        return Box::new(ClaudeAdapter);
+    }
+    Box::new(DefaultAdapter)
 }
 
 #[cfg(test)]
@@ -215,14 +215,14 @@ mod tests {
 
     #[test]
     fn test_resolve_adapter_claude() {
-        let adapter = resolve_adapter("claude-code-acp");
+        let adapter = resolve_adapter("claude", "claude-agent-acp");
         let tc = text_tc("hello <system-reminder>secret</system-reminder> world");
         assert_eq!(adapter.tool_call_content_to_text(&tc), "hello  world");
     }
 
     #[test]
     fn test_resolve_adapter_default() {
-        let adapter = resolve_adapter("some-other-agent");
+        let adapter = resolve_adapter("codex", "codex-acp");
         let tc = text_tc("hello <system-reminder>visible</system-reminder> world");
         assert_eq!(
             adapter.tool_call_content_to_text(&tc),
@@ -231,10 +231,22 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_adapter_with_path() {
-        let adapter = resolve_adapter("/usr/local/bin/claude-code-acp");
+    fn test_resolve_adapter_with_other_agent() {
+        let adapter = resolve_adapter("gemini", "gemini");
         let tc = text_tc("<system-reminder>gone</system-reminder>kept");
-        assert_eq!(adapter.tool_call_content_to_text(&tc), "kept");
+        assert_eq!(
+            adapter.tool_call_content_to_text(&tc),
+            "<system-reminder>gone</system-reminder>kept"
+        );
+    }
+
+    #[test]
+    fn test_resolve_adapter_custom_id_falls_back_to_command() {
+        // Custom agent with non-builtin id but a claude-* command — should still
+        // get ClaudeAdapter via command-string fallback.
+        let adapter = resolve_adapter("my-claude", "/usr/local/bin/claude-agent-acp");
+        let tc = text_tc("hello <system-reminder>secret</system-reminder> world");
+        assert_eq!(adapter.tool_call_content_to_text(&tc), "hello  world");
     }
 
     #[test]

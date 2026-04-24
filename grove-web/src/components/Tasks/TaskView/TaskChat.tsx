@@ -4,6 +4,8 @@ import {
   useRef,
   useCallback,
   useMemo,
+  useDeferredValue,
+  memo,
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
@@ -1141,13 +1143,16 @@ export function TaskChat({
   // against description surfaced /review when the user typed /compact.
   // Substring (vs. prefix) gives middle-match support: `/view` finds
   // `/review`, `/plan` finds `/superpowers:write-plan`.
+  // Defer the filter string so heavy filter+dropdown re-renders happen at
+  // lower priority — keystrokes stay responsive while the dropdown catches up.
+  const deferredSlashFilter = useDeferredValue(slashFilter);
   const filteredSlashCommands = useMemo(() => {
-    if (!slashFilter) return slashCommands;
-    const lower = slashFilter.toLowerCase();
+    if (!deferredSlashFilter) return slashCommands;
+    const lower = deferredSlashFilter.toLowerCase();
     return slashCommands.filter((c) =>
       c.name.toLowerCase().includes(lower),
     );
-  }, [slashCommands, slashFilter]);
+  }, [slashCommands, deferredSlashFilter]);
 
   // Build mention items (files + directories) from flat file list
   const mentionItems = useMemo(
@@ -1158,10 +1163,13 @@ export function TaskChat({
     [isStudioProject, taskFiles, sketchMeta],
   );
 
-  // Filtered files based on @ input
+  // Filtered files based on @ input. Defer the filter string so the fuzzy
+  // match (O(n) over potentially thousands of files) runs at low priority and
+  // doesn't block typing.
+  const deferredFileFilter = useDeferredValue(fileFilter);
   const filteredFiles = useMemo(
-    () => filterMentionItems(mentionItems, fileFilter),
-    [mentionItems, fileFilter],
+    () => filterMentionItems(mentionItems, deferredFileFilter),
+    [mentionItems, deferredFileFilter],
   );
 
   // Check ACP agent availability on mount
@@ -3482,7 +3490,7 @@ export function TaskChat({
     ],
   );
 
-  const toggleThinkingCollapse = (index: number) => {
+  const toggleThinkingCollapse = useCallback((index: number) => {
     setMessages((prev) =>
       prev.map((m, i) =>
         i === index && m.type === "thinking"
@@ -3490,7 +3498,7 @@ export function TaskChat({
           : m,
       ),
     );
-  };
+  }, []);
 
   const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
 
@@ -4926,7 +4934,7 @@ const DropdownSelect = ({
 );
 
 /** Individual message rendering */
-function MessageItem({
+const MessageItem = memo(function MessageItem({
   message,
   index,
   isBusy,
@@ -5192,7 +5200,7 @@ function MessageItem({
       );
     }
   }
-}
+});
 
 /** Permission request card with action buttons */
 function PermissionCard({
@@ -6096,7 +6104,7 @@ function ExpandableFileChipGroup({
 }
 
 /** Collapsible section that groups consecutive tool calls */
-function ToolSectionView({
+const ToolSectionView = memo(function ToolSectionView({
   sectionId,
   tools,
   expanded,
@@ -6334,4 +6342,4 @@ function ToolSectionView({
       </AnimatePresence>
     </motion.div>
   );
-}
+});

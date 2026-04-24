@@ -1028,6 +1028,7 @@ pub async fn chat_ws_handler(
 
     let config = AcpStartConfig {
         agent_command: resolved.command,
+        agent_name: resolved.agent_name,
         agent_args: resolved.args,
         working_dir,
         env_vars,

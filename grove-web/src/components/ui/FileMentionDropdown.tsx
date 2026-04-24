@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, memo, createElement } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -179,58 +179,80 @@ interface FileMentionDropdownProps {
   cursorIdx?: number;
 }
 
+interface MentionRowProps {
+  item: FilteredMentionItem;
+  index: number;
+  isSelected: boolean;
+  onSelect: FileMentionDropdownProps["onSelect"];
+  onMouseEnter: FileMentionDropdownProps["onMouseEnter"];
+}
+
+const MentionRow = memo(function MentionRow({
+  item,
+  index,
+  isSelected,
+  onSelect,
+  onMouseEnter,
+}: MentionRowProps) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (isSelected) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [isSelected]);
+
+  const hasFriendlyName = item.displayName !== undefined;
+  const label = item.displayName ?? item.path;
+  return (
+    <button
+      ref={ref}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => onSelect(item.path, item.isDir, item.displayName, item.category)}
+      onMouseEnter={() => onMouseEnter(index)}
+      className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
+        isSelected
+          ? "bg-[var(--color-bg-tertiary)]"
+          : "hover:bg-[var(--color-bg-secondary)]"
+      }`}
+    >
+      {createElement(iconFor(item), { className: "w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" })}
+      {item.category && (
+        <span className="shrink-0 rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+          {item.category}
+        </span>
+      )}
+      <span className="text-sm text-[var(--color-text)] font-mono truncate min-w-0 flex-1">
+        {hasFriendlyName ? (
+          <HighlightedPath path={label} indices={item.indices} />
+        ) : item.indices.length > 0 ? (
+          <SmartPath path={item.path} indices={item.indices} maxLen={55} />
+        ) : (
+          <SmartPath path={item.path} indices={[]} maxLen={55} />
+        )}
+      </span>
+      {!item.category && item.isDir && (
+        <span className="text-[10px] text-[var(--color-text-muted)] ml-auto shrink-0">dir</span>
+      )}
+    </button>
+  );
+});
+
 function DropdownContent({
   items,
   selectedIdx,
   onSelect,
   onMouseEnter,
 }: Pick<FileMentionDropdownProps, "items" | "selectedIdx" | "onSelect" | "onMouseEnter">) {
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  useEffect(() => {
-    itemRefs.current[selectedIdx]?.scrollIntoView({ block: "nearest" });
-  }, [selectedIdx]);
-
   return (
     <>
-      {items.map((item, i) => {
-        const Icon = iconFor(item);
-        const hasFriendlyName = item.displayName !== undefined;
-        const label = item.displayName ?? item.path;
-        return (
-          <button
-            key={`${item.category ?? ""}-${item.path}`}
-            ref={(el) => { itemRefs.current[i] = el; }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => onSelect(item.path, item.isDir, item.displayName, item.category)}
-            onMouseEnter={() => onMouseEnter(i)}
-            className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
-              i === selectedIdx
-                ? "bg-[var(--color-bg-tertiary)]"
-                : "hover:bg-[var(--color-bg-secondary)]"
-            }`}
-          >
-            <Icon className="w-3.5 h-3.5 text-[var(--color-warning)] shrink-0" />
-            {item.category && (
-              <span className="shrink-0 rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
-                {item.category}
-              </span>
-            )}
-            <span className="text-sm text-[var(--color-text)] font-mono truncate min-w-0 flex-1">
-              {hasFriendlyName ? (
-                <HighlightedPath path={label} indices={item.indices} />
-              ) : item.indices.length > 0 ? (
-                <SmartPath path={item.path} indices={item.indices} maxLen={55} />
-              ) : (
-                <SmartPath path={item.path} indices={[]} maxLen={55} />
-              )}
-            </span>
-            {!item.category && item.isDir && (
-              <span className="text-[10px] text-[var(--color-text-muted)] ml-auto shrink-0">dir</span>
-            )}
-          </button>
-        );
-      })}
+      {items.map((item, i) => (
+        <MentionRow
+          key={`${item.category ?? ""}-${item.path}`}
+          item={item}
+          index={i}
+          isSelected={i === selectedIdx}
+          onSelect={onSelect}
+          onMouseEnter={onMouseEnter}
+        />
+      ))}
     </>
   );
 }
