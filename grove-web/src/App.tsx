@@ -116,6 +116,11 @@ function AppContent() {
     refreshSelectedProject();
   }, [refreshProjects, refreshSelectedProject]);
 
+  const navigateToProjectDashboard = useCallback(() => {
+    setActiveItem("dashboard");
+    setNavigationData(null);
+  }, []);
+
   // Initialize agent configuration on app startup
   useEffect(() => {
     const initializeAgentConfig = async () => {
@@ -186,6 +191,7 @@ function AppContent() {
     try {
       const project = await addProject(path, name);
       selectProject(project);
+      navigateToProjectDashboard();
       setShowAddProject(false);
     } catch (err) {
       setAddProjectError(err instanceof Error ? err.message : "Failed to add project");
@@ -200,6 +206,7 @@ function AppContent() {
     try {
       const project = await createNewProject(parentDir, name, initGit, projectType);
       selectProject(project);
+      navigateToProjectDashboard();
       setShowAddProject(false);
     } catch (err: unknown) {
       if (err && typeof err === "object" && "message" in err) {
@@ -252,8 +259,8 @@ function AppContent() {
 
   // When project changes via sidebar ProjectSelector, go back to dashboard
   const handleProjectSwitch = useCallback(() => {
-    setActiveItem("dashboard");
-  }, []);
+    navigateToProjectDashboard();
+  }, [navigateToProjectDashboard]);
 
   // Task palette: navigate to tasks page and select the task
   const handleTaskSelectFromPalette = useCallback((task: Task) => {
