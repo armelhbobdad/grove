@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -30,6 +30,8 @@ import {
   parseLinkFile,
 } from "../../../ui";
 import { openExternalUrl } from "../../../../utils/openExternal";
+import { usePreviewComments, type PreviewCommentLocator } from "../../../../context";
+import type { PreviewCommentMarker } from "../../../Review/previewRenderers";
 
 interface ArtifactsTabProps {
   projectId?: string;
@@ -59,6 +61,7 @@ function dropContainsDirectory(dataTransfer: DataTransfer): boolean {
 }
 
 export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, isChatBusy }: ArtifactsTabProps) {
+  const { drafts: previewCommentDrafts, addDraft, updateDraft, removeDraft } = usePreviewComments();
   const [inputFiles, setInputFiles] = useState<ArtifactFile[]>([]);
   const [outputFiles, setOutputFiles] = useState<ArtifactFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -376,6 +379,50 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
     );
   }, [projectId, task.id]);
 
+  const handleCreatePreviewComment = useCallback((file: ArtifactFile, locator: PreviewCommentLocator, comment: string, rendererId: string) => {
+    if (!projectId) return;
+    addDraft({
+      source: "artifact",
+      projectId,
+      taskId: task.id,
+      filePath: `${file.directory}/${file.path}`,
+      fileName: file.name,
+      rendererId,
+      locator,
+      comment,
+    });
+    setToastMessage("Preview comment added to chat");
+  }, [addDraft, projectId, task.id]);
+
+  const previewFilePath = useMemo(
+    () => (previewFile ? `${previewFile.file.directory}/${previewFile.file.path}` : null),
+    [previewFile],
+  );
+  const currentFilePreviewDrafts = useMemo(() => {
+    if (!projectId || !previewFilePath) return [];
+    return previewCommentDrafts.filter(
+      (d) => d.projectId === projectId && d.taskId === task.id && d.filePath === previewFilePath,
+    );
+  }, [previewCommentDrafts, projectId, task.id, previewFilePath]);
+  const currentFilePreviewMarkers = useMemo<PreviewCommentMarker[]>(
+    () => currentFilePreviewDrafts.map((d, idx) => ({
+      id: d.id,
+      label: String(idx + 1),
+      selector: d.locator.selector,
+      xpath: d.locator.xpath,
+    })),
+    [currentFilePreviewDrafts],
+  );
+
+  const handleUpdatePreviewComment = useCallback(
+    (id: string, comment: string) => updateDraft(id, { comment }),
+    [updateDraft],
+  );
+  const handleStaleMarkersCleaned = useCallback(
+    (count: number) => setToastMessage(`Removed ${count} stale preview comment${count > 1 ? "s" : ""}`),
+    [],
+  );
+
   const handleOpenLink = useCallback(async (file: ArtifactFile) => {
     if (!projectId) return;
     try {
@@ -534,6 +581,14 @@ export function ArtifactsTab({ projectId, task, previewRequest, lastChatIdleAt, 
             onClose={() => { setPreviewFile(null); lastGoodContentRef.current = null; setPreviewError(null); }}
             onDownload={() => handleDownload(previewFile.file)}
             onRefresh={() => handlePreview(previewFile.file, true)}
+            onCreatePreviewComment={(locator, comment, rendererId) =>
+              handleCreatePreviewComment(previewFile.file, locator, comment, rendererId)
+            }
+            onUpdatePreviewComment={handleUpdatePreviewComment}
+            onDeletePreviewComment={removeDraft}
+            onStaleMarkersCleaned={handleStaleMarkersCleaned}
+            previewCommentDrafts={currentFilePreviewDrafts}
+            previewCommentMarkers={currentFilePreviewMarkers}
           />
         )}
       </AnimatePresence>
@@ -1190,4 +1245,3 @@ function FileCard({
     </div>
   );
 }
-

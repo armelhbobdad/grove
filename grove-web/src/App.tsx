@@ -22,7 +22,7 @@ import { UpdateBanner } from "./components/ui/UpdateBanner";
 import { CommandPalette } from "./components/ui/CommandPalette";
 import { ProjectCommandPalette } from "./components/ui/ProjectCommandPalette";
 import { TaskCommandPalette } from "./components/ui/TaskCommandPalette";
-import { ThemeProvider, ProjectProvider, TerminalThemeProvider, NotificationProvider, ConfigProvider, CommandPaletteProvider, useProject, useCommandPalette, useTheme } from "./context";
+import { ThemeProvider, ProjectProvider, TerminalThemeProvider, NotificationProvider, ConfigProvider, CommandPaletteProvider, PreviewCommentProvider, useProject, useCommandPalette, useTheme } from "./context";
 import { AuthGate } from "./components/AuthGate";
 import type { Task } from "./data/types";
 import { mockConfig } from "./data/mockData";
@@ -602,7 +602,9 @@ function App() {
   if (reviewMatch) {
     return (
       <ThemeProvider>
-        <DiffReviewPage projectId={reviewMatch[1]} taskId={reviewMatch[2]} />
+        <PreviewCommentProvider>
+          <DiffReviewPage projectId={reviewMatch[1]} taskId={reviewMatch[2]} />
+        </PreviewCommentProvider>
       </ThemeProvider>
     );
   }
@@ -615,7 +617,9 @@ function App() {
             <ProjectProvider>
               <NotificationProvider>
                 <CommandPaletteProvider>
-                  <AppContent />
+                  <PreviewCommentProvider>
+                    <AppContent />
+                  </PreviewCommentProvider>
                 </CommandPaletteProvider>
               </NotificationProvider>
             </ProjectProvider>

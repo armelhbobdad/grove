@@ -1,15 +1,37 @@
 /* eslint-disable react-refresh/only-export-components */
+import { useEffect, useRef, type ReactNode } from 'react';
 import { MarkdownRenderer, MermaidBlock, D2Block } from '../ui/MarkdownRenderer';
+import { PreviewCommentHost } from './PreviewCommentHost';
 import type { DiffFile } from '../../api/review';
+
+function withCommentHost(
+  node: ReactNode,
+  previewComment: RenderFullProps['previewComment'] | undefined,
+): ReactNode {
+  if (!previewComment) return node;
+  return <PreviewCommentHost previewComment={previewComment}>{node}</PreviewCommentHost>;
+}
 
 // ============================================================================
 // Preview Renderer Registry
 // ============================================================================
 
+export interface PreviewCommentMarker {
+  id: string;
+  label: string;
+  selector?: string;
+  xpath?: string;
+}
+
 export interface RenderFullProps {
   content: string;
   onImageClick?: (url: string) => void;
   onSvgClick?: (svg: string) => void;
+  previewComment?: {
+    enabled: boolean;
+    previewId: string;
+    markers?: PreviewCommentMarker[];
+  };
 }
 
 export interface PreviewRenderer {
@@ -35,6 +57,12 @@ export interface PreviewRenderer {
    * If false, the preview drawer will use `renderFull` with reconstructed content.
    */
   supportsDiffSegments: boolean;
+  /**
+   * Whether the preview supports element-level comments. Defaults to true.
+   * Cross-origin iframes (e.g. the browser PDF viewer) can't be introspected
+   * so they opt out explicitly.
+   */
+  supportsComments?: boolean;
 }
 
 // ============================================================================
@@ -46,8 +74,9 @@ const markdownRenderer: PreviewRenderer = {
   label: 'Preview markdown',
   match: (path) => /\.(md|markdown)$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content, onImageClick, onSvgClick }) => (
-    <MarkdownRenderer content={content} onImageClick={onImageClick} onMermaidClick={onSvgClick} onD2Click={onSvgClick} />
+  renderFull: ({ content, onImageClick, onSvgClick, previewComment }) => withCommentHost(
+    <MarkdownRenderer content={content} onImageClick={onImageClick} onMermaidClick={onSvgClick} onD2Click={onSvgClick} />,
+    previewComment,
   ),
   supportsDiffSegments: true,
 };
@@ -57,8 +86,9 @@ const mermaidRenderer: PreviewRenderer = {
   label: 'Preview diagram',
   match: (path) => /\.(mmd|mermaid)$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content, onSvgClick }) => (
-    <MermaidBlock code={content} onPreviewClick={onSvgClick} />
+  renderFull: ({ content, onSvgClick, previewComment }) => withCommentHost(
+    <MermaidBlock code={content} onPreviewClick={onSvgClick} />,
+    previewComment,
   ),
   supportsDiffSegments: false,
 };
@@ -68,7 +98,7 @@ const svgRenderer: PreviewRenderer = {
   label: 'Preview SVG',
   match: (path) => /\.svg$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content, onSvgClick }) => (
+  renderFull: ({ content, onSvgClick, previewComment }) => withCommentHost(
     <div
       className={`flex items-center justify-center p-4 [&_svg]:max-w-full [&_svg]:max-h-[70vh]${onSvgClick ? " cursor-pointer hover:opacity-80 transition-opacity" : ""}`}
       dangerouslySetInnerHTML={{ __html: content }}
@@ -79,7 +109,8 @@ const svgRenderer: PreviewRenderer = {
           .replace(/(<svg[^>]*?)(?=\s*>)/, '$1 style="max-width:90vw;max-height:85vh;width:auto;height:auto;" preserveAspectRatio="xMidYMid meet"');
         onSvgClick(responsive);
       } : undefined}
-    />
+    />,
+    previewComment,
   ),
   supportsDiffSegments: false,
 };
@@ -89,7 +120,7 @@ const imageRenderer: PreviewRenderer = {
   label: 'Preview image',
   match: (path) => /\.(png|jpe?g|webp|gif|bmp|ico)$/i.test(path),
   contentType: 'url',
-  renderFull: ({ content, onImageClick }) => (
+  renderFull: ({ content, onImageClick, previewComment }) => withCommentHost(
     <div
       className={`flex items-center justify-center h-full p-6${onImageClick ? " cursor-pointer" : ""}`}
       style={{ background: "var(--color-bg-secondary)" }}
@@ -105,7 +136,8 @@ const imageRenderer: PreviewRenderer = {
         }}
       />
       <div className="hidden text-sm" style={{ color: "var(--color-text-muted)" }}>Failed to load image</div>
-    </div>
+    </div>,
+    previewComment,
   ),
   supportsDiffSegments: false,
 };
@@ -175,13 +207,8 @@ const htmlRenderer: PreviewRenderer = {
   label: 'Preview HTML',
   match: (path) => /\.(html?|htm)$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content }) => (
-    <iframe
-      srcDoc={content}
-      sandbox="allow-scripts"
-      className="w-full h-full border-0 min-h-[200px]"
-      title="HTML Preview"
-    />
+  renderFull: ({ content, previewComment }) => (
+    <HtmlPreviewFrame content={content} previewComment={previewComment} />
   ),
   supportsDiffSegments: false,
 };
@@ -191,7 +218,10 @@ const csvRenderer: PreviewRenderer = {
   label: 'Preview CSV',
   match: (path) => /\.csv$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content }) => <CsvTable content={content} />,
+  renderFull: ({ content, previewComment }) => withCommentHost(
+    <CsvTable content={content} />,
+    previewComment,
+  ),
   supportsDiffSegments: false,
 };
 
@@ -212,6 +242,7 @@ const pdfRenderer: PreviewRenderer = {
     />
   ),
   supportsDiffSegments: false,
+  supportsComments: false,
 };
 
 // ============================================================================
@@ -244,9 +275,180 @@ function autoWrapJsx(code: string): string {
   return `${clean}\ntry { ReactDOM.createRoot(document.getElementById('root')).render(<App />); } catch(e) { document.getElementById('jsx-error').textContent = 'Could not detect component. Ensure it starts with a capital letter (e.g. function App).\\n\\n' + e.message; document.getElementById('jsx-error').style.display = 'block'; }`;
 }
 
-function buildJsxIframeSrcdoc(code: string): string {
+function resolveThemeHighlight(): string {
+  if (typeof window === 'undefined') return '#f59e0b';
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--color-highlight').trim();
+  return v || '#f59e0b';
+}
+
+function postPreviewCommentTheme(
+  frame: HTMLIFrameElement | null,
+  previewId: string | undefined,
+) {
+  if (!frame?.contentWindow || !previewId) return;
+  frame.contentWindow.postMessage({
+    type: 'grove-preview-comment:theme',
+    previewId,
+    highlight: resolveThemeHighlight(),
+  }, '*');
+}
+
+function postPreviewCommentMode(
+  frame: HTMLIFrameElement | null,
+  previewId: string | undefined,
+  enabled: boolean | undefined,
+) {
+  if (!frame?.contentWindow || !previewId) return;
+  frame.contentWindow.postMessage({
+    type: enabled ? 'grove-preview-comment:start' : 'grove-preview-comment:stop',
+    previewId,
+  }, '*');
+}
+
+function postPreviewCommentMarkers(
+  frame: HTMLIFrameElement | null,
+  previewId: string | undefined,
+  markers: PreviewCommentMarker[] | undefined,
+) {
+  if (!frame?.contentWindow || !previewId) return;
+  frame.contentWindow.postMessage({
+    type: 'grove-preview-comment:markers',
+    previewId,
+    markers: markers ?? [],
+  }, '*');
+}
+
+function syncPreviewCommentState(
+  frame: HTMLIFrameElement | null,
+  previewComment?: RenderFullProps["previewComment"],
+) {
+  if (!previewComment) return;
+  postPreviewCommentTheme(frame, previewComment.previewId);
+  postPreviewCommentMode(frame, previewComment.previewId, previewComment.enabled);
+  postPreviewCommentMarkers(frame, previewComment.previewId, previewComment.markers);
+}
+
+function HtmlPreviewFrame({
+  content,
+  previewComment,
+}: {
+  content: string;
+  previewComment?: RenderFullProps["previewComment"];
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  // srcDoc only depends on content + stable previewId — never on `enabled` or
+  // markers. Toggling comment mode / editing markers must not remount iframe.
+  const srcDoc = previewComment
+    ? buildHtmlPreviewSrcdoc(content, previewComment.previewId)
+    : content;
+
+  useEffect(() => {
+    postPreviewCommentTheme(frameRef.current, previewComment?.previewId);
+    postPreviewCommentMode(frameRef.current, previewComment?.previewId, previewComment?.enabled);
+  }, [previewComment?.enabled, previewComment?.previewId]);
+
+  useEffect(() => {
+    postPreviewCommentMarkers(frameRef.current, previewComment?.previewId, previewComment?.markers);
+  }, [previewComment?.markers, previewComment?.previewId]);
+
+  return (
+    <iframe
+      ref={frameRef}
+      srcDoc={srcDoc}
+      sandbox="allow-scripts"
+      className="w-full h-full border-0 min-h-[200px]"
+      title="HTML Preview"
+      onLoad={() => syncPreviewCommentState(frameRef.current, previewComment)}
+    />
+  );
+}
+
+function JsxPreviewFrame({
+  content,
+  previewComment,
+}: {
+  content: string;
+  previewComment?: RenderFullProps["previewComment"];
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const srcDoc = buildJsxIframeSrcdoc(content, previewComment?.previewId);
+
+  useEffect(() => {
+    postPreviewCommentTheme(frameRef.current, previewComment?.previewId);
+    postPreviewCommentMode(frameRef.current, previewComment?.previewId, previewComment?.enabled);
+  }, [previewComment?.enabled, previewComment?.previewId]);
+
+  useEffect(() => {
+    postPreviewCommentMarkers(frameRef.current, previewComment?.previewId, previewComment?.markers);
+  }, [previewComment?.markers, previewComment?.previewId]);
+
+  return (
+    <iframe
+      ref={frameRef}
+      srcDoc={srcDoc}
+      sandbox="allow-scripts"
+      className="w-full h-full border-0 min-h-[200px]"
+      title="JSX Preview"
+      onLoad={() => syncPreviewCommentState(frameRef.current, previewComment)}
+    />
+  );
+}
+
+function buildPreviewCommentBridge(previewId: string): string {
+  const idJson = JSON.stringify(previewId);
+  return [
+    '<script>',
+    '(function(){',
+    'var previewId=' + idJson + ';',
+    'var enabled=false;',
+    'var overlay=null;',
+    'var current=null;',
+    'var markerLayer=null;',
+    'var markerList=[];',
+    'var themeColor="#f59e0b";',
+    'function hexToRgb(h){h=String(h||"").trim();if(h.charAt(0)==="#")h=h.slice(1);if(h.length===3)h=h.split("").map(function(c){return c+c;}).join("");if(!/^[0-9a-fA-F]{6}$/.test(h))return null;return{r:parseInt(h.slice(0,2),16),g:parseInt(h.slice(2,4),16),b:parseInt(h.slice(4,6),16)};}',
+    'function withAlpha(c,a){var rgb=hexToRgb(c);if(rgb)return "rgba("+rgb.r+","+rgb.g+","+rgb.b+","+a+")";return c;}',
+    'function cssEscape(v){return (window.CSS&&CSS.escape)?CSS.escape(v):String(v).replace(/[^a-zA-Z0-9_-]/g,function(ch){return "\\0000"+ch.charCodeAt(0).toString(16)+" ";});}',
+    'function applyOverlayTheme(){if(!overlay)return;overlay.style.border="2px solid "+themeColor;overlay.style.background=withAlpha(themeColor,.12);overlay.style.boxShadow="0 0 0 1px rgba(255,255,255,.85),0 0 0 4px "+withAlpha(themeColor,.18);}',
+    'function ensureOverlay(){if(overlay)return overlay;overlay=document.createElement("div");overlay.setAttribute("data-grove-preview-comment-overlay","true");overlay.style.cssText="position:fixed;z-index:2147483647;pointer-events:none;display:none;";applyOverlayTheme();document.documentElement.appendChild(overlay);return overlay;}',
+    'function hideOverlay(){if(overlay)overlay.style.display="none";}',
+    'function ensureMarkerLayer(){if(markerLayer)return markerLayer;markerLayer=document.createElement("div");markerLayer.setAttribute("data-grove-preview-comment-overlay","true");markerLayer.style.cssText="position:fixed;inset:0;pointer-events:none;z-index:2147483646;";document.documentElement.appendChild(markerLayer);return markerLayer;}',
+    'function resolveMarkerEl(m){try{if(m.selector){var a=document.querySelector(m.selector);if(a)return a;}}catch(e){}try{if(m.xpath){var r=document.evaluate(m.xpath,document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null);if(r&&r.singleNodeValue&&r.singleNodeValue.nodeType===1)return r.singleNodeValue;}}catch(e){}return null;}',
+    'function renderMarkers(){var layer=ensureMarkerLayer();layer.innerHTML="";markerList.forEach(function(m){var el=resolveMarkerEl(m);if(!el)return;var r=el.getBoundingClientRect();if(r.width<=0||r.height<=0)return;var box=document.createElement("div");box.style.cssText="position:absolute;left:"+r.left+"px;top:"+r.top+"px;width:"+Math.max(0,r.width)+"px;height:"+Math.max(0,r.height)+"px;border:1.5px dashed "+withAlpha(themeColor,.85)+";background:"+withAlpha(themeColor,.08)+";box-shadow:0 0 0 1px rgba(255,255,255,.7);border-radius:3px;pointer-events:none;";var badge=document.createElement("div");badge.textContent=m.label;badge.title="Click to edit or delete comment #"+m.label;badge.style.cssText="position:absolute;left:-6px;top:-10px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:"+themeColor+";color:#fff;font:600 11px/18px -apple-system,BlinkMacSystemFont,\\"Segoe UI\\",Roboto,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.25);pointer-events:auto;cursor:pointer;transition:transform .12s;";badge.addEventListener("mouseenter",function(){badge.style.transform="scale(1.15)";});badge.addEventListener("mouseleave",function(){badge.style.transform="scale(1)";});badge.addEventListener("click",function(ev){ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation();window.parent.postMessage({type:"grove-preview-comment:marker-click",previewId:previewId,markerId:m.id},"*");});box.appendChild(badge);layer.appendChild(box);});}',
+    'function pathSelector(el){if(!el||el.nodeType!==1)return "";if(el.id)return "#"+cssEscape(el.id);var parts=[];while(el&&el.nodeType===1&&el!==document.documentElement){var part=el.tagName.toLowerCase();var cls=Array.from(el.classList||[]).filter(Boolean).slice(0,2);if(cls.length)part+="."+cls.map(cssEscape).join(".");var parent=el.parentElement;if(parent){var same=Array.from(parent.children).filter(function(c){return c.tagName===el.tagName;});if(same.length>1)part+=":nth-of-type("+(same.indexOf(el)+1)+")";}parts.unshift(part);el=parent;if(parts.length>=6)break;}return parts.join(" > ");}',
+    'function xPath(el){if(!el||el.nodeType!==1)return "";var segs=[];while(el&&el.nodeType===1){var i=1,sib=el.previousElementSibling;while(sib){if(sib.tagName===el.tagName)i++;sib=sib.previousElementSibling;}segs.unshift(el.tagName.toLowerCase()+"["+i+"]");el=el.parentElement;if(el===document)break;}return "/"+segs.join("/");}',
+    'function clean(s,n){return String(s||"").replace(/\\s+/g," ").trim().slice(0,n);}',
+    'function describe(el){var r=el.getBoundingClientRect();var cls=typeof el.className==="string"?el.className:(el.getAttribute("class")||"");return{type:"dom",selector:pathSelector(el),xpath:xPath(el),tagName:el.tagName.toLowerCase(),id:el.id||undefined,className:clean(cls,160)||undefined,role:el.getAttribute("role")||undefined,text:clean(el.innerText||el.textContent||"",300),html:clean(el.outerHTML||"",300),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};}',
+    'function pickBlock(el){if(!el)return null;if(el.nodeType!==1){el=el.parentElement;if(!el)return null;}if(el.closest&&el.closest("[data-grove-preview-comment-overlay]"))return null;var cur=el;while(cur&&cur.nodeType===1&&cur!==document.body&&cur!==document.documentElement){var tag=cur.tagName&&cur.tagName.toLowerCase();var rect=cur.getBoundingClientRect();if(["section","article","main","header","footer","nav","aside","form","table","tr","li","button","a","img","svg","canvas"].indexOf(tag)>=0)return cur;if(tag==="div"&&rect.width>=24&&rect.height>=16)return cur;if(/^h[1-6]$/.test(tag)||tag==="p")return cur;cur=cur.parentElement;}return el;}',
+    'function draw(el){var o=ensureOverlay();var r=el.getBoundingClientRect();o.style.left=r.left+"px";o.style.top=r.top+"px";o.style.width=Math.max(0,r.width)+"px";o.style.height=Math.max(0,r.height)+"px";o.style.display="block";}',
+    'function move(e){if(!enabled)return;var el=pickBlock(e.target);if(!el)return;if(el!==current){current=el;draw(el);window.parent.postMessage({type:"grove-preview-comment:hover",previewId:previewId,payload:describe(el)},"*");}else{draw(el);}}',
+    'function click(e){if(!enabled)return;var el=pickBlock(e.target);if(!el)return;e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();window.parent.postMessage({type:"grove-preview-comment:selected",previewId:previewId,payload:describe(el)},"*");}',
+    'function key(e){if(e.key==="Escape"&&enabled){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();enabled=false;hideOverlay();document.documentElement.style.cursor="";window.parent.postMessage({type:"grove-preview-comment:cancel",previewId:previewId},"*");}}',
+    'document.addEventListener("mousemove",move,true);document.addEventListener("click",click,true);document.addEventListener("keydown",key,true);',
+    'var rerenderScheduled=false;function scheduleRerender(){if(rerenderScheduled)return;rerenderScheduled=true;requestAnimationFrame(function(){rerenderScheduled=false;renderMarkers();if(markerList.length)scheduleVerify();});}',
+    'window.addEventListener("resize",scheduleRerender);window.addEventListener("scroll",scheduleRerender,true);',
+    'if(window.ResizeObserver){try{var ro=new ResizeObserver(scheduleRerender);ro.observe(document.documentElement);if(document.body)ro.observe(document.body);}catch(e){}}',
+    'if(window.MutationObserver){try{var mo=new MutationObserver(function(records){for(var i=0;i<records.length;i++){var t=records[i].target;var ok=true;var node=t.nodeType===1?t:t.parentNode;while(node){if(node.nodeType===1&&node.getAttribute&&node.getAttribute("data-grove-preview-comment-overlay")==="true"){ok=false;break;}node=node.parentNode;}if(ok){scheduleRerender();return;}}});mo.observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});}catch(e){}}',
+    'var verifyTimer=0;function scheduleVerify(){if(verifyTimer)clearTimeout(verifyTimer);verifyTimer=setTimeout(function(){verifyTimer=0;var stale=[];markerList.forEach(function(m){if(!resolveMarkerEl(m))stale.push(m.id);});if(stale.length)window.parent.postMessage({type:"grove-preview-comment:markers-stale",previewId:previewId,ids:stale},"*");},6000);}',
+    'window.addEventListener("message",function(event){var d=event.data||{};if(d.previewId!==previewId)return;if(d.type==="grove-preview-comment:theme"){if(d.highlight)themeColor=d.highlight;applyOverlayTheme();scheduleRerender();}if(d.type==="grove-preview-comment:start"){enabled=true;document.documentElement.style.cursor="crosshair";}if(d.type==="grove-preview-comment:stop"){enabled=false;document.documentElement.style.cursor="";hideOverlay();}if(d.type==="grove-preview-comment:markers"){markerList=Array.isArray(d.markers)?d.markers:[];scheduleRerender();scheduleVerify();}});',
+    'window.parent.postMessage({type:"grove-preview-comment:ready",previewId:previewId},"*");',
+    '})();',
+    '</script>',
+  ].join('');
+}
+
+function buildHtmlPreviewSrcdoc(html: string, previewId: string): string {
+  const bridge = buildPreviewCommentBridge(previewId);
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${bridge}</body>`);
+  }
+  return `${html}${bridge}`;
+}
+
+function buildJsxIframeSrcdoc(code: string, previewId?: string): string {
   const wrapped = autoWrapJsx(code);
   const codeJson = JSON.stringify(wrapped).replace(/<\//g, '<\\/');
+  const commentBridge = previewId ? buildPreviewCommentBridge(previewId) : '';
 
   return [
     '<!DOCTYPE html><html><head><meta charset="utf-8">',
@@ -279,7 +481,8 @@ function buildJsxIframeSrcdoc(code: string): string {
     'errEl.style.display="block";',
     '}',
     '})();',
-    '<\\/script>',
+    '</script>',
+    commentBridge,
     '</body></html>',
   ].join('\n');
 }
@@ -289,13 +492,8 @@ const jsxRenderer: PreviewRenderer = {
   label: 'Preview JSX',
   match: (path) => /\.(jsx|tsx)$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content }) => (
-    <iframe
-      srcDoc={buildJsxIframeSrcdoc(content)}
-      sandbox="allow-scripts"
-      className="w-full h-full border-0 min-h-[200px]"
-      title="JSX Preview"
-    />
+  renderFull: ({ content, previewComment }) => (
+    <JsxPreviewFrame content={content} previewComment={previewComment} />
   ),
   supportsDiffSegments: false,
 };
@@ -309,8 +507,9 @@ const d2Renderer: PreviewRenderer = {
   label: 'Preview D2 diagram',
   match: (path) => /\.d2$/i.test(path),
   contentType: 'text',
-  renderFull: ({ content, onSvgClick }) => (
-    <D2Block code={content} onPreviewClick={onSvgClick} />
+  renderFull: ({ content, onSvgClick, previewComment }) => withCommentHost(
+    <D2Block code={content} onPreviewClick={onSvgClick} />,
+    previewComment,
   ),
   supportsDiffSegments: false,
 };

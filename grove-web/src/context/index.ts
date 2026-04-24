@@ -9,3 +9,11 @@ export { NotificationProvider, useNotifications } from "./NotificationContext";
 export { ConfigProvider, useConfig } from "./ConfigContext";
 
 export { CommandPaletteProvider, useCommandPalette } from "./CommandPaletteContext";
+
+export {
+  PreviewCommentProvider,
+  usePreviewComments,
+  type PreviewCommentDraft,
+  type PreviewCommentLocator,
+  type NewPreviewCommentDraft,
+} from "./PreviewCommentContext";

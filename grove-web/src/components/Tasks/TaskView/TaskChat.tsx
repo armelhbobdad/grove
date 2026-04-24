@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare,
+  MessageSquarePlus,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
@@ -60,6 +61,7 @@ import {
   filterMentionItems,
 } from "../../../utils/fileMention";
 import { useProject } from "../../../context/ProjectContext";
+import { usePreviewComments, type PreviewCommentDraft } from "../../../context";
 import { listSketches, type SketchMeta } from "../../../api/sketches";
 import { readLastActiveTab, writeLastActiveTab } from "../../../utils/lastActiveTab";
 import type { Task } from "../../../data/types";
@@ -340,6 +342,28 @@ function buildAttachmentCounters(messages: ChatMessage[]): AttachmentCounters {
 function attachmentLabel(type: "image" | "audio" | "resource", index: number): string {
   const prefix = type === "image" ? "Image" : type === "audio" ? "Audio" : "File";
   return `${prefix} #${index}`;
+}
+
+function formatPreviewCommentPrompt(comments: PreviewCommentDraft[]): string {
+  const lines = [
+    "Please address these preview comments. Each comment points to a rendered preview element and includes locator details from the preview DOM.",
+    "",
+  ];
+
+  for (const [idx, draft] of comments.entries()) {
+    lines.push(`${idx + 1}. ${draft.filePath}`);
+    lines.push(`   Source: ${draft.source}`);
+    lines.push(`   Renderer: ${draft.rendererId}`);
+    lines.push(`   Element: ${draft.locator.tagName}${draft.locator.id ? `#${draft.locator.id}` : ""}${draft.locator.className ? `.${draft.locator.className.split(/\s+/).slice(0, 3).join(".")}` : ""}`);
+    if (draft.locator.selector) lines.push(`   CSS selector: ${draft.locator.selector}`);
+    if (draft.locator.xpath) lines.push(`   XPath: ${draft.locator.xpath}`);
+    if (draft.locator.text) lines.push(`   Visible text: ${draft.locator.text}`);
+    if (draft.locator.html) lines.push(`   HTML snippet: ${draft.locator.html}`);
+    lines.push(`   Comment: ${draft.comment}`);
+    lines.push("");
+  }
+
+  return lines.join("\n").trim();
 }
 
 /** Mark all incomplete thinking messages as complete and auto-collapse them */
@@ -1007,6 +1031,7 @@ export function TaskChat({
   const [taskFiles, setTaskFiles] = useState<string[]>([]);
   const [sketchMeta, setSketchMeta] = useState<SketchMeta[]>([]);
   const { selectedProject } = useProject();
+  const { drafts: previewCommentDrafts, removeDraft: removePreviewCommentDraft, clearDrafts: clearPreviewCommentDrafts } = usePreviewComments();
   const isStudioProject = selectedProject?.projectType === "studio";
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [fileFilter, setFileFilter] = useState("");
@@ -1024,6 +1049,7 @@ export function TaskChat({
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [showPreviewComments, setShowPreviewComments] = useState(false);
   const planFilePathRef = useRef("");
   const planFileToolIdsRef = useRef<Set<string>>(new Set());
   const autoStickToBottomRef = useRef(true);
@@ -1071,15 +1097,22 @@ export function TaskChat({
         ) ?? null,
     [messages],
   );
+  const taskPreviewCommentDrafts = useMemo(
+    () => previewCommentDrafts.filter((draft) => draft.projectId === projectId && draft.taskId === task.id),
+    [previewCommentDrafts, projectId, task.id],
+  );
+  const hasPreviewCommentsPanel = taskPreviewCommentDrafts.length > 0;
   const activeComposerPanel =
     showPermissionPanel && activePermissionMessage
       ? "permission"
       : showPlan && hasTodoPanel
         ? "todo"
         : showPlanFile && hasPlanPanel
-          ? "plan"
-          : showPendingQueue && hasPendingPanel
-            ? "pending"
+        ? "plan"
+        : showPendingQueue && hasPendingPanel
+          ? "pending"
+          : showPreviewComments && hasPreviewCommentsPanel
+            ? "previewComments"
             : null;
   const composerPanelOpen = activeComposerPanel !== null;
 
@@ -1089,10 +1122,17 @@ export function TaskChat({
       setShowPlan(false);
       setShowPlanFile(false);
       setShowPendingQueue(false);
+      setShowPreviewComments(false);
     } else {
       setShowPermissionPanel(false);
     }
   }, [activePermissionMessage]);
+
+  // Reset preview-comments toggle when drafts become empty — otherwise a
+  // stale `true` reopens the panel next time a draft is added.
+  useEffect(() => {
+    if (!hasPreviewCommentsPanel && showPreviewComments) setShowPreviewComments(false);
+  }, [hasPreviewCommentsPanel, showPreviewComments]);
 
   // Filtered slash commands based on current input — substring match on
   // command name only. Name-only avoids the old noise bug where matching
@@ -2722,6 +2762,45 @@ export function TaskChat({
     }
   }, [isTerminalMode, isBusy, attachments, activeChatId, projectId, task.id, enableAutoStickToBottom, onUserMessageSent, updateBusy]);
 
+  const sendPreviewComments = useCallback((comments: PreviewCommentDraft[]) => {
+    if (
+      comments.length === 0 ||
+      !activeChatId ||
+      !wsRef.current ||
+      wsRef.current.readyState !== WebSocket.OPEN ||
+      isTerminalMode
+    ) {
+      return;
+    }
+
+    const text = formatPreviewCommentPrompt(comments);
+    enableAutoStickToBottom("auto");
+    wsRef.current.send(
+      JSON.stringify({
+        type: isBusy ? "queue_message" : "prompt",
+        text,
+        attachments: [],
+      }),
+    );
+    clearPreviewCommentDrafts(comments.map((comment) => comment.id));
+    setShowPreviewComments(false);
+    setShowSlashMenu(false);
+    setShowFileMenu(false);
+    setShowPendingQueue(isBusy);
+    setShowPlan(false);
+    setShowPlanFile(false);
+    if (!isBusy) updateBusy(true);
+    onUserMessageSent?.();
+  }, [
+    activeChatId,
+    clearPreviewCommentDrafts,
+    enableAutoStickToBottom,
+    isBusy,
+    isTerminalMode,
+    onUserMessageSent,
+    updateBusy,
+  ]);
+
   /** Cancel current agent work — server auto-sends next queued message after Complete */
   const handleSendNow = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -3991,6 +4070,85 @@ export function TaskChat({
                         </div>
                       )}
 
+                      {activeComposerPanel === "previewComments" && (
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <MessageSquarePlus className="h-3.5 w-3.5 text-[var(--color-highlight)]" />
+                              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
+                                Preview comments
+                              </span>
+                              <span className="rounded-full bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] px-1.5 py-px text-[10px] font-medium leading-none text-[var(--color-highlight)]">
+                                {taskPreviewCommentDrafts.length}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => sendPreviewComments(taskPreviewCommentDrafts)}
+                              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold text-white shadow-sm transition-transform hover:scale-[1.02]"
+                              style={{ background: "var(--color-highlight)" }}
+                            >
+                              <Send className="h-3 w-3" />
+                              Send all
+                            </button>
+                          </div>
+                          <div className="space-y-1.5">
+                            {taskPreviewCommentDrafts.map((draft, idx) => {
+                              const fileLabel = draft.fileName || draft.filePath.split("/").pop() || draft.filePath;
+                              const dir = draft.filePath.slice(0, Math.max(0, draft.filePath.length - fileLabel.length - 1));
+                              const crumb = draft.locator.selector || draft.locator.tagName;
+                              return (
+                                <div
+                                  key={draft.id}
+                                  className="group relative flex gap-2.5 rounded-xl border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-bg)_75%,transparent)] p-2 pl-2.5 transition-colors hover:border-[color-mix(in_srgb,var(--color-highlight)_40%,var(--color-border))]"
+                                >
+                                  <div
+                                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm"
+                                    style={{ background: "var(--color-highlight)" }}
+                                    title="Marker shown in preview"
+                                  >
+                                    {idx + 1}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-snug text-[var(--color-text)]">
+                                      {draft.comment}
+                                    </div>
+                                    <div className="mt-1 flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
+                                      <span className="truncate font-medium text-[var(--color-text)]" title={draft.filePath}>
+                                        {fileLabel}
+                                      </span>
+                                      {dir && (
+                                        <span className="truncate opacity-60" title={draft.filePath}>
+                                          · {dir}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="mt-0.5 truncate font-mono text-[10px] text-[var(--color-text-muted)] opacity-80" title={crumb}>
+                                      {crumb}
+                                    </div>
+                                  </div>
+                                  <div className="flex shrink-0 items-start gap-1 opacity-70 transition-opacity group-hover:opacity-100">
+                                    <button
+                                      onClick={() => sendPreviewComments([draft])}
+                                      className="rounded-md p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-highlight)_12%,transparent)] hover:text-[var(--color-highlight)]"
+                                      title="Send this comment"
+                                    >
+                                      <Send className="h-3 w-3" />
+                                    </button>
+                                    <button
+                                      onClick={() => removePreviewCommentDraft(draft.id)}
+                                      className="rounded-md p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)] hover:text-[var(--color-error)]"
+                                      title="Remove"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
                       {activeComposerPanel === "permission" &&
                         activePermissionMessage && (
                           <div className="space-y-3">
@@ -4194,6 +4352,7 @@ export function TaskChat({
                             setShowPermissionPanel(false);
                             setShowPlanFile(false);
                             setShowPendingQueue(false);
+                            setShowPreviewComments(false);
                           }
                         }}
                         className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
@@ -4222,6 +4381,7 @@ export function TaskChat({
                             setShowPermissionPanel(false);
                             setShowPlan(false);
                             setShowPendingQueue(false);
+                            setShowPreviewComments(false);
                           }
                         }}
                         className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
@@ -4243,6 +4403,7 @@ export function TaskChat({
                             setShowPermissionPanel(false);
                             setShowPlan(false);
                             setShowPlanFile(false);
+                            setShowPreviewComments(false);
                           }
                         }}
                         className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
@@ -4264,6 +4425,7 @@ export function TaskChat({
                             setShowPlan(false);
                             setShowPlanFile(false);
                             setShowPendingQueue(false);
+                            setShowPreviewComments(false);
                           }
                         }}
                         className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
@@ -4274,6 +4436,29 @@ export function TaskChat({
                       >
                         <ShieldCheck className="h-3 w-3" />
                         <span>Permission Request</span>
+                      </button>
+                    )}
+                    {hasPreviewCommentsPanel && (
+                      <button
+                        onClick={() => {
+                          const next = !showPreviewComments;
+                          setShowPreviewComments(next);
+                          if (next) {
+                            setShowPermissionPanel(false);
+                            setShowPlan(false);
+                            setShowPlanFile(false);
+                            setShowPendingQueue(false);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] transition-colors ${
+                          activeComposerPanel === "previewComments"
+                            ? "bg-[color-mix(in_srgb,var(--color-highlight)_14%,transparent)] text-[var(--color-highlight)]"
+                            : "bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        <MessageSquarePlus className="h-3 w-3" />
+                        <span>Preview</span>
+                        <span className="opacity-70">{taskPreviewCommentDrafts.length}</span>
                       </button>
                     )}
                   </div>

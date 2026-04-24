@@ -1,17 +1,19 @@
-import { useRef, useEffect, Fragment, useState, useMemo, useCallback } from 'react';
+import { useRef, useEffect, Fragment, useState, useMemo, useCallback, useId } from 'react';
 import type { DiffFile, DiffHunk } from '../../api/review';
 import { getFileContent } from '../../api/review';
 import type { ReviewCommentEntry } from '../../api/tasks';
 import type { CommentAnchor } from './DiffReviewPage';
 import { CommentCard, CommentForm, ReplyForm } from './InlineComment';
-import { ChevronRight, ChevronDown, ChevronUp, Copy, Check, MessageSquare, ChevronsUpDown, Eye, Maximize2, Minimize2, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, ChevronUp, Copy, Check, MessageSquare, MessageSquarePlus, ChevronsUpDown, Eye, Maximize2, Minimize2, Trash2, X } from 'lucide-react';
 import { detectLanguage, highlightLines } from './syntaxHighlight';
 import { GutterAvatar } from './AgentAvatar';
 import { useFileMention } from '../../hooks';
 import { FileMentionDropdown } from '../ui';
 import { MarkdownRenderer, MermaidBlock } from '../ui/MarkdownRenderer';
-import { ImagePreview, type PreviewRenderer } from './previewRenderers';
+import { ImagePreview, type PreviewRenderer, type PreviewCommentMarker } from './previewRenderers';
+import { PreviewCommentHost } from './PreviewCommentHost';
 import { ImageLightbox } from '../ui/ImageLightbox';
+import { usePreviewComments, type PreviewCommentLocator } from '../../context';
 
 // ============================================================================
 // Types for context line expansion
@@ -266,6 +268,8 @@ export function DiffFileView({
   defaultExpanded = false,
 }: DiffFileViewProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const previewCommentId = useId().replace(/:/g, '');
+  const { drafts: previewCommentDrafts, addDraft, updateDraft, removeDraft } = usePreviewComments();
   const [copied, setCopied] = useState(false);
   const [fileCommentText, setFileCommentText] = useState('');
   const fileCommentTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -417,6 +421,10 @@ export function DiffFileView({
   const [drawerExpanded, setDrawerExpanded] = useState(defaultExpanded);
   // Drawer width as fraction (0..1), null = default 50%
   const [drawerWidthFraction, setDrawerWidthFraction] = useState<number | null>(null);
+  const [previewCommentMode, setPreviewCommentMode] = useState(false);
+  const [pendingPreviewLocator, setPendingPreviewLocator] = useState<PreviewCommentLocator | null>(null);
+  const [previewCommentText, setPreviewCommentText] = useState('');
+  const [editingPreviewDraftId, setEditingPreviewDraftId] = useState<string | null>(null);
   const draggingRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -430,8 +438,110 @@ export function DiffFileView({
     if (!isPreviewOpen) {
       setDrawerExpanded(false);
       setDrawerWidthFraction(null);
+      setPreviewCommentMode(false);
+      setPendingPreviewLocator(null);
+      setEditingPreviewDraftId(null);
     }
   }, [isPreviewOpen]);
+
+  // Stash drafts in a ref so the message listener doesn't re-attach every
+  // time drafts change anywhere in the app.
+  const draftsRef = useRef(previewCommentDrafts);
+  useEffect(() => { draftsRef.current = previewCommentDrafts; }, [previewCommentDrafts]);
+
+  useEffect(() => {
+    if (!previewRenderer || previewRenderer.supportsComments === false) return;
+    const handler = (event: MessageEvent) => {
+      const data = event.data as { type?: string; previewId?: string; payload?: PreviewCommentLocator; markerId?: string; ids?: string[] };
+      if (!data || data.previewId !== previewCommentId) return;
+      if (data.type === 'grove-preview-comment:selected' && data.payload) {
+        setPendingPreviewLocator(data.payload);
+        setPreviewCommentText('');
+        setEditingPreviewDraftId(null);
+        setPreviewCommentMode(false);
+      } else if (data.type === 'grove-preview-comment:cancel') {
+        setPreviewCommentMode(false);
+      } else if (data.type === 'grove-preview-comment:marker-click' && data.markerId) {
+        const draft = draftsRef.current.find(
+          (d) => d.id === data.markerId && d.projectId === projectId && d.taskId === taskId && d.filePath === file.new_path,
+        );
+        if (draft) {
+          setPendingPreviewLocator(draft.locator);
+          setPreviewCommentText(draft.comment);
+          setEditingPreviewDraftId(draft.id);
+          setPreviewCommentMode(false);
+        }
+      } else if (data.type === 'grove-preview-comment:markers-stale' && Array.isArray(data.ids)) {
+        data.ids.forEach((id) => removeDraft(id));
+        if (data.ids.length) {
+          console.info(`[preview-comments] Removed ${data.ids.length} stale preview comment${data.ids.length > 1 ? 's' : ''} (target element no longer in DOM)`);
+        }
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [previewRenderer, previewCommentId, projectId, taskId, file.new_path, removeDraft]);
+
+  const previewCommentMarkersKey = useMemo(() => {
+    if (!projectId || !taskId) return '[]';
+    const path = file.new_path;
+    const entries: PreviewCommentMarker[] = [];
+    let n = 0;
+    for (const d of previewCommentDrafts) {
+      if (d.projectId !== projectId || d.taskId !== taskId || d.filePath !== path) continue;
+      n++;
+      entries.push({ id: d.id, label: String(n), selector: d.locator.selector, xpath: d.locator.xpath });
+    }
+    return JSON.stringify(entries);
+  }, [previewCommentDrafts, projectId, taskId, file.new_path]);
+  const previewCommentMarkers = useMemo<PreviewCommentMarker[]>(
+    () => JSON.parse(previewCommentMarkersKey),
+    [previewCommentMarkersKey],
+  );
+
+  const closePreviewCommentModal = useCallback(() => {
+    setPendingPreviewLocator(null);
+    setPreviewCommentText('');
+    setEditingPreviewDraftId(null);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingPreviewLocator) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      closePreviewCommentModal();
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [pendingPreviewLocator, closePreviewCommentModal]);
+
+  const submitReviewPreviewComment = useCallback(() => {
+    if (!pendingPreviewLocator || !previewCommentText.trim() || !projectId || !taskId || !previewRenderer) return;
+    if (editingPreviewDraftId) {
+      updateDraft(editingPreviewDraftId, { comment: previewCommentText.trim() });
+    } else {
+      addDraft({
+        source: 'review',
+        projectId,
+        taskId,
+        filePath: file.new_path,
+        fileName: file.new_path.split('/').pop() || file.new_path,
+        rendererId: previewRenderer.id,
+        locator: pendingPreviewLocator,
+        comment: previewCommentText.trim(),
+      });
+    }
+    closePreviewCommentModal();
+  }, [addDraft, updateDraft, editingPreviewDraftId, closePreviewCommentModal, file.new_path, pendingPreviewLocator, previewCommentText, previewRenderer, projectId, taskId]);
+
+  const deleteReviewPreviewComment = useCallback(() => {
+    if (!editingPreviewDraftId) return;
+    removeDraft(editingPreviewDraftId);
+    closePreviewCommentModal();
+  }, [editingPreviewDraftId, removeDraft, closePreviewCommentModal]);
 
   // Drag-to-resize handler
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -1134,6 +1244,15 @@ export function DiffFileView({
                 <div className="preview-drawer-header">
                   <Eye style={{ width: 14, height: 14, opacity: 0.6 }} />
                   <span style={{ flex: 1, fontWeight: 600 }}>Preview</span>
+                  {previewRenderer && previewRenderer.supportsComments !== false && projectId && taskId && (
+                    <button
+                      className={`diff-file-preview-btn${previewCommentMode ? ' active' : ''}`}
+                      onClick={() => setPreviewCommentMode((v) => !v)}
+                      title={previewCommentMode ? 'Cancel comment selection' : 'Comment on preview'}
+                    >
+                      <MessageSquarePlus style={{ width: 13, height: 13 }} />
+                    </button>
+                  )}
                   <button
                     className="diff-file-preview-btn"
                     onClick={() => setDrawerExpanded((v) => !v)}
@@ -1175,7 +1294,14 @@ export function DiffFileView({
                           ? fullFileContent
                           : file.hunks.flatMap(h => h.lines.filter(l => l.line_type !== 'delete').map(l => l.content)).join('\n');
                         return content.trim()
-                          ? previewRenderer.renderFull({ content, onImageClick: setLightboxUrl, onSvgClick: setLightboxSvg })
+                          ? previewRenderer.renderFull({
+                              content,
+                              onImageClick: setLightboxUrl,
+                              onSvgClick: setLightboxSvg,
+                              previewComment: previewRenderer.supportsComments !== false && projectId && taskId
+                                ? { enabled: previewCommentMode, previewId: previewCommentId, markers: previewCommentMarkers }
+                                : undefined,
+                            })
                           : <div className="preview-loading">No content to render</div>;
                       })()
                     ) : viewMode === 'full' ? (
@@ -1183,34 +1309,56 @@ export function DiffFileView({
                         <div className="preview-loading">Loading content...</div>
                       ) : fullFileContent != null ? (
                         previewRenderer
-                          ? previewRenderer.renderFull({ content: fullFileContent, onImageClick: setLightboxUrl, onSvgClick: setLightboxSvg })
+                          ? previewRenderer.renderFull({
+                              content: fullFileContent,
+                              onImageClick: setLightboxUrl,
+                              onSvgClick: setLightboxSvg,
+                              previewComment: previewRenderer.supportsComments !== false && projectId && taskId
+                                ? { enabled: previewCommentMode, previewId: previewCommentId, markers: previewCommentMarkers }
+                                : undefined,
+                            })
                           : <MarkdownRenderer content={fullFileContent} onImageClick={setLightboxUrl} onMermaidClick={setLightboxSvg} />
                       ) : (
                         <div className="preview-loading">Failed to load file content</div>
                       )
                     ) : previewSegments.length > 0 ? (
-                      previewSegments.map((seg) =>
-                        seg.type === 'markdown' ? (
-                          <div key={seg.id} className={`preview-block-${seg.kind}`}>
-                            <MarkdownRenderer content={seg.content} onImageClick={setLightboxUrl} onMermaidClick={setLightboxSvg} />
-                          </div>
-                        ) : seg.language === 'mermaid' ? (
-                          <MermaidBlock key={seg.id} code={seg.lines.map(l => l.content).join('\n')} onPreviewClick={setLightboxSvg} />
+                      (() => {
+                        const segmentsContent = previewSegments.map((seg) =>
+                          seg.type === 'markdown' ? (
+                            <div key={seg.id} className={`preview-block-${seg.kind}`}>
+                              <MarkdownRenderer content={seg.content} onImageClick={setLightboxUrl} onMermaidClick={setLightboxSvg} />
+                            </div>
+                          ) : seg.language === 'mermaid' ? (
+                            <MermaidBlock key={seg.id} code={seg.lines.map(l => l.content).join('\n')} onPreviewClick={setLightboxSvg} />
+                          ) : (
+                            <pre key={seg.id} className="preview-code-block">
+                              <code>
+                                {seg.lines.map((line, i) => (
+                                  <div
+                                    key={i}
+                                    className={`preview-code-line${line.kind !== 'context' ? ` preview-code-line-${line.kind}` : ''}`}
+                                  >
+                                    {line.content || ' '}
+                                  </div>
+                                ))}
+                              </code>
+                            </pre>
+                          )
+                        );
+                        return previewRenderer && previewRenderer.supportsComments !== false && projectId && taskId ? (
+                          <PreviewCommentHost
+                            previewComment={{
+                              enabled: previewCommentMode,
+                              previewId: previewCommentId,
+                              markers: previewCommentMarkers,
+                            }}
+                          >
+                            {segmentsContent}
+                          </PreviewCommentHost>
                         ) : (
-                          <pre key={seg.id} className="preview-code-block">
-                            <code>
-                              {seg.lines.map((line, i) => (
-                                <div
-                                  key={i}
-                                  className={`preview-code-line${line.kind !== 'context' ? ` preview-code-line-${line.kind}` : ''}`}
-                                >
-                                  {line.content || ' '}
-                                </div>
-                              ))}
-                            </code>
-                          </pre>
-                        )
-                      )
+                          <>{segmentsContent}</>
+                        );
+                      })()
                     ) : (
                       <div className="preview-loading">No previewable changes</div>
                     )
@@ -1227,6 +1375,97 @@ export function DiffFileView({
         svgContent={lightboxSvg}
         onClose={() => { setLightboxUrl(null); setLightboxSvg(null); }}
       />
+
+      {pendingPreviewLocator && (
+        <div
+          data-hotkeys-dialog="true"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) closePreviewCommentModal(); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 1001, background: 'rgba(0,0,0,.4)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div style={{ width: 'min(92vw,460px)', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 12, boxShadow: '0 18px 50px rgba(0,0,0,.28)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <MessageSquarePlus style={{ width: 13, height: 13, color: 'var(--color-highlight)', flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)' }}>
+                  {editingPreviewDraftId ? 'Edit preview comment' : 'New preview comment'}
+                </span>
+              </div>
+              <button
+                onClick={closePreviewCommentModal}
+                title="Close (Esc)"
+                style={{ display: 'inline-flex', padding: 4, border: 'none', background: 'transparent', borderRadius: 4, color: 'var(--color-text-muted)', cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-tertiary)'; e.currentTarget.style.color = 'var(--color-text)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+              >
+                <X style={{ width: 13, height: 13 }} />
+              </button>
+            </div>
+            <div style={{ padding: '12px 16px 0' }}>
+              <div
+                title={pendingPreviewLocator.selector || pendingPreviewLocator.tagName}
+                style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 10.5, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {pendingPreviewLocator.selector || pendingPreviewLocator.tagName}
+              </div>
+              {pendingPreviewLocator.text && (
+                <div style={{ marginTop: 8, padding: '6px 10px', border: '1px solid var(--color-border)', borderRadius: 6, background: 'var(--color-bg-secondary)', color: 'var(--color-text-muted)', fontSize: 11, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {pendingPreviewLocator.text}
+                </div>
+              )}
+            </div>
+            <div style={{ padding: '12px 16px' }}>
+              <textarea
+                value={previewCommentText}
+                onChange={(e) => setPreviewCommentText(e.target.value)}
+                autoFocus
+                rows={3}
+                placeholder="What should change about this area?"
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { e.preventDefault(); closePreviewCommentModal(); }
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitReviewPreviewComment();
+                }}
+                style={{ width: '100%', resize: 'none', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg-secondary)', color: 'var(--color-text)', padding: '8px 10px', outline: 'none', fontSize: 13, lineHeight: 1.4 }}
+              />
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {editingPreviewDraftId && (
+                    <button
+                      onClick={deleteReviewPreviewComment}
+                      title="Delete comment"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', border: 'none', background: 'transparent', borderRadius: 6, fontSize: 11, color: 'var(--color-text-muted)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-error) 12%, transparent)'; e.currentTarget.style.color = 'var(--color-error)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+                    >
+                      <Trash2 style={{ width: 12, height: 12 }} />
+                      Delete
+                    </button>
+                  )}
+                  <span style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>
+                    <kbd style={{ border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', borderRadius: 3, padding: '0 4px', fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 10 }}>⌘↵</kbd> to submit
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={closePreviewCommentModal}
+                    style={{ padding: '4px 10px', border: 'none', background: 'transparent', borderRadius: 6, fontSize: 11, color: 'var(--color-text-muted)', cursor: 'pointer' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-tertiary)'; e.currentTarget.style.color = 'var(--color-text)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    disabled={!previewCommentText.trim()}
+                    onClick={submitReviewPreviewComment}
+                    style={{ border: 'none', borderRadius: 6, padding: '4px 12px', background: 'var(--color-highlight)', color: 'white', fontSize: 11, fontWeight: 600, opacity: previewCommentText.trim() ? 1 : .4, boxShadow: '0 1px 2px rgba(0,0,0,.12)', cursor: previewCommentText.trim() ? 'pointer' : 'not-allowed' }}
+                  >
+                    {editingPreviewDraftId ? 'Save' : 'Add comment'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating comment button on text selection */}
       {selectionAnchor && onGutterClick && (
