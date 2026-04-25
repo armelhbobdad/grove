@@ -12,6 +12,8 @@ import { FileMentionDropdown } from '../ui';
 import { MarkdownRenderer, MermaidBlock } from '../ui/MarkdownRenderer';
 import { ImagePreview, type PreviewRenderer, type PreviewCommentMarker } from './previewRenderers';
 import { PreviewCommentHost } from './PreviewCommentHost';
+import { PreviewSearchBar } from './PreviewSearchBar';
+import { useDomSearch } from './useDomSearch';
 import { ImageLightbox } from '../ui/ImageLightbox';
 import { usePreviewComments, type PreviewCommentLocator } from '../../context';
 
@@ -425,6 +427,98 @@ export function DiffFileView({
   const [pendingPreviewLocator, setPendingPreviewLocator] = useState<PreviewCommentLocator | null>(null);
   const [previewCommentText, setPreviewCommentText] = useState('');
   const [editingPreviewDraftId, setEditingPreviewDraftId] = useState<string | null>(null);
+  const previewDrawerRef = useRef<HTMLDivElement>(null);
+  const searchRootRef = useRef<HTMLDivElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const isIframePreview = previewRenderer?.id === 'html' || previewRenderer?.id === 'jsx';
+  const dom = useDomSearch(searchRootRef, searchOpen && !isIframePreview ? searchQuery : '', searchOpen && !isIframePreview);
+  const [iframeTotal, setIframeTotal] = useState(0);
+  const [iframeCurrent, setIframeCurrent] = useState(0);
+  const searchTotal = isIframePreview ? iframeTotal : dom.total;
+  const searchCurrent = isIframePreview ? iframeCurrent : dom.current;
+  const searchNext = () => {
+    if (isIframePreview) setIframeCurrent((c) => (iframeTotal === 0 ? 0 : (c + 1) % iframeTotal));
+    else dom.next();
+  };
+  const searchPrev = () => {
+    if (isIframePreview) setIframeCurrent((c) => (iframeTotal === 0 ? 0 : (c - 1 + iframeTotal) % iframeTotal));
+    else dom.prev();
+  };
+
+  useEffect(() => { if (isIframePreview) setIframeCurrent(0); }, [searchQuery, isIframePreview]);
+
+  useEffect(() => {
+    if (!isIframePreview || !searchOpen) return;
+    const iframe = previewDrawerRef.current?.querySelector<HTMLIFrameElement>('iframe');
+    iframe?.contentWindow?.postMessage(
+      { type: 'grove-preview-search:query', previewId: previewCommentId, query: searchQuery },
+      '*',
+    );
+  }, [searchQuery, searchOpen, isIframePreview, previewCommentId]);
+
+  useEffect(() => {
+    if (!isIframePreview || !searchOpen) return;
+    const iframe = previewDrawerRef.current?.querySelector<HTMLIFrameElement>('iframe');
+    iframe?.contentWindow?.postMessage(
+      { type: 'grove-preview-search:goto', previewId: previewCommentId, index: iframeCurrent },
+      '*',
+    );
+  }, [iframeCurrent, isIframePreview, searchOpen, previewCommentId]);
+
+  useEffect(() => {
+    if (!isIframePreview) return;
+    const handler = (event: MessageEvent) => {
+      const data = event.data as { type?: string; previewId?: string; total?: number };
+      if (!data || data.previewId !== previewCommentId) return;
+      if (data.type === 'grove-preview-search:result' && typeof data.total === 'number') {
+        setIframeTotal(data.total);
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [isIframePreview, previewCommentId]);
+
+  useEffect(() => {
+    if (!searchOpen && isIframePreview) {
+      const iframe = previewDrawerRef.current?.querySelector<HTMLIFrameElement>('iframe');
+      iframe?.contentWindow?.postMessage(
+        { type: 'grove-preview-search:clear', previewId: previewCommentId },
+        '*',
+      );
+      setIframeTotal(0);
+    }
+  }, [searchOpen, isIframePreview, previewCommentId]);
+
+  // Cmd/Ctrl+F when focus is inside preview drawer
+  useEffect(() => {
+    if (!isPreviewOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'f' || !(e.metaKey || e.ctrlKey)) return;
+      const root = previewDrawerRef.current;
+      if (!root) return;
+      const target = document.activeElement;
+      if (!target || !root.contains(target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      setSearchOpen((v) => !v);
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [isPreviewOpen]);
+
+  // Close search when drawer closes or file changes
+  useEffect(() => {
+    if (!isPreviewOpen) {
+      setSearchOpen(false);
+      setSearchQuery('');
+    }
+  }, [isPreviewOpen]);
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+  }, [file.new_path]);
   const draggingRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -1231,11 +1325,24 @@ export function DiffFileView({
             {/* Preview drawer (right side) */}
             {onTogglePreview && (
               <div
+                ref={previewDrawerRef}
+                tabIndex={-1}
+                onPointerDown={(e) => {
+                  const root = previewDrawerRef.current;
+                  if (!root) return;
+                  if (root === e.target || !(e.target as Element).closest?.("input,textarea,select,button,a,iframe,[contenteditable=true]")) {
+                    if (!root.contains(document.activeElement)) {
+                      root.focus({ preventScroll: true });
+                    }
+                  }
+                }}
                 className={`preview-drawer${isPreviewOpen ? ' open' : ''}${drawerExpanded ? ' expanded' : ''}`}
-                style={isPreviewOpen && !drawerExpanded && drawerWidthFraction != null
-                  ? { width: `${drawerWidthFraction * 100}%`, minWidth: 200, transition: 'none' }
-                  : undefined
-                }
+                style={{
+                  outline: 'none',
+                  ...(isPreviewOpen && !drawerExpanded && drawerWidthFraction != null
+                    ? { width: `${drawerWidthFraction * 100}%`, minWidth: 200, transition: 'none' }
+                    : {}),
+                }}
               >
                 {/* Resize handle */}
                 {isPreviewOpen && !drawerExpanded && (
@@ -1273,15 +1380,28 @@ export function DiffFileView({
                   </button>
                 </div>
                 <div
+                  ref={searchRootRef}
                   className="preview-drawer-content"
-                  style={
+                  style={{
+                    position: 'relative',
                     // When there's no real content to show, don't let the content area flex-stretch
                     // to fill the full viewport height — cap it so the drawer stays compact.
-                    isPreviewOpen && fullFileContent == null && file.hunks.length === 0
+                    ...(isPreviewOpen && fullFileContent == null && file.hunks.length === 0
                       ? { flex: 'none' }
-                      : undefined
-                  }
+                      : {}),
+                  }}
                 >
+                  {searchOpen && isPreviewOpen && (
+                    <PreviewSearchBar
+                      query={searchQuery}
+                      onQueryChange={setSearchQuery}
+                      total={searchTotal}
+                      current={searchCurrent}
+                      onNext={searchNext}
+                      onPrev={searchPrev}
+                      onClose={() => { setSearchOpen(false); setSearchQuery(''); }}
+                    />
+                  )}
                   {/* Only render content when the drawer is open.
                       The closed drawer has width:0 but no height limit — rendering heavy content
                       (e.g. MarkdownRenderer) would inflate the flex-row height of diff-file-body. */}

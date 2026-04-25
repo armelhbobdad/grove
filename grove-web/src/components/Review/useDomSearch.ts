@@ -1,0 +1,191 @@
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+
+interface UseDomSearchResult {
+  total: number;
+  current: number; // 0-indexed; 0 when total === 0
+  next: () => void;
+  prev: () => void;
+}
+
+const SEARCH_HIGHLIGHT = "grove-search";
+const SEARCH_HIGHLIGHT_CURRENT = "grove-search-current";
+const MARK_ATTR = "data-grove-search-mark";
+const MARK_CURRENT_ATTR = "data-grove-search-mark-current";
+
+/**
+ * Search text inside the given root using:
+ *   1. CSS Custom Highlight API when available — no DOM mutation, zero churn
+ *   2. <mark> injection as fallback for older browsers
+ *
+ * Skips text inside our own UI (search bar, comment overlays).
+ *
+ * `enabled` toggles whether the hook is active; when false, all highlights
+ * are removed immediately so closing the search bar fully clears the page.
+ */
+export function useDomSearch(
+  rootRef: RefObject<HTMLElement | null>,
+  query: string,
+  enabled: boolean,
+): UseDomSearchResult {
+  const [total, setTotal] = useState(0);
+  const [current, setCurrent] = useState(0);
+  const rangesRef = useRef<Range[]>([]);
+  const marksRef = useRef<HTMLElement[]>([]);
+  const supportsHighlight = typeof CSS !== "undefined" && "highlights" in CSS;
+
+  const clearHighlights = useCallback(() => {
+    if (supportsHighlight) {
+      try {
+        CSS.highlights.delete(SEARCH_HIGHLIGHT);
+        CSS.highlights.delete(SEARCH_HIGHLIGHT_CURRENT);
+      } catch { /* noop */ }
+    }
+    if (marksRef.current.length) {
+      for (const m of marksRef.current) {
+        const parent = m.parentNode;
+        if (!parent) continue;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        parent.removeChild(m);
+      }
+      marksRef.current = [];
+    }
+    rangesRef.current = [];
+  }, [supportsHighlight]);
+
+  // Re-compute on query / enabled / root change
+  useEffect(() => {
+    clearHighlights();
+    if (!enabled || !query || !rootRef.current) {
+      setTotal(0);
+      setCurrent(0);
+      return;
+    }
+
+    const root = rootRef.current;
+    const lowerQuery = query.toLowerCase();
+    const queryLen = query.length;
+
+    // Phase 1: collect text nodes (skip our UI subtrees)
+    const textNodes: Text[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("[data-grove-search-bar]")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("[data-grove-comment-overlay]")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("[data-grove-preview-comment-overlay]")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("[data-grove-search-skip]")) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName?.toLowerCase();
+        if (tag === "script" || tag === "style" || tag === "noscript") return NodeFilter.FILTER_REJECT;
+        if (!node.textContent) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n: Node | null;
+    while ((n = walker.nextNode())) textNodes.push(n as Text);
+
+    if (supportsHighlight) {
+      // Phase 2a: build Range list
+      const ranges: Range[] = [];
+      for (const tn of textNodes) {
+        const text = tn.textContent ?? "";
+        const lower = text.toLowerCase();
+        let i = 0;
+        while ((i = lower.indexOf(lowerQuery, i)) !== -1) {
+          const r = document.createRange();
+          try {
+            r.setStart(tn, i);
+            r.setEnd(tn, i + queryLen);
+            ranges.push(r);
+          } catch { /* noop */ }
+          i += queryLen;
+        }
+      }
+      rangesRef.current = ranges;
+      setTotal(ranges.length);
+      setCurrent(0);
+      if (ranges.length) {
+        try {
+          const hlAll = new Highlight();
+          for (const r of ranges) hlAll.add(r);
+          CSS.highlights.set(SEARCH_HIGHLIGHT, hlAll);
+          const hlCur = new Highlight();
+          hlCur.add(ranges[0]);
+          CSS.highlights.set(SEARCH_HIGHLIGHT_CURRENT, hlCur);
+        } catch { /* noop */ }
+      }
+    } else {
+      // Phase 2b: <mark> injection fallback
+      const marks: HTMLElement[] = [];
+      for (const tn of textNodes) {
+        const text = tn.textContent ?? "";
+        const lower = text.toLowerCase();
+        const occurrences: number[] = [];
+        let i = 0;
+        while ((i = lower.indexOf(lowerQuery, i)) !== -1) {
+          occurrences.push(i);
+          i += queryLen;
+        }
+        if (!occurrences.length) continue;
+        // Walk occurrences right-to-left so earlier indices stay valid as we split.
+        const parent = tn.parentNode;
+        if (!parent) continue;
+        let cursor = tn;
+        let consumed = 0;
+        for (const occ of occurrences) {
+          const localStart = occ - consumed;
+          const after = cursor.splitText(localStart);
+          const matched = after.splitText(queryLen);
+          const mark = document.createElement("mark");
+          mark.setAttribute(MARK_ATTR, "true");
+          mark.appendChild(after);
+          parent.insertBefore(mark, matched);
+          marks.push(mark);
+          cursor = matched;
+          consumed = occ + queryLen;
+        }
+      }
+      marksRef.current = marks;
+      setTotal(marks.length);
+      setCurrent(0);
+      if (marks.length) {
+        marks[0].setAttribute(MARK_CURRENT_ATTR, "true");
+      }
+    }
+
+    return clearHighlights;
+  }, [query, enabled, rootRef, supportsHighlight, clearHighlights]);
+
+  // When `current` changes, update which match is the "current" one + scroll into view.
+  useEffect(() => {
+    if (total === 0) return;
+    const idx = ((current % total) + total) % total;
+    if (supportsHighlight) {
+      const range = rangesRef.current[idx];
+      if (!range) return;
+      try {
+        const h = new Highlight();
+        h.add(range);
+        CSS.highlights.set(SEARCH_HIGHLIGHT_CURRENT, h);
+      } catch { /* noop */ }
+      // Scroll the start container into view
+      const target = range.startContainer.parentElement;
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    } else {
+      for (const m of marksRef.current) m.removeAttribute(MARK_CURRENT_ATTR);
+      const m = marksRef.current[idx];
+      if (!m) return;
+      m.setAttribute(MARK_CURRENT_ATTR, "true");
+      m.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [current, total, supportsHighlight]);
+
+  const next = useCallback(() => {
+    setCurrent((c) => (total === 0 ? 0 : (c + 1) % total));
+  }, [total]);
+  const prev = useCallback(() => {
+    setCurrent((c) => (total === 0 ? 0 : (c - 1 + total) % total));
+  }, [total]);
+
+  return { total, current, next, prev };
+}

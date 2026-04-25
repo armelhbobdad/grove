@@ -64,6 +64,8 @@ import {
 } from "../../../utils/fileMention";
 import { useProject } from "../../../context/ProjectContext";
 import { usePreviewComments, type PreviewCommentDraft } from "../../../context";
+import { PreviewSearchBar } from "../../Review/PreviewSearchBar";
+import { useDomSearch } from "../../Review/useDomSearch";
 import { listSketches, type SketchMeta } from "../../../api/sketches";
 import { readLastActiveTab, writeLastActiveTab } from "../../../utils/lastActiveTab";
 import type { Task } from "../../../data/types";
@@ -1054,6 +1056,8 @@ export function TaskChat({
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showPreviewComments, setShowPreviewComments] = useState(false);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
   const planFilePathRef = useRef("");
   const planFileToolIdsRef = useRef<Set<string>>(new Set());
   const autoStickToBottomRef = useRef(true);
@@ -1062,6 +1066,7 @@ export function TaskChat({
   messagesCountRef.current = messages.length;
   const inputAreaRef = useRef<HTMLDivElement>(null);
   const chatboxContainerRef = useRef<HTMLDivElement>(null);
+  const taskChatRootRef = useRef<HTMLDivElement>(null);
 
   // ─── Read-only observation mode state ──────────────────────────────────
   const [isRemoteSession, setIsRemoteSession] = useState(false);
@@ -1137,6 +1142,30 @@ export function TaskChat({
   useEffect(() => {
     if (!hasPreviewCommentsPanel && showPreviewComments) setShowPreviewComments(false);
   }, [hasPreviewCommentsPanel, showPreviewComments]);
+
+  // ── Chat search (Cmd/Ctrl+F) ────────────────────────────────────────
+  // Skip thinking blocks (data-grove-search-skip) and our own UI.
+  const chatSearch = useDomSearch(messagesViewportRef, chatSearchOpen ? chatSearchQuery : "", chatSearchOpen);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "f" || !(e.metaKey || e.ctrlKey)) return;
+      const root = taskChatRootRef.current;
+      if (!root) return;
+      const target = document.activeElement;
+      if (!target || !root.contains(target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      setChatSearchOpen((v) => !v);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+  // Close search when switching chats
+  useEffect(() => {
+    setChatSearchOpen(false);
+    setChatSearchQuery("");
+  }, [activeChatId]);
 
   // Filtered slash commands based on current input — substring match on
   // command name only. Name-only avoids the old noise bug where matching
@@ -3561,12 +3590,28 @@ export function TaskChat({
 
   return (
     <motion.div
+      ref={taskChatRootRef}
+      tabIndex={-1}
       initial={{ opacity: 0, y: -10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`flex-1 flex flex-col overflow-hidden relative ${fullscreen ? "" : "rounded-lg border border-[var(--color-border)]"}`}
+      className={`flex-1 flex flex-col overflow-hidden relative outline-none ${fullscreen ? "" : "rounded-lg border border-[var(--color-border)]"}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onPointerDown={(e) => {
+        // Anchor keyboard focus to the chat panel on any click, so that
+        // global Cmd/Ctrl+F handlers (which gate on activeElement) recognize
+        // the chat as the focused panel even when the user clicks a plain
+        // text region. Form controls still receive focus afterwards because
+        // the browser focuses click targets after pointerdown completes.
+        const root = taskChatRootRef.current;
+        if (!root) return;
+        if (root === e.target || !(e.target as Element).closest?.("input,textarea,select,button,a,iframe,[contenteditable=true]")) {
+          if (!root.contains(document.activeElement)) {
+            root.focus({ preventScroll: true });
+          }
+        }
+      }}
     >
       {/* Full-window drag overlay */}
       {isDragging && (
@@ -3575,6 +3620,18 @@ export function TaskChat({
             Drop files here
           </span>
         </div>
+      )}
+      {chatSearchOpen && (
+        <PreviewSearchBar
+          query={chatSearchQuery}
+          onQueryChange={setChatSearchQuery}
+          total={chatSearch.total}
+          current={chatSearch.current}
+          onNext={chatSearch.next}
+          onPrev={chatSearch.prev}
+          onClose={() => { setChatSearchOpen(false); setChatSearchQuery(""); }}
+          className="absolute right-3 top-12 z-[60]"
+        />
       )}
       {/* Header */}
       {!hideHeader && sessionRailCollapsed && (
@@ -5115,7 +5172,7 @@ const MessageItem = memo(function MessageItem({
       );
     case "thinking":
       return (
-        <div className="flex justify-start">
+        <div className="flex justify-start" data-grove-search-skip="true">
           <div className="max-w-[82%] w-full">
             <button
               onClick={() => onToggleThinkingCollapse(index)}

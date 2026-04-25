@@ -1,9 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useState, useEffect, useId, useMemo } from "react";
+import { useState, useEffect, useId, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { Code, Download, Eye, Loader2, Maximize2, MessageSquarePlus, Minimize2, RefreshCw, Trash2, X } from "lucide-react";
 import { getPreviewRenderer, type PreviewCommentMarker } from "../Review/previewRenderers";
 import { highlightCode, detectLanguage } from "../Review/syntaxHighlight";
+import { PreviewSearchBar } from "../Review/PreviewSearchBar";
+import { useDomSearch } from "../Review/useDomSearch";
 import { ImageLightbox } from "./ImageLightbox";
 import type { PreviewCommentLocator, PreviewCommentDraft } from "../../context";
 
@@ -139,6 +141,100 @@ export function FilePreviewDrawer({
   const [commentText, setCommentText] = useState("");
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
 
+  // ── Search ─────────────────────────────────────────────────────────────
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const searchRootRef = useRef<HTMLDivElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  // Iframe (HTML/JSX) renderers route search through the bridge; for those
+  // we rely on bridge-reported counts instead of running TreeWalker locally.
+  const isIframeRenderer = renderer?.id === "html" || renderer?.id === "jsx";
+  const searchEnabled = searchOpen && !isIframeRenderer;
+  const dom = useDomSearch(searchRootRef, searchEnabled ? searchQuery : "", searchEnabled);
+  const [iframeTotal, setIframeTotal] = useState(0);
+  const [iframeCurrent, setIframeCurrent] = useState(0);
+  const total = isIframeRenderer ? iframeTotal : dom.total;
+  const current = isIframeRenderer ? iframeCurrent : dom.current;
+  const next = () => {
+    if (isIframeRenderer) setIframeCurrent((c) => (iframeTotal === 0 ? 0 : (c + 1) % iframeTotal));
+    else dom.next();
+  };
+  const prev = () => {
+    if (isIframeRenderer) setIframeCurrent((c) => (iframeTotal === 0 ? 0 : (c - 1 + iframeTotal) % iframeTotal));
+    else dom.prev();
+  };
+
+  // Reset iframe match state when query changes
+  useEffect(() => { if (isIframeRenderer) setIframeCurrent(0); }, [searchQuery, isIframeRenderer]);
+
+  // Iframe search bridge: send query / goto / clear, listen for results
+  useEffect(() => {
+    if (!isIframeRenderer || !searchOpen) return;
+    const iframe = drawerRef.current?.querySelector<HTMLIFrameElement>("iframe");
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      { type: "grove-preview-search:query", previewId, query: searchQuery },
+      "*",
+    );
+  }, [searchQuery, searchOpen, isIframeRenderer, previewId]);
+
+  useEffect(() => {
+    if (!isIframeRenderer || !searchOpen) return;
+    const iframe = drawerRef.current?.querySelector<HTMLIFrameElement>("iframe");
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      { type: "grove-preview-search:goto", previewId, index: iframeCurrent },
+      "*",
+    );
+  }, [iframeCurrent, isIframeRenderer, searchOpen, previewId]);
+
+  useEffect(() => {
+    if (!isIframeRenderer) return;
+    const handler = (event: MessageEvent) => {
+      const data = event.data as { type?: string; previewId?: string; total?: number };
+      if (!data || data.previewId !== previewId) return;
+      if (data.type === "grove-preview-search:result" && typeof data.total === "number") {
+        setIframeTotal(data.total);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [isIframeRenderer, previewId]);
+
+  useEffect(() => {
+    if (!searchOpen && isIframeRenderer) {
+      const iframe = drawerRef.current?.querySelector<HTMLIFrameElement>("iframe");
+      iframe?.contentWindow?.postMessage(
+        { type: "grove-preview-search:clear", previewId },
+        "*",
+      );
+      setIframeTotal(0);
+    }
+  }, [searchOpen, isIframeRenderer, previewId]);
+
+  // Cmd/Ctrl+F: only intercept when this drawer contains the keyboard focus.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "f" || !(e.metaKey || e.ctrlKey)) return;
+      const root = drawerRef.current;
+      if (!root) return;
+      const target = document.activeElement;
+      if (!target || !root.contains(target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      setSearchOpen((v) => !v);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+
+  // Reset search state when file changes
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, [fileName]);
+
   // Esc: exit fullscreen first, otherwise close the drawer. Uses capture +
   // stopImmediatePropagation so the global useHotkeys (which also runs in
   // capture phase and would close the workspace on Esc) never fires.
@@ -252,8 +348,19 @@ export function FilePreviewDrawer({
         />
       )}
       <motion.div
+        ref={drawerRef}
         data-hotkeys-dialog="true"
-        className={fullscreen ? 'fixed inset-0 z-[9998] flex flex-col shadow-2xl' : `absolute inset-y-0 right-0 z-30 ${wide ? 'w-[min(96vw,1100px)]' : 'w-[min(92vw,780px)]'} max-w-full flex flex-col shadow-2xl`}
+        tabIndex={-1}
+        onPointerDown={(e) => {
+          const root = drawerRef.current;
+          if (!root) return;
+          if (root === e.target || !(e.target as Element).closest?.("input,textarea,select,button,a,iframe,[contenteditable=true]")) {
+            if (!root.contains(document.activeElement)) {
+              root.focus({ preventScroll: true });
+            }
+          }
+        }}
+        className={`outline-none ${fullscreen ? 'fixed inset-0 z-[9998] flex flex-col shadow-2xl' : `absolute inset-y-0 right-0 z-30 ${wide ? 'w-[min(96vw,1100px)]' : 'w-[min(92vw,780px)]'} max-w-full flex flex-col shadow-2xl`}`}
         style={{
           background: "var(--color-bg)",
           ...(fullscreen ? {} : { borderLeft: "1px solid var(--color-border)" }),
@@ -367,7 +474,18 @@ export function FilePreviewDrawer({
             )}
           </div>
         )}
-        <div className="flex-1 overflow-auto">
+        <div ref={searchRootRef} className="flex-1 overflow-auto relative">
+          {searchOpen && (
+            <PreviewSearchBar
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              total={total}
+              current={current}
+              onNext={next}
+              onPrev={prev}
+              onClose={() => { setSearchOpen(false); setSearchQuery(""); }}
+            />
+          )}
           {loading ? (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="w-5 h-5 animate-spin" style={{ color: "var(--color-text-muted)" }} />
