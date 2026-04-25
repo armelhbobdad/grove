@@ -1,11 +1,13 @@
 //! Agent usage quota HTTP handler.
 //!
-//! GET /api/v1/agent-usage/{agent}?force=<bool>
+//! GET /api/v1/agent-usage/{agent}?force=<bool>&model=<string>
 //!
-//! Returns the current Claude / Codex / Gemini quota, or 404 when the agent
-//! isn't one of the three supported IDs or when no usage data is available
-//! (missing credentials, expired token, upstream error). The frontend treats
-//! 404 as "feature not available for this agent" and hides the badge.
+//! Returns the current quota for the requested agent. The optional `model`
+//! query parameter lets multi-provider agents (e.g. opencode) specify which
+//! underlying model's quota to fetch — the cache key is derived from the
+//! provider + model pair so different upstream pools don't collide. For
+//! standalone agents (claude/codex/gemini/copilot/kimi) the parameter is
+//! accepted but ignored — they share one quota pool.
 
 use axum::{
     extract::{Path, Query},
@@ -19,9 +21,9 @@ use crate::agent_usage::{self, AgentUsage, UsageError};
 
 #[derive(Debug, Deserialize)]
 pub struct UsageQuery {
-    /// Bypass the 60s in-memory cache and fetch fresh data.
     #[serde(default)]
     pub force: bool,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,7 +53,7 @@ pub async fn get_agent_usage(
     Path(agent): Path<String>,
     Query(query): Query<UsageQuery>,
 ) -> Result<Json<AgentUsage>, (StatusCode, Json<UsageErrorResponse>)> {
-    agent_usage::fetch_usage(&agent, query.force)
+    agent_usage::fetch_usage(&agent, query.model.as_deref(), query.force)
         .await
         .map(Json)
         .map_err(into_http_error)

@@ -14,7 +14,7 @@
 //!   8. Pick highest-version "pro" and "flash" models from the returned buckets
 
 use super::{
-    clamp_percent, iso_to_seconds_remaining, AgentUsage, ExtraInfo, UsageWindow,
+    clamp_percent, iso_to_seconds_remaining, AcpQuotaProvider, AgentUsage, ExtraInfo, UsageWindow,
     HTTP_TIMEOUT_GEMINI,
 };
 use base64::Engine;
@@ -73,116 +73,149 @@ struct QuotaRequest<'a> {
     project: Option<&'a str>,
 }
 
-pub fn fetch() -> Result<AgentUsage, String> {
-    let home = dirs::home_dir().ok_or("no home directory")?;
+#[derive(Debug, Clone, Deserialize)]
+struct Bucket {
+    #[serde(rename = "remainingFraction")]
+    remaining_fraction: Option<f32>,
+    #[serde(rename = "resetTime")]
+    reset_time: Option<String>,
+    #[serde(rename = "modelId")]
+    model_id: Option<String>,
+}
 
-    // 1. settings.json auth-type guard (best-effort; missing file → accept)
-    let settings_path = home.join(SETTINGS_PATH);
-    if settings_path.exists() {
+#[derive(Debug, Deserialize)]
+struct QuotaResponse {
+    buckets: Option<Vec<Bucket>>,
+}
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+/// Gemini ACP quota provider. Reads creds from `~/.gemini/oauth_creds.json`
+/// once, then drives the code-assist API flow.
+pub struct GeminiProvider;
+
+impl AcpQuotaProvider for GeminiProvider {
+    fn provider_id(&self) -> &str {
+        "gemini"
+    }
+
+    fn quota_id(&self, _model: Option<&str>) -> String {
+        "gemini".to_string()
+    }
+
+    fn fetch_usage(&self, _model: Option<&str>) -> Result<AgentUsage, String> {
+        let home = dirs::home_dir().ok_or("no home directory")?;
+
+        // 1. settings.json auth-type guard (best-effort; missing file → accept)
+        let settings_path = home.join(SETTINGS_PATH);
+        if settings_path.exists() {
+            let raw = fs::read_to_string(&settings_path)
+                .map_err(|e| format!("read settings.json: {}", e))?;
+            let settings: SettingsFile =
+                serde_json::from_str(&raw).map_err(|e| format!("parse settings.json: {}", e))?;
+            let effective_auth = settings
+                .security
+                .as_ref()
+                .and_then(|s| s.auth.as_ref())
+                .and_then(|a| a.selected_type.as_deref())
+                .or(settings.auth_type.as_deref())
+                .unwrap_or("");
+            if effective_auth == "api-key" || effective_auth == "vertex-ai" {
+                return Err(format!("unsupported auth type: {}", effective_auth));
+            }
+        }
+
+        // 2. oauth_creds.json (read once — keeps access_token AND id_token)
+        let creds_path = home.join(CREDS_PATH);
         let raw =
-            fs::read_to_string(&settings_path).map_err(|e| format!("read settings.json: {}", e))?;
-        let settings: SettingsFile =
-            serde_json::from_str(&raw).map_err(|e| format!("parse settings.json: {}", e))?;
-        let effective_auth = settings
-            .security
-            .as_ref()
-            .and_then(|s| s.auth.as_ref())
-            .and_then(|a| a.selected_type.as_deref())
-            .or(settings.auth_type.as_deref())
-            .unwrap_or("");
-        if effective_auth == "api-key" || effective_auth == "vertex-ai" {
-            return Err(format!("unsupported auth type: {}", effective_auth));
-        }
-    }
-
-    // 2. oauth_creds.json
-    let creds_path = home.join(CREDS_PATH);
-    let raw =
-        fs::read_to_string(&creds_path).map_err(|e| format!("read {:?}: {}", creds_path, e))?;
-    let creds: OAuthCreds =
-        serde_json::from_str(&raw).map_err(|e| format!("parse oauth_creds.json: {}", e))?;
-    let access_token = creds
-        .access_token
-        .as_deref()
-        .ok_or("missing access_token")?
-        .trim()
-        .to_string();
-    if access_token.is_empty() {
-        return Err("empty access_token".into());
-    }
-
-    // 3. expiry guard (we do not refresh)
-    if let Some(expiry_ms) = creds.expiry_date {
-        if expiry_ms > 0 && expiry_ms < chrono::Utc::now().timestamp_millis() {
-            return Err("access_token expired".into());
-        }
-    }
-
-    let agent = ureq::AgentBuilder::new()
-        .timeout(HTTP_TIMEOUT_GEMINI)
-        .build();
-
-    // 4. email from id_token JWT
-    let email = creds
-        .id_token
-        .as_deref()
-        .and_then(decode_jwt_email)
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    // 5. loadCodeAssist → tier + project
-    let (tier, project_from_tier) = fetch_tier(&agent, &access_token);
-
-    // 6. fallback project lookup
-    let project_id = match project_from_tier {
-        Some(p) => Some(p),
-        None => fetch_project_id(&agent, &access_token),
-    };
-
-    // 7. retrieveUserQuota
-    let buckets = fetch_quota(&agent, &access_token, project_id.as_deref())?;
-
-    // 8. assemble windows: highest-version pro and flash
-    let mut pro_model: Option<(f32, Bucket)> = None;
-    let mut flash_model: Option<(f32, Bucket)> = None;
-    for bucket in buckets {
-        if bucket.remaining_fraction.is_none() {
-            continue;
-        }
-        let model_lower = bucket
-            .model_id
+            fs::read_to_string(&creds_path).map_err(|e| format!("read {:?}: {}", creds_path, e))?;
+        let creds: OAuthCreds =
+            serde_json::from_str(&raw).map_err(|e| format!("parse oauth_creds.json: {}", e))?;
+        let access_token = creds
+            .access_token
             .as_deref()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let version = extract_model_version(&model_lower);
-        if model_lower.contains("pro")
-            && !model_lower.contains("flash")
-            && pro_model.as_ref().is_none_or(|(v, _)| version > *v)
-        {
-            pro_model = Some((version, bucket));
-        } else if model_lower.contains("flash")
-            && flash_model.as_ref().is_none_or(|(v, _)| version > *v)
-        {
-            flash_model = Some((version, bucket));
+            .ok_or("missing access_token")?
+            .trim()
+            .to_string();
+        if access_token.is_empty() {
+            return Err("empty access_token".into());
         }
-    }
 
-    let mut usage = AgentUsage::new("gemini");
-    usage.plan = Some(format!("Gemini {}", tier));
-    usage.extras.push(ExtraInfo {
-        label: "Account".to_string(),
-        value: email,
-    });
+        // 3. expiry guard (we do not refresh)
+        if let Some(expiry_ms) = creds.expiry_date {
+            if expiry_ms > 0 && expiry_ms < chrono::Utc::now().timestamp_millis() {
+                return Err("access_token expired".into());
+            }
+        }
 
-    if let Some((_, b)) = pro_model {
-        push_bucket(&mut usage.windows, b);
-    }
-    if let Some((_, b)) = flash_model {
-        push_bucket(&mut usage.windows, b);
-    }
+        let agent = ureq::AgentBuilder::new()
+            .timeout(HTTP_TIMEOUT_GEMINI)
+            .build();
 
-    usage
-        .finalize()
-        .ok_or_else(|| "no quota buckets returned".into())
+        // 4. email from id_token JWT (from the same creds we already loaded)
+        let email = creds
+            .id_token
+            .as_deref()
+            .and_then(decode_jwt_email)
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        // 5. loadCodeAssist → tier + project
+        let (tier, project_from_tier) = fetch_tier(&agent, &access_token);
+
+        // 6. fallback project lookup
+        let project_id = match project_from_tier {
+            Some(p) => Some(p),
+            None => fetch_project_id(&agent, &access_token),
+        };
+
+        // 7. retrieveUserQuota
+        let buckets = fetch_quota(&agent, &access_token, project_id.as_deref())?;
+
+        // 8. assemble windows: highest-version pro and flash
+        let mut pro_model: Option<(f32, Bucket)> = None;
+        let mut flash_model: Option<(f32, Bucket)> = None;
+        for bucket in buckets {
+            if bucket.remaining_fraction.is_none() {
+                continue;
+            }
+            let model_lower = bucket
+                .model_id
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let version = extract_model_version(&model_lower);
+            if model_lower.contains("pro")
+                && !model_lower.contains("flash")
+                && pro_model.as_ref().is_none_or(|(v, _)| version > *v)
+            {
+                pro_model = Some((version, bucket));
+            } else if model_lower.contains("flash")
+                && flash_model.as_ref().is_none_or(|(v, _)| version > *v)
+            {
+                flash_model = Some((version, bucket));
+            }
+        }
+
+        let mut usage = AgentUsage::new("gemini");
+        usage.plan = Some(format!("Gemini {}", tier));
+        usage.extras.push(ExtraInfo {
+            label: "Account".to_string(),
+            value: email,
+        });
+
+        if let Some((_, b)) = pro_model {
+            push_bucket(&mut usage.windows, b);
+        }
+        if let Some((_, b)) = flash_model {
+            push_bucket(&mut usage.windows, b);
+        }
+
+        usage
+            .finalize()
+            .ok_or_else(|| "no quota buckets returned".into())
+    }
 }
 
 // ---------- tier + project ----------
@@ -257,21 +290,6 @@ fn fetch_project_id(agent: &ureq::Agent, access_token: &str) -> Option<String> {
 
 // ---------- quota ----------
 
-#[derive(Debug, Clone, Deserialize)]
-struct Bucket {
-    #[serde(rename = "remainingFraction")]
-    remaining_fraction: Option<f32>,
-    #[serde(rename = "resetTime")]
-    reset_time: Option<String>,
-    #[serde(rename = "modelId")]
-    model_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct QuotaResponse {
-    buckets: Option<Vec<Bucket>>,
-}
-
 fn fetch_quota(
     agent: &ureq::Agent,
     access_token: &str,
@@ -312,6 +330,9 @@ fn push_bucket(out: &mut Vec<UsageWindow>, bucket: Bucket) {
         percentage_remaining: clamp_percent(frac * 100.0),
         resets_at: bucket.reset_time,
         resets_in_seconds,
+        // Gemini per-model buckets reset daily at 00:00 PT; the API doesn't
+        // declare the window length explicitly, so we hard-code 24h.
+        total_window_seconds: Some(86400),
     });
 }
 

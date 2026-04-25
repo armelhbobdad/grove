@@ -6,7 +6,24 @@ import { getAgentUsage, type AgentUsage } from '../api/agentUsage';
  * Built-in agent IDs that support quota fetching. Custom agents and other
  * built-ins (Droid, Kimi, …) return `null` and the badge hides the quota.
  */
-const SUPPORTED_AGENTS = new Set(['claude', 'codex', 'gemini']);
+const SUPPORTED_AGENTS = new Set([
+  'claude',
+  'codex',
+  'gemini',
+  'copilot',
+  'kimi',
+  'opencode',
+  'minimax',
+]);
+
+/**
+ * Agents whose quota pool depends on the selected model. For these agents the
+ * `model` argument is part of the cache key server-side and must be threaded
+ * through. For standalone built-ins (claude/codex/gemini/copilot/kimi) all
+ * models share one pool, so we intentionally ignore `model` here to avoid
+ * re-fetching on every model switch.
+ */
+const MODEL_AWARE_AGENTS = new Set<string>(['opencode']);
 
 export interface UseAgentQuotaResult {
   usage: AgentUsage | null;
@@ -25,10 +42,15 @@ export interface UseAgentQuotaResult {
  *   agent has started, avoiding a duplicate upstream hit on agent switch.
  * - Returns `null` for unsupported agent IDs and on any fetch failure —
  *   the UI then hides the quota badge entirely.
+ *
+ * `model` is only forwarded for model-aware multi-provider agents (see
+ * `MODEL_AWARE_AGENTS`). For standalone built-ins it's dropped so model
+ * switches don't cause redundant upstream requests.
  */
 export function useAgentQuota(
   agentId: string | null,
   busy: boolean = false,
+  model?: string,
 ): UseAgentQuotaResult {
   const [cached, setCached] = useState<AgentUsage | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -38,12 +60,15 @@ export function useAgentQuota(
   // kicked off — used to suppress a redundant `refresh()` racing the mount.
   const initialFetchStartedRef = useRef(false);
 
-  const fetchData = useCallback(async (agent: string, force: boolean) => {
+  // Drop the model for agents whose quota pool doesn't depend on it.
+  const effectiveModel = agentId && MODEL_AWARE_AGENTS.has(agentId) ? model : undefined;
+
+  const fetchData = useCallback(async (agent: string, force: boolean, m?: string) => {
     if (!SUPPORTED_AGENTS.has(agent)) return;
     const requestId = ++requestIdRef.current;
     setRefreshing(true);
     try {
-      const result = await getAgentUsage(agent, force);
+      const result = await getAgentUsage(agent, force, m);
       if (requestId !== requestIdRef.current) return; // stale
       setCached(result);
     } finally {
@@ -65,13 +90,21 @@ export function useAgentQuota(
       return;
     }
 
+    // For model-aware multi-provider agents (opencode), the previous cached
+    // value belongs to a different upstream pool — clear it before the new
+    // fetch resolves so the popover doesn't briefly mix old plan/extras with
+    // the new model name.
+    if (MODEL_AWARE_AGENTS.has(agentId)) {
+      setCached(null);
+    }
+
     initialFetchStartedRef.current = true;
-    void fetchData(agentId, false);
+    void fetchData(agentId, false, effectiveModel);
     return () => {
       requestIdRef.current += 1;
       initialFetchStartedRef.current = false;
     };
-  }, [agentId, fetchData]);
+  }, [agentId, effectiveModel, fetchData]);
 
   // Re-fetch whenever the chat transitions from busy → idle (a turn finished).
   const prevBusyRef = useRef(busy);
@@ -81,17 +114,17 @@ export function useAgentQuota(
     if (!agentId || !SUPPORTED_AGENTS.has(agentId)) return;
     if (!initialFetchStartedRef.current) return;
     if (wasBusy && !busy) {
-      void fetchData(agentId, false);
+      void fetchData(agentId, false, effectiveModel);
     }
-  }, [busy, agentId, fetchData]);
+  }, [busy, agentId, effectiveModel, fetchData]);
 
   const refresh = useCallback(() => {
     // Ignore forced refreshes issued before the effect's initial fetch has
     // started — otherwise the effect and the refresh would fire two back-to-
     // back upstream requests on mount / agent switch.
     if (!agentId || !initialFetchStartedRef.current) return;
-    void fetchData(agentId, true);
-  }, [agentId, fetchData]);
+    void fetchData(agentId, true, effectiveModel);
+  }, [agentId, effectiveModel, fetchData]);
 
   // Only surface the cached usage if it belongs to the current agent. This
   // prevents a stale quota from flashing on-screen during agent switch.

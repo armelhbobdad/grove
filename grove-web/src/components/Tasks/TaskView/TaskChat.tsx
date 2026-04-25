@@ -1183,7 +1183,7 @@ export function TaskChat({
     usage: agentQuota,
     refreshing: quotaRefreshing,
     refresh: refreshAgentQuota,
-  } = useAgentQuota(activeChat?.agent ?? null, isBusy);
+  } = useAgentQuota(activeChat?.agent ?? null, isBusy, selectedModel || undefined);
   const quotaBadgePercentRemaining = agentQuota
     ? quotaBadgePercent(agentQuota)
     : null;

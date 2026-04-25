@@ -57,22 +57,15 @@ function resolveResetsIn(w: UsageWindow): string {
   return "—";
 }
 
-/** Parse total window duration in seconds from label like "5h limit", "daily", etc. */
-function parseWindowTotalSeconds(label: string): number | null {
-  const hourMatch = label.match(/(\d+(?:\.\d+)?)\s*h/i);
-  if (hourMatch) return Math.round(parseFloat(hourMatch[1]) * 3600);
-  const minMatch = label.match(/(\d+)\s*m(?:in)?\b/i);
-  if (minMatch) return parseInt(minMatch[1], 10) * 60;
-  if (/daily/i.test(label)) return 86400;
-  if (/weekly/i.test(label)) return 86400 * 7;
-  if (/monthly/i.test(label)) return 86400 * 30;
-  return null;
-}
-
-/** Compute safe guard %: the minimum remaining % you should have to stay on pace. */
+/**
+ * Compute safe guard %: the minimum remaining % you should have to stay on
+ * pace, given how much of the window is left. The backend reports the full
+ * window duration as `total_window_seconds` so we don't have to parse the
+ * label string.
+ */
 function computeSafeGuard(w: UsageWindow): number | null {
   if (w.resets_in_seconds == null || w.resets_in_seconds <= 0) return null;
-  const total = parseWindowTotalSeconds(w.label);
+  const total = w.total_window_seconds;
   if (!total || total <= 0) return null;
   return Math.max(0, Math.min(100, Math.round((w.resets_in_seconds / total) * 100)));
 }
@@ -406,11 +399,13 @@ function PopoverCard({
                     >
                       {isSafe ? "● On pace" : "▲ Above pace"} · {safeGuard}% guard
                     </span>
-                  ) : (
-                    "Resets in"
-                  )}
+                  ) : null}
                 </span>
-                <span className="tabular-nums">{resolveResetsIn(w)}</span>
+                {(w.resets_in_seconds != null || w.resets_at) && (
+                  <span className="tabular-nums">
+                    Resets in {resolveResetsIn(w)}
+                  </span>
+                )}
               </div>
             </div>
           );

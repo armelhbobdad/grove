@@ -1,9 +1,9 @@
 //! Claude Code usage quota fetcher.
 //!
 //! Credential lookup strategy (mirrors the reference Raycast extension):
-//!   1. `~/.claude/.credentials.json` (plain JSON or hex-encoded JSON)
-//!   2. macOS login keychain via `security find-generic-password`, service
+//!   1. macOS login keychain via `security find-generic-password`, service
 //!      name `"Claude Code-credentials"`
+//!   2. `~/.claude/.credentials.json` (plain JSON or hex-encoded JSON)
 //!
 //! Calls `https://api.anthropic.com/api/oauth/usage` with the access token.
 //! We do NOT refresh expired tokens (that would require writing back to the
@@ -11,7 +11,7 @@
 //! the caller treats the agent as unavailable.
 
 use super::{
-    clamp_percent, iso_to_seconds_remaining, AgentUsage, ExtraInfo, UsageWindow,
+    clamp_percent, iso_to_seconds_remaining, AcpQuotaProvider, AgentUsage, ExtraInfo, UsageWindow,
     HTTP_TIMEOUT_CLAUDE,
 };
 use serde::Deserialize;
@@ -86,19 +86,38 @@ struct OAuthExtraUsage {
     currency: Option<String>,
 }
 
-struct Credentials {
+pub(super) struct Credentials {
     access_token: String,
     rate_limit_tier: Option<String>,
     subscription_type: Option<String>,
 }
 
-pub fn fetch() -> Result<AgentUsage, String> {
-    let creds = read_credentials()?;
-    let plan = infer_plan(
-        creds.rate_limit_tier.as_deref(),
-        creds.subscription_type.as_deref(),
-    );
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
 
+/// Claude ACP quota provider. Reads creds (keychain / credentials file) once
+/// per fetch and calls the Anthropic OAuth usage API.
+pub struct ClaudeProvider;
+
+impl AcpQuotaProvider for ClaudeProvider {
+    fn provider_id(&self) -> &str {
+        "claude"
+    }
+
+    fn quota_id(&self, _model: Option<&str>) -> String {
+        "claude".to_string()
+    }
+
+    fn fetch_usage(&self, _model: Option<&str>) -> Result<AgentUsage, String> {
+        let creds = read_credentials()?;
+        fetch_with_credentials(&creds)
+    }
+}
+
+/// Lower-level fetcher that takes already-resolved credentials. Exposed for
+/// reuse by multi-provider agents (e.g. opencode using Claude upstream).
+pub(super) fn fetch_with_credentials(creds: &Credentials) -> Result<AgentUsage, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(HTTP_TIMEOUT_CLAUDE)
         .build();
@@ -125,17 +144,38 @@ pub fn fetch() -> Result<AgentUsage, String> {
         return Err("five_hour.utilization missing".into());
     }
 
+    let plan = infer_plan(
+        creds.rate_limit_tier.as_deref(),
+        creds.subscription_type.as_deref(),
+    );
+
     let mut usage = AgentUsage::new("claude");
     usage.plan = Some(plan);
 
-    push_window(&mut usage.windows, "5h limit", body.five_hour.as_ref());
-    push_window(&mut usage.windows, "7d limit", body.seven_day.as_ref());
+    push_window(
+        &mut usage.windows,
+        "5h limit",
+        body.five_hour.as_ref(),
+        Some(5 * 3600),
+    );
+    push_window(
+        &mut usage.windows,
+        "7d limit",
+        body.seven_day.as_ref(),
+        Some(7 * 86400),
+    );
     push_window(
         &mut usage.windows,
         "7d Sonnet",
         body.seven_day_sonnet.as_ref(),
+        Some(7 * 86400),
     );
-    push_window(&mut usage.windows, "7d Opus", body.seven_day_opus.as_ref());
+    push_window(
+        &mut usage.windows,
+        "7d Opus",
+        body.seven_day_opus.as_ref(),
+        Some(7 * 86400),
+    );
 
     if let Some(extra) = body.extra_usage {
         if extra.is_enabled.unwrap_or(false) {
@@ -161,7 +201,12 @@ pub fn fetch() -> Result<AgentUsage, String> {
     usage.finalize().ok_or_else(|| "no usage windows".into())
 }
 
-fn push_window(out: &mut Vec<UsageWindow>, label: &str, window: Option<&OAuthWindow>) {
+fn push_window(
+    out: &mut Vec<UsageWindow>,
+    label: &str,
+    window: Option<&OAuthWindow>,
+    total_window_seconds: Option<i64>,
+) {
     let Some(w) = window else { return };
     let Some(util) = w.utilization else { return };
     let remaining = clamp_percent(100.0 - util);
@@ -171,6 +216,7 @@ fn push_window(out: &mut Vec<UsageWindow>, label: &str, window: Option<&OAuthWin
         percentage_remaining: remaining,
         resets_at: w.resets_at.clone(),
         resets_in_seconds,
+        total_window_seconds,
     });
 }
 

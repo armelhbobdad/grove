@@ -9,7 +9,9 @@
 //!   - `code_review_rate_limit.primary_window` is optional
 //!   - `credits` (has_credits / unlimited / balance) is surfaced as extras
 
-use super::{clamp_percent, AgentUsage, ExtraInfo, UsageWindow, HTTP_TIMEOUT_CODEX};
+use super::{
+    clamp_percent, AcpQuotaProvider, AgentUsage, ExtraInfo, UsageWindow, HTTP_TIMEOUT_CODEX,
+};
 use serde::Deserialize;
 use std::fs;
 
@@ -51,7 +53,6 @@ struct CodeReviewRateLimitBlock {
 struct Window {
     used_percent: Option<f32>,
     reset_after_seconds: Option<i64>,
-    #[allow(dead_code)]
     limit_window_seconds: Option<i64>,
 }
 
@@ -62,7 +63,30 @@ struct CreditsBlock {
     balance: Option<String>,
 }
 
-pub fn fetch() -> Result<AgentUsage, String> {
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+/// Codex ACP quota provider. Resolves tokens from `~/.codex/auth.json` and
+/// calls the ChatGPT wham/usage API.
+pub struct CodexProvider;
+
+impl AcpQuotaProvider for CodexProvider {
+    fn provider_id(&self) -> &str {
+        "codex"
+    }
+
+    fn quota_id(&self, _model: Option<&str>) -> String {
+        "codex".to_string()
+    }
+
+    fn fetch_usage(&self, _model: Option<&str>) -> Result<AgentUsage, String> {
+        let token = read_access_token()?;
+        fetch_with_token(&token)
+    }
+}
+
+fn read_access_token() -> Result<String, String> {
     let home = dirs::home_dir().ok_or("no home directory")?;
     let path = home.join(AUTH_PATH);
     let raw = fs::read_to_string(&path).map_err(|e| format!("read {:?}: {}", path, e))?;
@@ -77,7 +101,12 @@ pub fn fetch() -> Result<AgentUsage, String> {
     if token.is_empty() {
         return Err("empty access_token".into());
     }
+    Ok(token)
+}
 
+/// Lower-level fetcher that takes an already-resolved token. Exposed for reuse
+/// by multi-provider agents.
+pub(super) fn fetch_with_token(token: &str) -> Result<AgentUsage, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(HTTP_TIMEOUT_CODEX)
         .build();
@@ -112,12 +141,14 @@ pub fn fetch() -> Result<AgentUsage, String> {
         percentage_remaining: clamp_percent(100.0 - primary_used),
         resets_at: absolute_reset(primary.reset_after_seconds),
         resets_in_seconds: primary.reset_after_seconds,
+        total_window_seconds: primary.limit_window_seconds.or(Some(5 * 3600)),
     });
     usage.windows.push(UsageWindow {
         label: "Weekly limit".to_string(),
         percentage_remaining: clamp_percent(100.0 - secondary_used),
         resets_at: absolute_reset(secondary.reset_after_seconds),
         resets_in_seconds: secondary.reset_after_seconds,
+        total_window_seconds: secondary.limit_window_seconds.or(Some(7 * 86400)),
     });
 
     if let Some(cr) = body.code_review_rate_limit.and_then(|b| b.primary_window) {
@@ -127,6 +158,7 @@ pub fn fetch() -> Result<AgentUsage, String> {
                 percentage_remaining: clamp_percent(100.0 - used),
                 resets_at: absolute_reset(cr.reset_after_seconds),
                 resets_in_seconds: cr.reset_after_seconds,
+                total_window_seconds: cr.limit_window_seconds,
             });
         }
     }
