@@ -100,7 +100,7 @@ fn open_at(db_path: &std::path::Path) -> Result<Connection> {
 }
 
 /// Create all tables if they don't exist
-fn create_schema(conn: &Connection) -> Result<()> {
+pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         -- Projects
