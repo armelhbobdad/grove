@@ -329,14 +329,22 @@ pub struct CapabilityOutput {
 }
 
 pub async fn grove_agent_capability(
-    _cx: &ToolContext,
+    cx: &ToolContext,
     input: CapabilityInput,
 ) -> AgentGraphResult<CapabilityOutput> {
-    let (project, task_id, _chat) = tasks::find_chat_session(&input.session_id)
+    let (caller_project, caller_task, _caller_chat) = cx.caller_context()?;
+
+    let (target_project, target_task, _target_chat) = tasks::find_chat_session(&input.session_id)
         .map_err(AgentGraphError::from)?
         .ok_or(AgentGraphError::TargetNotFound)?;
 
-    let meta = acp::read_session_metadata(&project, &task_id, &input.session_id)
+    // agent_graph 是 per-task 视图。caller 不能查另一个 task 的 session 元数据，
+    // 否则 token 闭包的"caller 仅访问自己 task 内对象"边界就被绕过。
+    if target_project != caller_project || target_task != caller_task {
+        return Err(AgentGraphError::SameTaskRequired);
+    }
+
+    let meta = acp::read_session_metadata(&target_project, &target_task, &input.session_id)
         .ok_or(AgentGraphError::AgentOffline)?;
 
     Ok(CapabilityOutput {
@@ -877,6 +885,9 @@ mod tests {
     async fn capability_target_not_found() {
         let _l = test_lock().lock().await;
         let _h = TempHome::new();
+        // Caller must exist in DB before target is even resolved (caller_context
+        // runs first).
+        seed_chat("p", "t", "chat-A", "A", None);
         let cx = ToolContext::new("chat-A".into());
         let err = grove_agent_capability(
             &cx,
@@ -887,6 +898,29 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), "target_not_found");
+    }
+
+    #[tokio::test]
+    async fn capability_cross_task_rejected() {
+        // Regression: previously `grove_agent_capability` ignored the caller
+        // context and allowed any token-bearing agent to read capability
+        // metadata for a session in another task. Reviewer flagged this as a
+        // boundary violation since the URL-token closure is supposed to confine
+        // the caller to their own task. Now must return same_task_required.
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t1", "chat-A", "A", None);
+        seed_chat("p", "t2", "chat-B", "B", None);
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_capability(
+            &cx,
+            CapabilityInput {
+                session_id: "chat-B".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "same_task_required");
     }
 
     #[tokio::test]
