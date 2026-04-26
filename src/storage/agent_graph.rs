@@ -30,6 +30,17 @@ pub struct AgentPendingMessage {
     pub created_at: DateTime<Utc>,
 }
 
+/// Return item for outgoing session contacts: edge plus target session metadata.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct OutgoingContact {
+    pub edge_id: i64,
+    pub to_session_id: String,
+    pub to_session_name: String,
+    pub to_session_duty: Option<String>,
+    pub purpose: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GcStats {
     pub sessions_deleted: usize,
@@ -73,6 +84,17 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentPendingMessa
         to_session: row.get(3)?,
         body: row.get(4)?,
         created_at,
+    })
+}
+
+#[allow(dead_code)]
+fn row_to_outgoing_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingContact> {
+    Ok(OutgoingContact {
+        edge_id: row.get(0)?,
+        to_session_id: row.get(1)?,
+        to_session_name: row.get(2)?,
+        to_session_duty: row.get(3)?,
+        purpose: row.get(4)?,
     })
 }
 
@@ -346,6 +368,70 @@ pub fn list_pending_for_task(conn: &Connection, task_id: &str) -> Result<Vec<Age
     Ok(msgs)
 }
 
+/// 以 session 为视角，返回该 session 所有出边及目标 session metadata。
+#[allow(dead_code)]
+pub fn outgoing_for_session(conn: &Connection, session_id: &str) -> Result<Vec<OutgoingContact>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.edge_id, e.to_session, s.title, s.duty, e.purpose
+         FROM agent_edge e
+         JOIN session s ON s.session_id = e.to_session
+         WHERE e.from_session = ?1
+         ORDER BY e.created_at ASC",
+    )?;
+    let contacts = stmt
+        .query_map([session_id], row_to_outgoing_contact)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(contacts)
+}
+
+/// 以 session 为视角，返回该 session 所有入边。
+#[allow(dead_code)]
+pub fn incoming_for_session(conn: &Connection, session_id: &str) -> Result<Vec<AgentEdge>> {
+    let mut stmt = conn.prepare(
+        "SELECT edge_id, task_id, from_session, to_session, purpose, created_at
+         FROM agent_edge
+         WHERE to_session = ?1
+         ORDER BY created_at ASC",
+    )?;
+    let edges = stmt
+        .query_map([session_id], row_to_edge)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(edges)
+}
+
+/// 别人欠我回复的消息（contacts.pending_replies 数据源）。
+#[allow(dead_code)]
+pub fn pending_replies_for(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<AgentPendingMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT msg_id, task_id, from_session, to_session, body, created_at
+         FROM agent_pending_message
+         WHERE to_session = ?1
+         ORDER BY created_at DESC",
+    )?;
+    let msgs = stmt
+        .query_map([session_id], row_to_pending)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(msgs)
+}
+
+/// 我发出但还没被回复的消息（contacts.awaiting_reply 数据源）。
+#[allow(dead_code)]
+pub fn awaiting_reply_for(conn: &Connection, session_id: &str) -> Result<Vec<AgentPendingMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT msg_id, task_id, from_session, to_session, body, created_at
+         FROM agent_pending_message
+         WHERE from_session = ?1
+         ORDER BY created_at DESC",
+    )?;
+    let msgs = stmt
+        .query_map([session_id], row_to_pending)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(msgs)
+}
+
 /// 删除 session 时的级联清理：删除该 session 涉及的所有 edge / pending_message。
 pub fn cascade_delete_for_session(conn: &Connection, session_id: &str) -> Result<()> {
     conn.execute(
@@ -455,6 +541,22 @@ mod tests {
                 format!("Session {session_id}"),
                 Utc::now().to_rfc3339(),
             ],
+        )
+        .unwrap();
+    }
+
+    fn insert_session_with_title_and_duty(
+        conn: &Connection,
+        session_id: &str,
+        task_id: &str,
+        title: &str,
+        duty: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO session
+             (session_id, project, task_id, title, agent, acp_session_id, duty, created_at)
+             VALUES (?1, 'project-a', ?2, ?3, 'codex', NULL, ?4, ?5)",
+            params![session_id, task_id, title, duty, Utc::now().to_rfc3339()],
         )
         .unwrap();
     }
@@ -757,5 +859,133 @@ mod tests {
         assert_eq!(t1[0].msg_id, "msg-t1");
         assert_eq!(t2.len(), 1);
         assert_eq!(t2[0].msg_id, "msg-t2");
+    }
+
+    // --- WO-005: DAG query tests ---
+
+    fn insert_pending_raw(
+        conn: &Connection,
+        msg_id: &str,
+        task_id: &str,
+        from_session: &str,
+        to_session: &str,
+        created_at: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO agent_pending_message
+             (msg_id, task_id, from_session, to_session, body, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                msg_id,
+                task_id,
+                from_session,
+                to_session,
+                "body",
+                created_at
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn dag_queries_return_expected_edges_and_pending_messages() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session_with_title_and_duty(&conn, "b", "task-1", "Builder B", Some("build"));
+        insert_session(&conn, "c", "task-1");
+        add_edge(&conn, "task-1", "a", "b", Some("handoff")).unwrap();
+        add_edge(&conn, "task-1", "a", "c", None).unwrap();
+        insert_pending_message(&conn, "msg-ab", "task-1", "a", "b", "hello").unwrap();
+
+        let outgoing_a = outgoing_for_session(&conn, "a").unwrap();
+        let outgoing_b = outgoing_for_session(&conn, "b").unwrap();
+        let incoming_b = incoming_for_session(&conn, "b").unwrap();
+        let incoming_a = incoming_for_session(&conn, "a").unwrap();
+        let pending_b = pending_replies_for(&conn, "b").unwrap();
+        let pending_a = pending_replies_for(&conn, "a").unwrap();
+        let awaiting_a = awaiting_reply_for(&conn, "a").unwrap();
+        let awaiting_b = awaiting_reply_for(&conn, "b").unwrap();
+
+        assert_eq!(outgoing_a.len(), 2);
+        assert_eq!(outgoing_a[0].to_session_id, "b");
+        assert_eq!(outgoing_a[0].to_session_name, "Builder B");
+        assert_eq!(outgoing_a[0].to_session_duty.as_deref(), Some("build"));
+        assert_eq!(outgoing_a[0].purpose.as_deref(), Some("handoff"));
+        assert_eq!(outgoing_a[1].to_session_id, "c");
+        assert!(outgoing_b.is_empty());
+
+        assert_eq!(incoming_b.len(), 1);
+        assert_eq!(incoming_b[0].from_session, "a");
+        assert_eq!(incoming_b[0].to_session, "b");
+        assert!(incoming_a.is_empty());
+
+        assert_eq!(pending_b.len(), 1);
+        assert_eq!(pending_b[0].msg_id, "msg-ab");
+        assert_eq!(pending_b[0].from_session, "a");
+        assert!(pending_a.is_empty());
+
+        assert_eq!(awaiting_a.len(), 1);
+        assert_eq!(awaiting_a[0].msg_id, "msg-ab");
+        assert!(awaiting_b.is_empty());
+    }
+
+    #[test]
+    fn dag_pending_queries_order_by_created_at_desc() {
+        let conn = test_conn();
+        for session in ["a", "b", "c"] {
+            insert_session(&conn, session, "task-1");
+        }
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+        add_edge(&conn, "task-1", "a", "c", None).unwrap();
+        insert_pending_raw(&conn, "old", "task-1", "a", "b", "2024-01-01T00:00:00Z");
+        insert_pending_raw(&conn, "new", "task-1", "c", "b", "2024-01-02T00:00:00Z");
+        insert_pending_raw(&conn, "middle", "task-1", "a", "c", "2024-01-01T12:00:00Z");
+
+        let pending_for_b = pending_replies_for(&conn, "b").unwrap();
+        let awaiting_for_a = awaiting_reply_for(&conn, "a").unwrap();
+
+        assert_eq!(
+            pending_for_b
+                .iter()
+                .map(|msg| msg.msg_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new", "old"]
+        );
+        assert_eq!(
+            awaiting_for_a
+                .iter()
+                .map(|msg| msg.msg_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["middle", "old"]
+        );
+    }
+
+    #[test]
+    fn dag_queries_isolate_sessions_across_tasks() {
+        let conn = test_conn();
+        for session in ["a", "b", "c"] {
+            insert_session(&conn, session, "task-1");
+        }
+        insert_session(&conn, "d", "task-2");
+        insert_session(&conn, "e", "task-2");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+        add_edge(&conn, "task-1", "a", "c", None).unwrap();
+        add_edge(&conn, "task-2", "d", "e", Some("other-task")).unwrap();
+        insert_pending_message(&conn, "msg-ab", "task-1", "a", "b", "hello").unwrap();
+        insert_pending_message(&conn, "msg-de", "task-2", "d", "e", "other").unwrap();
+
+        assert_eq!(outgoing_for_session(&conn, "a").unwrap().len(), 2);
+        assert_eq!(outgoing_for_session(&conn, "d").unwrap().len(), 1);
+        assert_eq!(incoming_for_session(&conn, "b").unwrap().len(), 1);
+        assert_eq!(incoming_for_session(&conn, "e").unwrap().len(), 1);
+        assert_eq!(pending_replies_for(&conn, "b").unwrap().len(), 1);
+        assert_eq!(pending_replies_for(&conn, "e").unwrap().len(), 1);
+        assert_eq!(awaiting_reply_for(&conn, "a").unwrap().len(), 1);
+        assert_eq!(awaiting_reply_for(&conn, "d").unwrap().len(), 1);
+
+        assert!(outgoing_for_session(&conn, "missing").unwrap().is_empty());
+        assert!(incoming_for_session(&conn, "missing").unwrap().is_empty());
+        assert!(pending_replies_for(&conn, "missing").unwrap().is_empty());
+        assert!(awaiting_reply_for(&conn, "missing").unwrap().is_empty());
     }
 }
