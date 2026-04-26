@@ -59,6 +59,23 @@ fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentEdge> {
     })
 }
 
+#[allow(dead_code)]
+fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentPendingMessage> {
+    let created_at: String = row.get(5)?;
+    let created_at = DateTime::parse_from_rfc3339(&created_at)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+
+    Ok(AgentPendingMessage {
+        msg_id: row.get(0)?,
+        task_id: row.get(1)?,
+        from_session: row.get(2)?,
+        to_session: row.get(3)?,
+        body: row.get(4)?,
+        created_at,
+    })
+}
+
 /// 创建一条边。返回 edge_id。
 #[allow(dead_code)]
 pub fn add_edge(
@@ -215,6 +232,118 @@ pub fn list_edges_for_task(conn: &Connection, task_id: &str) -> Result<Vec<Agent
         .query_map([task_id], row_to_edge)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(edges)
+}
+
+/// 投递一条 pending message（即"send"动作的持久化）。
+/// 校验顺序：
+///   a. (from_session, to_session) 这条边存在于 agent_edge
+///   b. (from_session, to_session) 没有未回复 pending（UNIQUE 索引兜底，提前显式报错）
+///   c. msg_id 全表唯一
+#[allow(dead_code)]
+pub fn insert_pending_message(
+    conn: &Connection,
+    msg_id: &str,
+    task_id: &str,
+    from_session: &str,
+    to_session: &str,
+    body: &str,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+
+    let edge_exists = tx
+        .query_row(
+            "SELECT 1 FROM agent_edge WHERE from_session = ?1 AND to_session = ?2",
+            params![from_session, to_session],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !edge_exists {
+        return Err(storage_error("no_edge"));
+    }
+
+    let pending_exists = tx
+        .query_row(
+            "SELECT 1 FROM agent_pending_message WHERE from_session = ?1 AND to_session = ?2",
+            params![from_session, to_session],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if pending_exists {
+        return Err(storage_error("previous_message_pending"));
+    }
+
+    let msg_exists = tx
+        .query_row(
+            "SELECT 1 FROM agent_pending_message WHERE msg_id = ?1",
+            [msg_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if msg_exists {
+        return Err(storage_error("duplicate_msg_id"));
+    }
+
+    tx.execute(
+        "INSERT INTO agent_pending_message (msg_id, task_id, from_session, to_session, body, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            msg_id,
+            task_id,
+            from_session,
+            to_session,
+            body,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// 删除一条 pending message（即"reply 消费 ticket"）。
+/// 找不到 msg_id 报错。
+#[allow(dead_code)]
+pub fn delete_pending_message(conn: &Connection, msg_id: &str) -> Result<()> {
+    let rows = conn.execute(
+        "DELETE FROM agent_pending_message WHERE msg_id = ?1",
+        [msg_id],
+    )?;
+    if rows == 0 {
+        return Err(storage_error("pending_message_not_found"));
+    }
+    Ok(())
+}
+
+/// 按 msg_id 取一条 pending message。
+#[allow(dead_code)]
+pub fn get_pending_message(conn: &Connection, msg_id: &str) -> Result<Option<AgentPendingMessage>> {
+    let msg = conn
+        .query_row(
+            "SELECT msg_id, task_id, from_session, to_session, body, created_at
+             FROM agent_pending_message
+             WHERE msg_id = ?1",
+            [msg_id],
+            row_to_pending,
+        )
+        .optional()?;
+    Ok(msg)
+}
+
+/// 取某 task 下所有 pending message（用于 graph 渲染时计算边的状态）。
+#[allow(dead_code)]
+pub fn list_pending_for_task(conn: &Connection, task_id: &str) -> Result<Vec<AgentPendingMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT msg_id, task_id, from_session, to_session, body, created_at
+         FROM agent_pending_message
+         WHERE task_id = ?1
+         ORDER BY created_at ASC",
+    )?;
+    let msgs = stmt
+        .query_map([task_id], row_to_pending)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(msgs)
 }
 
 /// 删除 session 时的级联清理：删除该 session 涉及的所有 edge / pending_message。
@@ -478,5 +607,155 @@ mod tests {
         assert!(edges.iter().all(|edge| edge.task_id == "task-1"));
         assert_eq!(edges[0].from_session, "a");
         assert_eq!(edges[1].from_session, "b");
+    }
+
+    // --- WO-004: Pending Message tests ---
+
+    fn err_token_unit(result: Result<()>) -> String {
+        result.unwrap_err().to_string()
+    }
+
+    #[test]
+    fn pending_message_happy_path_after_edge() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+
+        insert_pending_message(&conn, "msg-1", "task-1", "a", "b", "hello").unwrap();
+
+        let msg = get_pending_message(&conn, "msg-1").unwrap().unwrap();
+        assert_eq!(msg.msg_id, "msg-1");
+        assert_eq!(msg.from_session, "a");
+        assert_eq!(msg.to_session, "b");
+        assert_eq!(msg.body, "hello");
+        assert_eq!(msg.task_id, "task-1");
+    }
+
+    #[test]
+    fn pending_message_rejects_no_edge() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+
+        let err = err_token_unit(insert_pending_message(
+            &conn, "msg-1", "task-1", "a", "b", "hello",
+        ));
+
+        assert!(err.contains("no_edge"));
+    }
+
+    #[test]
+    fn pending_message_rejects_previous_pending_same_direction() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+
+        insert_pending_message(&conn, "msg-1", "task-1", "a", "b", "hello").unwrap();
+        let err = err_token_unit(insert_pending_message(
+            &conn, "msg-2", "task-1", "a", "b", "world",
+        ));
+
+        assert!(err.contains("previous_message_pending"));
+    }
+
+    #[test]
+    fn pending_message_allows_opposite_direction() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+        // B→A edge inserted via raw SQL since add_edge rejects bidirectional,
+        // but insert_pending_message only checks edge existence, not direction constraints.
+        conn.execute(
+            "INSERT INTO agent_edge (task_id, from_session, to_session, purpose, created_at)
+             VALUES ('task-1', 'b', 'a', NULL, ?1)",
+            [Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        insert_pending_message(&conn, "msg-ab", "task-1", "a", "b", "hello").unwrap();
+        insert_pending_message(&conn, "msg-ba", "task-1", "b", "a", "reply").unwrap();
+
+        let all = list_pending_for_task(&conn, "task-1").unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn pending_message_rejects_duplicate_msg_id() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+        insert_session(&conn, "c", "task-1");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+        add_edge(&conn, "task-1", "a", "c", None).unwrap();
+
+        insert_pending_message(&conn, "msg-x", "task-1", "a", "b", "hello").unwrap();
+        let err = err_token_unit(insert_pending_message(
+            &conn, "msg-x", "task-1", "a", "c", "world",
+        ));
+
+        assert!(err.contains("duplicate_msg_id"));
+    }
+
+    #[test]
+    fn delete_pending_message_frees_slot_for_reinsert() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+
+        insert_pending_message(&conn, "msg-1", "task-1", "a", "b", "hello").unwrap();
+        delete_pending_message(&conn, "msg-1").unwrap();
+        insert_pending_message(&conn, "msg-2", "task-1", "a", "b", "world").unwrap();
+
+        let msg = get_pending_message(&conn, "msg-2").unwrap().unwrap();
+        assert_eq!(msg.body, "world");
+        assert!(get_pending_message(&conn, "msg-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_pending_message_not_found() {
+        let conn = test_conn();
+
+        let err = err_token_unit(delete_pending_message(&conn, "nonexistent"));
+
+        assert!(err.contains("pending_message_not_found"));
+    }
+
+    #[test]
+    fn get_pending_message_exists_and_missing() {
+        let conn = test_conn();
+        insert_session(&conn, "a", "task-1");
+        insert_session(&conn, "b", "task-1");
+        add_edge(&conn, "task-1", "a", "b", None).unwrap();
+
+        assert!(get_pending_message(&conn, "msg-1").unwrap().is_none());
+
+        insert_pending_message(&conn, "msg-1", "task-1", "a", "b", "hello").unwrap();
+        assert!(get_pending_message(&conn, "msg-1").unwrap().is_some());
+    }
+
+    #[test]
+    fn list_pending_for_task_isolates_across_tasks() {
+        let conn = test_conn();
+        insert_session(&conn, "a1", "task-1");
+        insert_session(&conn, "b1", "task-1");
+        insert_session(&conn, "a2", "task-2");
+        insert_session(&conn, "b2", "task-2");
+        add_edge(&conn, "task-1", "a1", "b1", None).unwrap();
+        add_edge(&conn, "task-2", "a2", "b2", None).unwrap();
+
+        insert_pending_message(&conn, "msg-t1", "task-1", "a1", "b1", "task1").unwrap();
+        insert_pending_message(&conn, "msg-t2", "task-2", "a2", "b2", "task2").unwrap();
+
+        let t1 = list_pending_for_task(&conn, "task-1").unwrap();
+        let t2 = list_pending_for_task(&conn, "task-2").unwrap();
+
+        assert_eq!(t1.len(), 1);
+        assert_eq!(t1[0].msg_id, "msg-t1");
+        assert_eq!(t2.len(), 1);
+        assert_eq!(t2[0].msg_id, "msg-t2");
     }
 }
