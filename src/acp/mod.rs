@@ -276,6 +276,11 @@ pub struct QueuedMessage {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ContentBlockData>,
+    /// 消息发送者标识。`None` = 用户输入；`Some("agent:<chat_id>")` = 另一个 agent
+    /// 通过 agent_graph 工具注入的消息。语义对前端用于"身份徽章"渲染，对存储用于
+    /// 区分 user / agent-injected 消息。Phase 2 引入。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
 }
 
 /// Session 元数据（写入 session.json，供其他进程发现）
@@ -1730,7 +1735,11 @@ async fn drive_session(
                         handle.emit(AcpUpdate::QueueUpdate {
                             messages: handle.get_queue(),
                         });
-                        handle.try_enqueue_prompt(next_msg.text, next_msg.attachments);
+                        handle.try_enqueue_prompt(
+                            next_msg.text,
+                            next_msg.attachments,
+                            next_msg.sender,
+                        );
                     }
                 }
             }
@@ -2146,12 +2155,17 @@ impl AcpSessionHandle {
     }
 
     /// 非阻塞发送 prompt 命令（队列 auto-send 使用）
-    fn try_enqueue_prompt(&self, text: String, attachments: Vec<ContentBlockData>) -> bool {
+    fn try_enqueue_prompt(
+        &self,
+        text: String,
+        attachments: Vec<ContentBlockData>,
+        sender: Option<String>,
+    ) -> bool {
         self.cmd_tx
             .try_send(AcpCommand::Prompt {
                 text,
                 attachments,
-                sender: None,
+                sender,
                 terminal: false,
             })
             .is_ok()
@@ -2172,7 +2186,7 @@ impl AcpSessionHandle {
             self.emit(AcpUpdate::QueueUpdate {
                 messages: self.get_queue(),
             });
-            self.try_enqueue_prompt(next_msg.text, next_msg.attachments);
+            self.try_enqueue_prompt(next_msg.text, next_msg.attachments, next_msg.sender);
         }
     }
 

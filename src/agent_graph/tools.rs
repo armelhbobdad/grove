@@ -1,0 +1,925 @@
+//! 5 个 agent_graph MCP 工具的核心实现（transport 无关）。
+//!
+//! 单测覆盖错误分支与 DB 状态校验。成功路径中涉及 ACP 子进程的部分由 Commit 4 的
+//! 集成测试覆盖（mock agent + 起 axum server）。
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
+use super::error::AgentGraphError;
+use super::inject::{build_injected_prompt, InjectKind};
+use crate::acp::{self, AcpSessionHandle, AcpStartConfig, AcpUpdate, QueuedMessage};
+use crate::api::handlers::walkie_talkie::{broadcast_radio_event, RadioEvent};
+use crate::storage::{agent_graph as graph_db, database, tasks, workspace};
+
+pub type AgentGraphResult<T> = Result<T, AgentGraphError>;
+
+/// caller 视角的工具上下文。每次 HTTP MCP `tools/call` 解析 token 后构造一份。
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    /// 调工具的 agent 自己的 chat_id（即 caller）。来自 token→chat_id 映射，不来自 env。
+    pub caller_chat_id: String,
+}
+
+impl ToolContext {
+    pub fn new(caller_chat_id: String) -> Self {
+        Self { caller_chat_id }
+    }
+
+    /// 解析 caller 的 (project_key, task_id, ChatSession)，找不到 → CallerUnknown。
+    fn caller_context(&self) -> AgentGraphResult<(String, String, tasks::ChatSession)> {
+        tasks::find_chat_session(&self.caller_chat_id)
+            .map_err(AgentGraphError::from)?
+            .ok_or(AgentGraphError::CallerUnknown)
+    }
+}
+
+// ─── grove_agent_send ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SendInput {
+    pub to: String,
+    pub message: String,
+    /// 仅当 target session 还没 duty 时必传，否则禁止。
+    #[serde(default)]
+    pub duty: Option<String>,
+    /// 可选：覆盖目标 session 的 model / mode / thought_level（暂不实现，预留 API）。
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SendOutput {
+    pub msg_id: String,
+    pub delivered_at: String,
+}
+
+pub async fn grove_agent_send(cx: &ToolContext, input: SendInput) -> AgentGraphResult<SendOutput> {
+    let (caller_project, caller_task, caller_chat) = cx.caller_context()?;
+
+    // 目标存在 + 同 task
+    let (target_project, target_task, target_chat) = tasks::find_chat_session(&input.to)
+        .map_err(AgentGraphError::from)?
+        .ok_or(AgentGraphError::TargetNotFound)?;
+    if target_project != caller_project || target_task != caller_task {
+        return Err(AgentGraphError::SameTaskRequired);
+    }
+
+    // duty 三态
+    match (&target_chat.duty, &input.duty) {
+        (Some(_), Some(_)) => return Err(AgentGraphError::DutyForbidden),
+        (None, None) => return Err(AgentGraphError::DutyRequired),
+        (None, Some(new_duty)) => {
+            tasks::update_chat_duty(
+                &target_project,
+                &target_task,
+                &target_chat.id,
+                Some(new_duty.clone()),
+            )
+            .map_err(AgentGraphError::from)?;
+        }
+        (Some(_), None) => {
+            // 目标已有 duty，且本次没传，正常路径
+        }
+    }
+
+    // 单线在途 + edge 校验由 insert_pending_message 内部完成（spec §5）
+    let msg_id = format!("msg-{}", uuid::Uuid::new_v4());
+    {
+        let conn = database::connection();
+        graph_db::insert_pending_message(
+            &conn,
+            &msg_id,
+            &caller_task,
+            &caller_chat.id,
+            &target_chat.id,
+            &input.message,
+        )
+        .map_err(AgentGraphError::from)?;
+    }
+
+    // 投递：busy → 排队；idle → send_prompt 同步 broadcast UserMessage
+    deliver_to_session(
+        &caller_project,
+        &caller_task,
+        &target_chat.id,
+        &caller_chat,
+        InjectKind::Send,
+        &input.message,
+    )
+    .await?;
+
+    Ok(SendOutput {
+        msg_id,
+        delivered_at: Utc::now().to_rfc3339(),
+    })
+}
+
+// ─── grove_agent_reply ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReplyInput {
+    pub msg_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplyOutput {
+    pub delivered_at: String,
+}
+
+pub async fn grove_agent_reply(
+    cx: &ToolContext,
+    input: ReplyInput,
+) -> AgentGraphResult<ReplyOutput> {
+    let (caller_project, caller_task, caller_chat) = cx.caller_context()?;
+
+    // 取 pending message
+    let pending = {
+        let conn = database::connection();
+        graph_db::get_pending_message(&conn, &input.msg_id).map_err(AgentGraphError::from)?
+    }
+    .ok_or(AgentGraphError::TicketNotFound)?;
+
+    // ticket 必须是 *给 caller 的*（caller 是 to_session）
+    if pending.to_session != caller_chat.id {
+        return Err(AgentGraphError::TicketNotFound);
+    }
+    if pending.task_id != caller_task {
+        return Err(AgentGraphError::SameTaskRequired);
+    }
+
+    // 投递到原发送方（pending.from_session）
+    let from_chat = tasks::find_chat_session(&pending.from_session)
+        .map_err(AgentGraphError::from)?
+        .ok_or(AgentGraphError::TargetNotFound)?
+        .2;
+
+    deliver_to_session(
+        &caller_project,
+        &caller_task,
+        &pending.from_session,
+        &caller_chat,
+        InjectKind::Reply,
+        &input.message,
+    )
+    .await?;
+
+    // 投递成功后消费 ticket
+    {
+        let conn = database::connection();
+        graph_db::delete_pending_message(&conn, &input.msg_id).map_err(AgentGraphError::from)?;
+    }
+    let _ = from_chat; // suppress unused warning if compile path changes
+
+    Ok(ReplyOutput {
+        delivered_at: Utc::now().to_rfc3339(),
+    })
+}
+
+// ─── grove_agent_contacts ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ContactsInput {}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactsSelf {
+    pub session_id: String,
+    pub name: String,
+    pub duty: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactsCanContact {
+    pub session_id: String,
+    pub name: String,
+    pub duty: Option<String>,
+    pub purpose: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactsPendingReply {
+    pub msg_id: String,
+    pub from: String,
+    pub message_excerpt: String,
+    pub received_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactsAwaitingReply {
+    pub msg_id: String,
+    pub to: String,
+    pub message_excerpt: String,
+    pub sent_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactsOutput {
+    #[serde(rename = "self")]
+    pub self_: ContactsSelf,
+    pub can_contact: Vec<ContactsCanContact>,
+    pub pending_replies: Vec<ContactsPendingReply>,
+    pub awaiting_reply: Vec<ContactsAwaitingReply>,
+}
+
+pub async fn grove_agent_contacts(
+    cx: &ToolContext,
+    _input: ContactsInput,
+) -> AgentGraphResult<ContactsOutput> {
+    let (_caller_project, caller_task, caller_chat) = cx.caller_context()?;
+
+    let conn = database::connection();
+    let outgoing =
+        graph_db::outgoing_for_session(&conn, &caller_chat.id).map_err(AgentGraphError::from)?;
+    let incoming_pending =
+        graph_db::pending_replies_for(&conn, &caller_chat.id).map_err(AgentGraphError::from)?;
+    let outgoing_pending =
+        graph_db::awaiting_reply_for(&conn, &caller_chat.id).map_err(AgentGraphError::from)?;
+    drop(conn);
+
+    let can_contact = outgoing
+        .into_iter()
+        .map(|c| ContactsCanContact {
+            session_id: c.to_session_id,
+            name: c.to_session_name,
+            duty: c.to_session_duty,
+            purpose: c.purpose,
+        })
+        .collect();
+    let pending_replies = incoming_pending
+        .into_iter()
+        .map(|p| ContactsPendingReply {
+            msg_id: p.msg_id,
+            from: p.from_session,
+            message_excerpt: excerpt(&p.body),
+            received_at: p.created_at.to_rfc3339(),
+        })
+        .collect();
+    let awaiting_reply = outgoing_pending
+        .into_iter()
+        .map(|p| ContactsAwaitingReply {
+            msg_id: p.msg_id,
+            to: p.to_session,
+            message_excerpt: excerpt(&p.body),
+            sent_at: p.created_at.to_rfc3339(),
+        })
+        .collect();
+
+    Ok(ContactsOutput {
+        self_: ContactsSelf {
+            session_id: caller_chat.id.clone(),
+            name: caller_chat.title.clone(),
+            duty: caller_chat.duty.clone(),
+            task_id: caller_task,
+        },
+        can_contact,
+        pending_replies,
+        awaiting_reply,
+    })
+}
+
+fn excerpt(body: &str) -> String {
+    const LIMIT: usize = 160;
+    let mut chars = body.chars();
+    let mut out = String::new();
+    let mut taken = 0;
+    for c in chars.by_ref() {
+        out.push(c);
+        taken += 1;
+        if taken >= LIMIT {
+            break;
+        }
+    }
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
+}
+
+// ─── grove_agent_capability ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CapabilityInput {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AvailableSet {
+    pub models: Vec<(String, String)>,
+    pub modes: Vec<(String, String)>,
+    pub thought_levels: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilityOutput {
+    pub session_id: String,
+    pub available: AvailableSet,
+}
+
+pub async fn grove_agent_capability(
+    _cx: &ToolContext,
+    input: CapabilityInput,
+) -> AgentGraphResult<CapabilityOutput> {
+    let (project, task_id, _chat) = tasks::find_chat_session(&input.session_id)
+        .map_err(AgentGraphError::from)?
+        .ok_or(AgentGraphError::TargetNotFound)?;
+
+    let meta = acp::read_session_metadata(&project, &task_id, &input.session_id)
+        .ok_or(AgentGraphError::AgentOffline)?;
+
+    Ok(CapabilityOutput {
+        session_id: input.session_id,
+        available: AvailableSet {
+            models: meta.available_models,
+            modes: meta.available_modes,
+            thought_levels: meta.available_thought_levels,
+        },
+    })
+}
+
+// ─── grove_agent_spawn ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpawnInput {
+    pub agent: String,
+    pub name: String,
+    pub duty: String,
+    #[serde(default)]
+    pub purpose: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpawnOutput {
+    pub session_id: String,
+    pub name: String,
+    pub duty: String,
+    pub task_id: String,
+    pub parent_session_id: String,
+    pub available: AvailableSet,
+}
+
+pub async fn grove_agent_spawn(
+    cx: &ToolContext,
+    input: SpawnInput,
+) -> AgentGraphResult<SpawnOutput> {
+    let (project_key, task_id, caller_chat) = cx.caller_context()?;
+
+    // name 同 task 唯一
+    let chats = tasks::load_chat_sessions(&project_key, &task_id).map_err(AgentGraphError::from)?;
+    if chats.iter().any(|c| c.title == input.name) {
+        return Err(AgentGraphError::NameTaken);
+    }
+
+    let resolved = acp::resolve_agent(&input.agent).ok_or(AgentGraphError::AgentSpawnFailed)?;
+
+    let project = workspace::load_project_by_hash(&project_key)
+        .map_err(AgentGraphError::from)?
+        .ok_or_else(|| AgentGraphError::Internal("project not registered".into()))?;
+    let task = tasks::get_task(&project_key, &task_id)
+        .map_err(AgentGraphError::from)?
+        .ok_or_else(|| AgentGraphError::Internal("caller task vanished".into()))?;
+
+    let new_chat_id = tasks::generate_chat_id();
+    let now = Utc::now();
+    let new_chat = tasks::ChatSession {
+        id: new_chat_id.clone(),
+        title: input.name.clone(),
+        agent: input.agent.clone(),
+        acp_session_id: None,
+        created_at: now,
+        duty: None, // duty 等 ACP ready 之后再设定，避免半成品记录被外界看到锁定的 duty
+    };
+    tasks::add_chat_session(&project_key, &task_id, new_chat.clone())
+        .map_err(AgentGraphError::from)?;
+
+    // 自动建 caller→new edge（带 purpose）
+    {
+        let conn = database::connection();
+        let edge_res = graph_db::add_edge(
+            &conn,
+            &task_id,
+            &caller_chat.id,
+            &new_chat_id,
+            input.purpose.as_deref(),
+        );
+        if let Err(e) = edge_res {
+            // 回滚 chat
+            drop(conn);
+            let _ = tasks::delete_chat_session(&project_key, &task_id, &new_chat_id);
+            return Err(AgentGraphError::from(e));
+        }
+    }
+
+    // 启动 ACP 子进程
+    let env_vars = crate::api::handlers::acp::build_grove_env(
+        &project_key,
+        &project.path,
+        &project.name,
+        &task,
+    );
+    let working_dir = std::path::PathBuf::from(&task.worktree_path);
+    let session_key = format!("{}:{}:{}", project_key, task_id, new_chat_id);
+    let config = AcpStartConfig {
+        agent_command: resolved.command,
+        agent_name: resolved.agent_name,
+        agent_args: resolved.args,
+        working_dir,
+        env_vars,
+        project_key: project_key.clone(),
+        task_id: task_id.clone(),
+        chat_id: Some(new_chat_id.clone()),
+        agent_type: resolved.agent_type,
+        remote_url: resolved.url,
+        remote_auth: resolved.auth_header,
+    };
+
+    let start_res = acp::get_or_start_session(session_key, config).await;
+    let (_handle, mut rx) = match start_res {
+        Ok(t) => t,
+        Err(e) => {
+            // 回滚 chat + edge
+            let _ = tasks::delete_chat_session(&project_key, &task_id, &new_chat_id);
+            return Err(AgentGraphError::Internal(format!(
+                "spawn ACP session failed: {}",
+                e
+            )));
+        }
+    };
+
+    // 等 SessionReady，超时 90s
+    let ready = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            match rx.recv().await {
+                Ok(AcpUpdate::SessionReady {
+                    session_id,
+                    available_modes,
+                    available_models,
+                    available_thought_levels,
+                    ..
+                }) => {
+                    return Ok::<_, AgentGraphError>((
+                        session_id,
+                        available_modes,
+                        available_models,
+                        available_thought_levels,
+                    ));
+                }
+                Ok(AcpUpdate::Error { message }) => {
+                    return Err(AgentGraphError::Internal(format!("acp error: {}", message)))
+                }
+                Ok(AcpUpdate::SessionEnded) => return Err(AgentGraphError::SessionTerminated),
+                Ok(_) => continue,
+                Err(_lagged_or_closed) => return Err(AgentGraphError::SessionTerminated),
+            }
+        }
+    })
+    .await;
+
+    let (_acp_session_id, modes, models, thought_levels) = match ready {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            let _ = tasks::delete_chat_session(&project_key, &task_id, &new_chat_id);
+            return Err(e);
+        }
+        Err(_) => {
+            let _ = tasks::delete_chat_session(&project_key, &task_id, &new_chat_id);
+            return Err(AgentGraphError::Timeout);
+        }
+    };
+
+    // duty lock
+    tasks::update_chat_duty(
+        &project_key,
+        &task_id,
+        &new_chat_id,
+        Some(input.duty.clone()),
+    )
+    .map_err(AgentGraphError::from)?;
+
+    // 通知前端 chat 列表变更（用户需求：前端自动看到新 chat）
+    broadcast_radio_event(RadioEvent::ChatListChanged {
+        project_id: project_key,
+        task_id: task_id.clone(),
+    });
+
+    Ok(SpawnOutput {
+        session_id: new_chat_id,
+        name: input.name,
+        duty: input.duty,
+        task_id,
+        parent_session_id: caller_chat.id,
+        available: AvailableSet {
+            models,
+            modes,
+            thought_levels,
+        },
+    })
+}
+
+// ─── 共用：注入到目标 session（busy → queue, idle → send_prompt） ─────────────
+
+async fn deliver_to_session(
+    project_key: &str,
+    task_id: &str,
+    target_chat_id: &str,
+    caller_chat: &tasks::ChatSession,
+    kind: InjectKind,
+    body: &str,
+) -> AgentGraphResult<()> {
+    let target_handle = locate_target_handle(project_key, task_id, target_chat_id)?;
+
+    let injected = build_injected_prompt(&caller_chat.id, &caller_chat.title, kind, body);
+    let sender = format!("agent:{}", caller_chat.id);
+
+    if target_handle
+        .is_busy
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let messages = target_handle.queue_message(QueuedMessage {
+            text: injected,
+            attachments: Vec::new(),
+            sender: Some(sender),
+        });
+        target_handle.emit(AcpUpdate::QueueUpdate { messages });
+    } else {
+        let send_res = tokio::time::timeout(
+            Duration::from_secs(10),
+            target_handle.send_prompt(injected, Vec::new(), Some(sender), false),
+        )
+        .await;
+        match send_res {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(AgentGraphError::Internal(format!("send_prompt: {}", e))),
+            Err(_) => return Err(AgentGraphError::Timeout),
+        }
+    }
+    Ok(())
+}
+
+fn locate_target_handle(
+    project_key: &str,
+    task_id: &str,
+    target_chat_id: &str,
+) -> AgentGraphResult<Arc<AcpSessionHandle>> {
+    let key = format!("{}:{}:{}", project_key, task_id, target_chat_id);
+    acp::get_session_handle(&key).ok_or(AgentGraphError::TargetNotAvailable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::database::test_lock;
+    use rusqlite::Connection;
+
+    /// 设 HOME 到临时目录，让 storage 写隔离的 grove.db
+    struct TempHome {
+        _tmp: tempfile::TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl TempHome {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().expect("tmpdir");
+            let prev = std::env::var_os("HOME");
+            // SAFETY: 仅在测试中调，且通过 test_lock 串行化所有 HOME 改动。
+            unsafe {
+                std::env::set_var("HOME", tmp.path());
+            }
+            Self { _tmp: tmp, prev }
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(p) = self.prev.take() {
+                    std::env::set_var("HOME", p);
+                } else {
+                    std::env::remove_var("HOME");
+                }
+            }
+        }
+    }
+
+    fn seed_chat(project: &str, task_id: &str, chat_id: &str, title: &str, duty: Option<&str>) {
+        let conn = database::connection();
+        conn.execute(
+            "INSERT OR REPLACE INTO session
+             (session_id, project, task_id, title, agent, acp_session_id, duty, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)",
+            rusqlite::params![
+                chat_id,
+                project,
+                task_id,
+                title,
+                "claude",
+                duty,
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .expect("insert chat");
+    }
+
+    fn seed_edge(conn: &Connection, task_id: &str, from: &str, to: &str) {
+        graph_db::add_edge(conn, task_id, from, to, None).expect("edge");
+    }
+
+    #[tokio::test]
+    async fn caller_unknown_send() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        // No chat seeded.
+        let cx = ToolContext::new("chat-bogus".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-other".into(),
+                message: "hi".into(),
+                duty: None,
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "caller_unknown");
+    }
+
+    #[tokio::test]
+    async fn target_not_found_send() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-missing".into(),
+                message: "hi".into(),
+                duty: Some("x".into()),
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "target_not_found");
+    }
+
+    #[tokio::test]
+    async fn cross_task_rejected() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t1", "chat-A", "A", None);
+        seed_chat("p", "t2", "chat-B", "B", None);
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-B".into(),
+                message: "hi".into(),
+                duty: Some("x".into()),
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "same_task_required");
+    }
+
+    #[tokio::test]
+    async fn duty_required() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        seed_chat("p", "t", "chat-B", "B", None); // B 没 duty
+        let conn = database::connection();
+        seed_edge(&conn, "t", "chat-A", "chat-B");
+        drop(conn);
+
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-B".into(),
+                message: "hi".into(),
+                duty: None, // 没传 duty 但 B 也没 duty
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "duty_required");
+    }
+
+    #[tokio::test]
+    async fn duty_forbidden() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        seed_chat("p", "t", "chat-B", "B", Some("existing")); // B 已有 duty
+        let conn = database::connection();
+        seed_edge(&conn, "t", "chat-A", "chat-B");
+        drop(conn);
+
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-B".into(),
+                message: "hi".into(),
+                duty: Some("override".into()),
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "duty_forbidden");
+    }
+
+    #[tokio::test]
+    async fn no_edge_send() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        seed_chat("p", "t", "chat-B", "B", Some("d"));
+        // 故意不建 edge
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-B".into(),
+                message: "hi".into(),
+                duty: None,
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "no_edge");
+    }
+
+    #[tokio::test]
+    async fn previous_message_pending() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        seed_chat("p", "t", "chat-B", "B", Some("d"));
+        let conn = database::connection();
+        seed_edge(&conn, "t", "chat-A", "chat-B");
+        graph_db::insert_pending_message(&conn, "msg-1", "t", "chat-A", "chat-B", "first")
+            .expect("first pending");
+        drop(conn);
+
+        // target_not_available 会在第二条 send 投递阶段触发（因为 chat-B 没有真起 ACP），
+        // 但单线在途校验在投递之前，所以期望 previous_message_pending。
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_send(
+            &cx,
+            SendInput {
+                to: "chat-B".into(),
+                message: "second".into(),
+                duty: None,
+                config: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "previous_message_pending");
+    }
+
+    #[tokio::test]
+    async fn ticket_not_found_reply() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_reply(
+            &cx,
+            ReplyInput {
+                msg_id: "msg-bogus".into(),
+                message: "ok".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "ticket_not_found");
+    }
+
+    #[tokio::test]
+    async fn reply_wrong_recipient() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        // A→B pending；C 来 reply 不该过
+        seed_chat("p", "t", "chat-A", "A", None);
+        seed_chat("p", "t", "chat-B", "B", Some("d"));
+        seed_chat("p", "t", "chat-C", "C", None);
+        let conn = database::connection();
+        seed_edge(&conn, "t", "chat-A", "chat-B");
+        graph_db::insert_pending_message(&conn, "msg-1", "t", "chat-A", "chat-B", "hi")
+            .expect("pending");
+        drop(conn);
+
+        let cx = ToolContext::new("chat-C".into());
+        let err = grove_agent_reply(
+            &cx,
+            ReplyInput {
+                msg_id: "msg-1".into(),
+                message: "fake".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "ticket_not_found");
+    }
+
+    #[tokio::test]
+    async fn contacts_basic() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", Some("dispatcher"));
+        seed_chat("p", "t", "chat-B", "B", Some("worker"));
+        seed_chat("p", "t", "chat-C", "C", Some("reviewer"));
+        let conn = database::connection();
+        seed_edge(&conn, "t", "chat-A", "chat-B");
+        seed_edge(&conn, "t", "chat-A", "chat-C");
+        graph_db::insert_pending_message(&conn, "msg-1", "t", "chat-A", "chat-B", "do x")
+            .expect("p1");
+        drop(conn);
+
+        let cx = ToolContext::new("chat-A".into());
+        let out = grove_agent_contacts(&cx, ContactsInput::default())
+            .await
+            .expect("ok");
+        assert_eq!(out.self_.session_id, "chat-A");
+        assert_eq!(out.self_.duty.as_deref(), Some("dispatcher"));
+        assert_eq!(out.can_contact.len(), 2);
+        assert_eq!(out.awaiting_reply.len(), 1);
+        assert_eq!(out.pending_replies.len(), 0);
+        assert_eq!(out.awaiting_reply[0].msg_id, "msg-1");
+    }
+
+    #[tokio::test]
+    async fn capability_target_not_found() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_capability(
+            &cx,
+            CapabilityInput {
+                session_id: "chat-missing".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "target_not_found");
+    }
+
+    #[tokio::test]
+    async fn capability_agent_offline() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "A", None);
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_capability(
+            &cx,
+            CapabilityInput {
+                session_id: "chat-A".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        // session.json 没写过 → AgentOffline
+        assert_eq!(err.code(), "agent_offline");
+    }
+
+    #[tokio::test]
+    async fn name_taken_spawn() {
+        let _l = test_lock().lock().await;
+        let _h = TempHome::new();
+        seed_chat("p", "t", "chat-A", "Tester", None); // 已有 name=Tester
+        let cx = ToolContext::new("chat-A".into());
+        let err = grove_agent_spawn(
+            &cx,
+            SpawnInput {
+                agent: "claude".into(),
+                name: "Tester".into(), // 撞名
+                duty: "test".into(),
+                purpose: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "name_taken");
+    }
+
+    #[test]
+    fn excerpt_truncates() {
+        let long = "a".repeat(200);
+        let s = excerpt(&long);
+        assert_eq!(s.chars().count(), 161);
+        assert!(s.ends_with('…'));
+    }
+}

@@ -500,6 +500,42 @@ pub fn get_chat_session(
     Ok(chat)
 }
 
+/// 反查：仅给 chat_id，返回该 chat 所属的 (project, task_id, ChatSession)。
+/// agent_graph 工具用，agent 调工具时只携带 chat_id，需要据此定位 task 上下文。
+#[allow(dead_code)]
+pub fn find_chat_session(chat_id: &str) -> Result<Option<(String, String, ChatSession)>> {
+    let conn = crate::storage::database::connection();
+    let row = conn
+        .query_row(
+            "SELECT project, task_id, session_id, title, agent, acp_session_id, created_at, duty
+             FROM session
+             WHERE session_id = ?1",
+            params![chat_id],
+            |row| {
+                let project: String = row.get(0)?;
+                let task_id: String = row.get(1)?;
+                let created_at: String = row.get(6)?;
+                let created_at = DateTime::parse_from_rfc3339(&created_at)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+                Ok((
+                    project,
+                    task_id,
+                    ChatSession {
+                        id: row.get(2)?,
+                        title: row.get(3)?,
+                        agent: row.get(4)?,
+                        acp_session_id: row.get(5)?,
+                        created_at,
+                        duty: row.get(7)?,
+                    },
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
 /// 根据 task_id 获取任务（从 tasks.toml）
 pub fn get_task(project: &str, task_id: &str) -> Result<Option<Task>> {
     let tasks = load_tasks(project)?;

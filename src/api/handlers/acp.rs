@@ -705,8 +705,11 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                                 }
                             }
                             ClientMessage::QueueMessage { text, attachments } => {
-                                let messages = handle_for_input
-                                    .queue_message(QueuedMessage { text, attachments });
+                                let messages = handle_for_input.queue_message(QueuedMessage {
+                                    text,
+                                    attachments,
+                                    sender: None,
+                                });
                                 handle_for_input.emit(AcpUpdate::QueueUpdate { messages });
                             }
                             ClientMessage::DequeueMessage { index } => {
@@ -811,7 +814,7 @@ impl From<&tasks::ChatSession> for ChatSessionResponse {
 }
 
 /// 构建 GROVE_* 环境变量，注入 task 上下文给 ACP agent
-fn build_grove_env(
+pub(crate) fn build_grove_env(
     project_key: &str,
     project_path: &str,
     project_name: &str,

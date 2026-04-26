@@ -1,4 +1,5 @@
 mod acp;
+mod agent_graph;
 mod agent_usage;
 mod api;
 #[cfg(not(windows))]

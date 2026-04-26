@@ -76,6 +76,11 @@ pub enum RadioEvent {
         task_id: String,
         text: String,
     },
+    /// Chat list under a task changed (created / deleted / renamed). Desktop should
+    /// re-fetch the chat list. Fired by the `grove_agent_spawn` MCP tool so the UI
+    /// auto-refreshes when an agent spawns a sibling session. (Commit 1 of WO-006.)
+    #[allow(dead_code)]
+    ChatListChanged { project_id: String, task_id: String },
 }
 
 /// Target mode for Radio: either a specific chat session or the terminal.
