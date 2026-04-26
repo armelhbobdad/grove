@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::error::AgentGraphError;
@@ -39,15 +40,19 @@ impl ToolContext {
 
 // ─── grove_agent_send ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SendInput {
+    /// Target session id (chat_id of the recipient).
     pub to: String,
+    /// Message body to deliver. The agent_graph layer prefixes it with
+    /// `[from:<name> · session=<id> · kind=send]` before injection.
     pub message: String,
-    /// 仅当 target session 还没 duty 时必传，否则禁止。
+    /// Required only when the target session has no duty yet; forbidden otherwise.
     #[serde(default)]
     pub duty: Option<String>,
-    /// 可选：覆盖目标 session 的 model / mode / thought_level（暂不实现，预留 API）。
+    /// Optional override of target's model / mode / thought_level (not yet implemented).
     #[serde(default)]
+    #[schemars(skip)]
     pub config: Option<serde_json::Value>,
 }
 
@@ -120,9 +125,11 @@ pub async fn grove_agent_send(cx: &ToolContext, input: SendInput) -> AgentGraphR
 
 // ─── grove_agent_reply ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ReplyInput {
+    /// The msg_id of the pending message to reply to.
     pub msg_id: String,
+    /// Reply body.
     pub message: String,
 }
 
@@ -182,7 +189,7 @@ pub async fn grove_agent_reply(
 
 // ─── grove_agent_contacts ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, Default)]
 pub struct ContactsInput {}
 
 #[derive(Debug, Clone, Serialize)]
@@ -302,8 +309,9 @@ fn excerpt(body: &str) -> String {
 
 // ─── grove_agent_capability ───────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct CapabilityInput {
+    /// Session id whose capabilities (models / modes / thought_levels) to inspect.
     pub session_id: String,
 }
 
@@ -343,11 +351,15 @@ pub async fn grove_agent_capability(
 
 // ─── grove_agent_spawn ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SpawnInput {
+    /// Agent kind (e.g. "claude", "codex", "opencode").
     pub agent: String,
+    /// Human-readable session name. Must be unique within the task.
     pub name: String,
+    /// Duty description. Locked once set — the new session's AI cannot change it.
     pub duty: String,
+    /// Optional purpose label for the auto-created caller→child edge.
     #[serde(default)]
     pub purpose: Option<String>,
 }

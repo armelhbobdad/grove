@@ -1,6 +1,7 @@
 //! API handlers
 
 pub mod acp;
+pub mod agent_graph_mcp;
 pub mod agent_usage;
 pub mod ai;
 pub mod common;
