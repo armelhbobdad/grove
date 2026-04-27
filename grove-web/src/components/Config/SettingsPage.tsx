@@ -247,8 +247,10 @@ export function SettingsPage({ config }: SettingsPageProps) {
 
   const [hooksEnabled, setHooksEnabled] = useState(true);
   const [hooksBanner, setHooksBanner] = useState(true);
-  const [hooksSoundEnabled, setHooksSoundEnabled] = useState(true);
-  const [hooksSound, setHooksSound] = useState("Glass");
+  const [hooksResponseSoundEnabled, setHooksResponseSoundEnabled] = useState(true);
+  const [hooksResponseSound, setHooksResponseSound] = useState("Glass");
+  const [hooksPermissionSoundEnabled, setHooksPermissionSoundEnabled] = useState(true);
+  const [hooksPermissionSound, setHooksPermissionSound] = useState("Purr");
 
   // MCP state
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -349,8 +351,10 @@ export function SettingsPage({ config }: SettingsPageProps) {
       if (cfg.hooks) {
         setHooksEnabled(cfg.hooks.enabled);
         setHooksBanner(cfg.hooks.banner);
-        setHooksSoundEnabled(cfg.hooks.sound_enabled);
-        setHooksSound(cfg.hooks.sound || "Glass");
+        setHooksResponseSoundEnabled(cfg.hooks.response_sound_enabled);
+        setHooksResponseSound(cfg.hooks.response_sound || "Glass");
+        setHooksPermissionSoundEnabled(cfg.hooks.permission_sound_enabled);
+        setHooksPermissionSound(cfg.hooks.permission_sound || "Purr");
       }
 
       setIsLoaded(true);
@@ -463,8 +467,10 @@ export function SettingsPage({ config }: SettingsPageProps) {
         hooks: {
           enabled: hooksEnabled,
           banner: hooksBanner,
-          sound_enabled: hooksSoundEnabled,
-          sound: hooksSound,
+          response_sound_enabled: hooksResponseSoundEnabled,
+          response_sound: hooksResponseSound,
+          permission_sound_enabled: hooksPermissionSoundEnabled,
+          permission_sound: hooksPermissionSound,
         },
       };
       await patchConfig(patch);
@@ -473,7 +479,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
     } catch {
       console.error("Failed to save config");
     }
-  }, [isLoaded, selectedLayout, agentCommand, acpAgent, chatRenderWindowLimit, chatRenderWindowTrigger, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, workspaceLayout, autoLinkPatterns, hooksEnabled, hooksBanner, hooksSoundEnabled, hooksSound, refreshGlobalConfig]);
+  }, [isLoaded, selectedLayout, agentCommand, acpAgent, chatRenderWindowLimit, chatRenderWindowTrigger, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, workspaceLayout, autoLinkPatterns, hooksEnabled, hooksBanner, hooksResponseSoundEnabled, hooksResponseSound, hooksPermissionSoundEnabled, hooksPermissionSound, refreshGlobalConfig]);
 
   // Handle theme change with immediate save
   const handleThemeChange = useCallback((newThemeId: string) => {
@@ -495,7 +501,7 @@ export function SettingsPage({ config }: SettingsPageProps) {
     }, 500); // 500ms debounce
 
     return () => clearTimeout(timer);
-  }, [selectedLayout, agentCommand, acpAgent, chatRenderWindowLimit, chatRenderWindowTrigger, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, workspaceLayout, autoLinkPatterns, hooksEnabled, hooksBanner, hooksSoundEnabled, hooksSound, isLoaded, saveConfig]);
+  }, [selectedLayout, agentCommand, acpAgent, chatRenderWindowLimit, chatRenderWindowTrigger, customLayouts, selectedCustomLayoutId, customLayoutsLoaded, ideCommand, terminalCommand, terminalMultiplexer, webTerminalMode, workspaceLayout, autoLinkPatterns, hooksEnabled, hooksBanner, hooksResponseSoundEnabled, hooksResponseSound, hooksPermissionSoundEnabled, hooksPermissionSound, isLoaded, saveConfig]);
 
   // Load applications list
   const loadApplications = useCallback(async () => {
@@ -1553,20 +1559,20 @@ env_vars = [
                 </div>
 
                 <div>
-                  <div className="text-sm font-medium text-[var(--color-text-muted)] mb-2 select-none">Sound</div>
+                  <div className="text-sm font-medium text-[var(--color-text-muted)] mb-2 select-none">Agent Response</div>
+                  <p className="text-xs text-[var(--color-text-muted)] mb-2 select-none">When the agent finishes responding to a prompt</p>
                   <div className="flex gap-2">
                     <div className="flex-1">
                       <Combobox
                         options={soundOptions}
-                        value={hooksSoundEnabled ? hooksSound : "none"}
+                        value={hooksResponseSoundEnabled ? hooksResponseSound : "none"}
                         onChange={(value) => {
                           if (value === "none") {
-                            setHooksSoundEnabled(false);
+                            setHooksResponseSoundEnabled(false);
                             return;
                           }
-
-                          setHooksSoundEnabled(true);
-                          setHooksSound(value);
+                          setHooksResponseSoundEnabled(true);
+                          setHooksResponseSound(value);
                         }}
                         placeholder="Select sound..."
                         allowCustom={false}
@@ -1575,9 +1581,42 @@ env_vars = [
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => previewHookSound(hooksSound)}
+                      onClick={() => previewHookSound(hooksResponseSound)}
                       title="Preview sound"
-                      disabled={!hooksSoundEnabled}
+                      disabled={!hooksResponseSoundEnabled}
+                      className="h-9 w-9 !p-0 rounded-xl"
+                    >
+                      <Volume2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm font-medium text-[var(--color-text-muted)] mb-2 select-none">Agent Permission Required</div>
+                  <p className="text-xs text-[var(--color-text-muted)] mb-2 select-none">When the agent needs your approval for an action</p>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <Combobox
+                        options={soundOptions}
+                        value={hooksPermissionSoundEnabled ? hooksPermissionSound : "none"}
+                        onChange={(value) => {
+                          if (value === "none") {
+                            setHooksPermissionSoundEnabled(false);
+                            return;
+                          }
+                          setHooksPermissionSoundEnabled(true);
+                          setHooksPermissionSound(value);
+                        }}
+                        placeholder="Select sound..."
+                        allowCustom={false}
+                      />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => previewHookSound(hooksPermissionSound)}
+                      title="Preview sound"
+                      disabled={!hooksPermissionSoundEnabled}
                       className="h-9 w-9 !p-0 rounded-xl"
                     >
                       <Volume2 className="w-4 h-4" />

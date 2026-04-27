@@ -29,8 +29,10 @@ pub struct ConfigResponse {
 pub struct HooksConfigDto {
     pub enabled: bool,
     pub banner: bool,
-    pub sound_enabled: bool,
-    pub sound: String,
+    pub response_sound_enabled: bool,
+    pub response_sound: String,
+    pub permission_sound_enabled: bool,
+    pub permission_sound: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,8 +130,10 @@ impl From<&Config> for ConfigResponse {
             hooks: HooksConfigDto {
                 enabled: config.hooks.enabled,
                 banner: config.hooks.banner,
-                sound_enabled: config.hooks.sound_enabled,
-                sound: config.hooks.sound.clone(),
+                response_sound_enabled: config.hooks.response_sound_enabled,
+                response_sound: config.hooks.response_sound.clone(),
+                permission_sound_enabled: config.hooks.permission_sound_enabled,
+                permission_sound: config.hooks.permission_sound.clone(),
             },
             terminal_multiplexer: config.terminal_multiplexer.to_string(),
         }
@@ -153,8 +157,10 @@ pub struct ConfigPatchRequest {
 pub struct HooksConfigPatch {
     pub enabled: Option<bool>,
     pub banner: Option<bool>,
-    pub sound_enabled: Option<bool>,
-    pub sound: Option<String>,
+    pub response_sound_enabled: Option<bool>,
+    pub response_sound: Option<String>,
+    pub permission_sound_enabled: Option<bool>,
+    pub permission_sound: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,11 +310,17 @@ pub async fn patch_config(
         if let Some(banner) = hooks_patch.banner {
             config.hooks.banner = banner;
         }
-        if let Some(sound_enabled) = hooks_patch.sound_enabled {
-            config.hooks.sound_enabled = sound_enabled;
+        if let Some(response_sound_enabled) = hooks_patch.response_sound_enabled {
+            config.hooks.response_sound_enabled = response_sound_enabled;
         }
-        if let Some(sound) = hooks_patch.sound {
-            config.hooks.sound = sound;
+        if let Some(response_sound) = hooks_patch.response_sound {
+            config.hooks.response_sound = response_sound;
+        }
+        if let Some(permission_sound_enabled) = hooks_patch.permission_sound_enabled {
+            config.hooks.permission_sound_enabled = permission_sound_enabled;
+        }
+        if let Some(permission_sound) = hooks_patch.permission_sound {
+            config.hooks.permission_sound = permission_sound;
         }
     }
 

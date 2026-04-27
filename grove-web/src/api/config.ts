@@ -51,8 +51,10 @@ export interface AcpConfig {
 export interface HooksConfig {
   enabled: boolean;
   banner: boolean;
-  sound_enabled: boolean;
-  sound: string;
+  response_sound_enabled: boolean;
+  response_sound: string;
+  permission_sound_enabled: boolean;
+  permission_sound: string;
 }
 
 export interface Config {

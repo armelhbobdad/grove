@@ -559,7 +559,7 @@ async fn handle_request_permission(
         &state.task_id,
         "Permission Required",
         &desc,
-        "Purr",
+        AcpNotificationEvent::PermissionRequired,
     );
 
     match rx.await {
@@ -1912,7 +1912,7 @@ async fn drive_session(
                                 &config.task_id,
                                 "Task Complete",
                                 &summary,
-                                "Glass",
+                                AcpNotificationEvent::TurnComplete,
                             );
                             handle.emit(AcpUpdate::Busy { value: false });
                             handle.emit(AcpUpdate::Complete {
@@ -3238,13 +3238,22 @@ pub fn init_agent_defaults() {
     }
 }
 
+/// ACP 通知事件类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcpNotificationEvent {
+    /// Chat Turn End（Agent 回应完成）
+    TurnComplete,
+    /// Agent 权限请求
+    PermissionRequired,
+}
+
 /// 发送 ACP 事件通知（根据 hooks 配置决定是否播放声音、发送横幅）
 fn notify_acp_event(
     project_key: &str,
     task_id: &str,
     title_suffix: &str,
     message: &str,
-    default_sound: &str,
+    event: AcpNotificationEvent,
 ) {
     use crate::hooks::{self, NotificationLevel};
     use crate::storage::{config, tasks as task_storage};
@@ -3254,14 +3263,21 @@ fn notify_acp_event(
         return;
     }
 
-    let sound = if cfg.sound_enabled {
-        Some(if cfg.sound.is_empty() {
-            default_sound
-        } else {
-            &cfg.sound
-        })
-    } else {
-        None
+    let sound = match event {
+        AcpNotificationEvent::TurnComplete => {
+            if cfg.response_sound_enabled {
+                Some(if cfg.response_sound.is_empty() { "Glass" } else { &cfg.response_sound })
+            } else {
+                None
+            }
+        }
+        AcpNotificationEvent::PermissionRequired => {
+            if cfg.permission_sound_enabled {
+                Some(if cfg.permission_sound.is_empty() { "Purr" } else { &cfg.permission_sound })
+            } else {
+                None
+            }
+        }
     };
 
     if let Some(s) = sound {

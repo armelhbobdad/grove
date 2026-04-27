@@ -78,26 +78,36 @@ fn default_acp_render_window_trigger() -> u32 {
 /// Hooks 通知配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HooksConfig {
-    /// 是否启用 ACP Chat 通知
+    /// 是否启用 ACP Chat 通知（主开关）
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// 是否发送桌面通知横幅
     #[serde(default = "default_true")]
     pub banner: bool,
-    /// 是否播放声音
+    /// Agent Response 声音开关（Chat Turn End）
+    #[serde(default = "default_true", alias = "sound_enabled")]
+    pub response_sound_enabled: bool,
+    /// Agent Response 声音名称（默认 Glass）
+    #[serde(default = "default_response_sound", alias = "sound")]
+    pub response_sound: String,
+    /// Agent Permission Required 声音开关
     #[serde(default = "default_true")]
-    pub sound_enabled: bool,
-    /// 声音名称（macOS 系统声音，如 "Glass", "Purr"）
-    #[serde(default = "default_sound")]
-    pub sound: String,
+    pub permission_sound_enabled: bool,
+    /// Agent Permission Required 声音名称（默认 Purr）
+    #[serde(default = "default_permission_sound")]
+    pub permission_sound: String,
 }
 
 fn default_true() -> bool {
     true
 }
 
-fn default_sound() -> String {
+fn default_response_sound() -> String {
     "Glass".to_string()
+}
+
+fn default_permission_sound() -> String {
+    "Purr".to_string()
 }
 
 impl Default for HooksConfig {
@@ -105,8 +115,10 @@ impl Default for HooksConfig {
         Self {
             enabled: true,
             banner: true,
-            sound_enabled: true,
-            sound: default_sound(),
+            response_sound_enabled: true,
+            response_sound: default_response_sound(),
+            permission_sound_enabled: true,
+            permission_sound: default_permission_sound(),
         }
     }
 }
