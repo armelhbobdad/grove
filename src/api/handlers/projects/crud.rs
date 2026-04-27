@@ -365,13 +365,36 @@ pub async fn add_project(
         String::new()
     };
 
+    // Local Task 是 Coding Project 的核心组成部分,注册时立刻落盘并补齐 _local slot,
+    // 否则 Blitz 视图要等到第一次创建普通 Task 后才能看到这个项目。
+    let local_task = loader::load_local_task(&resolved_path).map(|wt| TaskResponse {
+        id: wt.id,
+        name: wt.task_name,
+        branch: wt.branch,
+        target: wt.target,
+        status: "idle".to_string(),
+        additions: 0,
+        deletions: 0,
+        files_changed: 0,
+        commits: Vec::new(),
+        created_at: wt.created_at.to_rfc3339(),
+        updated_at: wt.updated_at.to_rfc3339(),
+        path: wt.path,
+        multiplexer: wt.multiplexer,
+        created_by: wt.created_by,
+        is_local: true,
+    });
+    let _ = crate::storage::taskgroups::ensure_system_groups();
+    use crate::api::handlers::walkie_talkie::{broadcast_radio_event, RadioEvent};
+    broadcast_radio_event(RadioEvent::GroupChanged);
+
     Ok(Json(ProjectResponse {
         id,
         name,
         path: resolved_path,
         current_branch,
         tasks: Vec::new(),
-        local_task: None,
+        local_task,
         added_at: chrono::Utc::now().to_rfc3339(),
         is_git_repo: is_git,
         exists: true,
@@ -442,13 +465,34 @@ pub async fn create_new_project(
             String::new()
         };
 
+        let local_task = loader::load_local_task(&resolved_path).map(|wt| TaskResponse {
+            id: wt.id,
+            name: wt.task_name,
+            branch: wt.branch,
+            target: wt.target,
+            status: "idle".to_string(),
+            additions: 0,
+            deletions: 0,
+            files_changed: 0,
+            commits: Vec::new(),
+            created_at: wt.created_at.to_rfc3339(),
+            updated_at: wt.updated_at.to_rfc3339(),
+            path: wt.path,
+            multiplexer: wt.multiplexer,
+            created_by: wt.created_by,
+            is_local: true,
+        });
+        let _ = crate::storage::taskgroups::ensure_system_groups();
+        use crate::api::handlers::walkie_talkie::{broadcast_radio_event, RadioEvent};
+        broadcast_radio_event(RadioEvent::GroupChanged);
+
         Ok(Json(ProjectResponse {
             id,
             name,
             path: resolved_path,
             current_branch,
             tasks: Vec::new(),
-            local_task: None,
+            local_task,
             added_at: Utc::now().to_rfc3339(),
             is_git_repo: init_git,
             exists: true,

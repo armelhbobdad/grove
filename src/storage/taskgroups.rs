@@ -559,6 +559,33 @@ mod tests {
     // see `crate::storage::database::test_lock` for rationale.
     use crate::storage::database::test_lock as FILE_LOCK_FN;
 
+    /// RAII guard that overrides HOME to a temp dir so tests don't pollute
+    /// the user's real `~/.grove/grove.db`.
+    struct HomeGuard {
+        prev: String,
+        temp: std::path::PathBuf,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            std::env::set_var("HOME", &self.prev);
+            let _ = std::fs::remove_dir_all(&self.temp);
+        }
+    }
+    fn sandbox_home() -> HomeGuard {
+        let prev = std::env::var("HOME").unwrap_or_default();
+        let temp = std::env::temp_dir().join(format!(
+            "grove-taskgroups-storage-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::env::set_var("HOME", &temp);
+        HomeGuard { prev, temp }
+    }
+
     /// Helper that creates a group and ensures it gets deleted on drop.
     struct TestGroup {
         pub id: String,
@@ -583,6 +610,7 @@ mod tests {
     #[test]
     fn test_create_and_load_group() {
         let _lock = FILE_LOCK_FN().blocking_lock();
+        let _home = sandbox_home();
         let (guard, group) = TestGroup::create("test_create_load", Some("blue".into()));
 
         assert_eq!(group.name, "test_create_load");
@@ -602,6 +630,7 @@ mod tests {
     #[test]
     fn test_update_group() {
         let _lock = FILE_LOCK_FN().blocking_lock();
+        let _home = sandbox_home();
         let (guard, _group) = TestGroup::create("test_update_orig", None);
 
         // Update name only
@@ -632,6 +661,7 @@ mod tests {
     #[test]
     fn test_delete_group() {
         let _lock = FILE_LOCK_FN().blocking_lock();
+        let _home = sandbox_home();
         let group = create_group("test_delete_me".into(), None).unwrap();
         let id = group.id.clone();
 
@@ -649,6 +679,7 @@ mod tests {
     #[test]
     fn test_upsert_and_remove_slot() {
         let _lock = FILE_LOCK_FN().blocking_lock();
+        let _home = sandbox_home();
         let (guard, _group) = TestGroup::create("test_slots", None);
 
         // Add a slot at position 1
@@ -707,6 +738,7 @@ mod tests {
     #[test]
     fn test_slot_sorting() {
         let _lock = FILE_LOCK_FN().blocking_lock();
+        let _home = sandbox_home();
         let (guard, _group) = TestGroup::create("test_slot_sort", None);
 
         // Insert slots in reverse order: 5, 3, 1, 9, 2

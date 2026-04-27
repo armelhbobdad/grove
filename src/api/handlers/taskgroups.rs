@@ -248,6 +248,34 @@ mod tests {
         }
     }
 
+    /// RAII guard that restores HOME on drop (including panic unwind).
+    /// Tests must override HOME so they write into a temp dir instead of
+    /// the user's real `~/.grove/grove.db`.
+    struct HomeGuard {
+        prev: String,
+        temp: std::path::PathBuf,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            std::env::set_var("HOME", &self.prev);
+            let _ = std::fs::remove_dir_all(&self.temp);
+        }
+    }
+    fn sandbox_home() -> HomeGuard {
+        let prev = std::env::var("HOME").unwrap_or_default();
+        let temp = std::env::temp_dir().join(format!(
+            "grove-taskgroups-handler-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::env::set_var("HOME", &temp);
+        HomeGuard { prev, temp }
+    }
+
     // Use the crate-wide shared test lock so storage and handler tests serialize
     // together (see `crate::storage::database::test_lock` for rationale).
     // Returns a tokio guard — these tests await DB handlers, so we must not
@@ -259,6 +287,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_create_and_list() {
         let _lock = acquire_lock().await;
+        let _home = sandbox_home();
 
         // Create via handler
         let resp = create_group(Json(CreateGroupRequest {
@@ -294,6 +323,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_update_and_delete() {
         let _lock = acquire_lock().await;
+        let _home = sandbox_home();
 
         // Create
         let group = taskgroups::create_group("handler-ud".to_string(), None).unwrap();
@@ -330,6 +360,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_slots() {
         let _lock = acquire_lock().await;
+        let _home = sandbox_home();
 
         let group = taskgroups::create_group("handler-slots".to_string(), None).unwrap();
         let _guard = TestGroup {
