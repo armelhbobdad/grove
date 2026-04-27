@@ -44,8 +44,9 @@ impl ToolContext {
 pub struct SendInput {
     /// Target session id (chat_id of the recipient).
     pub to: String,
-    /// Message body to deliver. The agent_graph layer prefixes it with
-    /// `[from:<name> · session=<id> · kind=send]` before injection.
+    /// Message body to deliver. The agent_graph layer prefixes it with a
+    /// `<grove-meta>{...}</grove-meta>` envelope (type=agent_inject_send) before
+    /// injection — see `agent_graph::inject`.
     pub message: String,
     /// Required only when the target session has no duty yet; forbidden otherwise.
     #[serde(default)]
@@ -584,7 +585,14 @@ async fn deliver_to_session(
     // message was NOT queued — the caller MUST treat that as a failure.
     let target_handle = ensure_target_handle(project_key, task_id, target_chat_id).await?;
 
-    let injected = build_injected_prompt(&caller_chat.id, &caller_chat.title, kind, body, msg_id);
+    let injected = build_injected_prompt(
+        &caller_chat.id,
+        &caller_chat.title,
+        &caller_chat.agent,
+        kind,
+        body,
+        msg_id,
+    );
     let sender = format!("agent:{}", caller_chat.id);
 
     if target_handle
@@ -1145,9 +1153,13 @@ mod tests {
         match event {
             AcpUpdate::UserMessage { text, sender, .. } => {
                 assert!(
-                    text.starts_with("[from:Alice · session=chat-A · kind=send · msg_id="),
-                    "missing prefix in {text:?}"
+                    text.starts_with("<grove-meta>"),
+                    "missing grove-meta envelope in {text:?}"
                 );
+                assert!(text.contains("\"type\":\"agent_inject_send\""));
+                assert!(text.contains("\"sid\":\"chat-A\""));
+                assert!(text.contains("\"name\":\"Alice\""));
+                assert!(text.contains("\"msg_id\":\"msg-"));
                 assert!(text.contains("\n\nhello from A"));
                 assert!(text.contains("grove_agent_reply"));
                 assert_eq!(sender.as_deref(), Some("agent:chat-A"));
@@ -1200,9 +1212,10 @@ mod tests {
             AcpUpdate::QueueUpdate { messages } => {
                 assert_eq!(messages.len(), 1, "queue should have 1 msg");
                 assert!(
-                    messages[0].text.contains("[from:Alice"),
-                    "prefix in queued message"
+                    messages[0].text.starts_with("<grove-meta>"),
+                    "envelope in queued message"
                 );
+                assert!(messages[0].text.contains("\"name\":\"Alice\""));
                 assert_eq!(messages[0].sender.as_deref(), Some("agent:chat-A"));
             }
             other => panic!("expected QueueUpdate, got {:?}", other),
@@ -1261,7 +1274,8 @@ mod tests {
         let event = drain_until(&mut rx_b, |u| matches!(u, AcpUpdate::UserMessage { .. })).await;
         match event {
             AcpUpdate::UserMessage { text, sender, .. } => {
-                assert!(text.contains("[from:Alice"));
+                assert!(text.starts_with("<grove-meta>"));
+                assert!(text.contains("\"name\":\"Alice\""));
                 assert_eq!(sender.as_deref(), Some("agent:chat-A"));
             }
             other => panic!("expected UserMessage, got {:?}", other),
@@ -1300,7 +1314,10 @@ mod tests {
         let event = drain_until(&mut rx_a, |u| matches!(u, AcpUpdate::UserMessage { .. })).await;
         match event {
             AcpUpdate::UserMessage { text, sender, .. } => {
-                assert!(text.contains("[from:Bob · session=chat-B · kind=reply]"));
+                assert!(text.starts_with("<grove-meta>"));
+                assert!(text.contains("\"type\":\"agent_inject_reply\""));
+                assert!(text.contains("\"sid\":\"chat-B\""));
+                assert!(text.contains("\"name\":\"Bob\""));
                 assert!(text.ends_with("done"));
                 assert_eq!(sender.as_deref(), Some("agent:chat-B"));
             }

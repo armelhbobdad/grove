@@ -678,9 +678,7 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
                                 // when the frontend rendered it from history but
                                 // the live pending has moved on or never matched.
                                 let live_id = handle_for_input.pending_permission_id();
-                                if !id.is_empty()
-                                    && live_id.as_deref() != Some(id.as_str())
-                                {
+                                if !id.is_empty() && live_id.as_deref() != Some(id.as_str()) {
                                     handle_for_input.emit(AcpUpdate::Error {
                                         message: format!(
                                             "Permission request {} is no longer pending",

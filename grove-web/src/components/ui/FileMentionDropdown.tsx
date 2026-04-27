@@ -15,10 +15,9 @@ import {
   FileArchive,
   File,
   Link as LinkIcon,
-  Bot,
 } from "lucide-react";
 import type { FilteredMentionItem, MentionItem } from "../../utils/fileMention";
-import { agentOptions } from "./AgentPicker";
+import { agentIconComponent } from "../../utils/agentIcon";
 
 /**
  * Pick an icon for a mention item. Category-intrinsic concepts (Instruction,
@@ -29,12 +28,10 @@ function iconFor(
   item: Pick<MentionItem, "category" | "path" | "isDir" | "kind" | "agentName">,
 ) {
   // Agent-graph kinds: render the underlying agent's brand icon when known.
+  // `agentIconComponent` already falls back to lucide Bot for unknown keys,
+  // so this branch is total.
   if (item.kind && item.kind !== "file") {
-    const agent = item.agentName
-      ? agentOptions.find((o) => o.value === item.agentName || o.id === item.agentName)
-      : undefined;
-    if (agent?.icon) return agent.icon;
-    return Bot;
+    return agentIconComponent(item.agentName);
   }
   if (item.path.toLowerCase().endsWith(".link.json")) return LinkIcon;
   switch (item.category) {

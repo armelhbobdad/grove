@@ -65,6 +65,15 @@ import {
   filterMentionItems,
   buildAgentMentionItems,
 } from "../../../utils/fileMention";
+import {
+  buildGroveMetaTag,
+  parseGroveMetaSegments,
+} from "../../../utils/groveMeta";
+import { renderGroveMetaEnvelope } from "./groveMetaRenderers";
+import {
+  agentIconComponent,
+  agentIconUrl,
+} from "../../../utils/agentIcon";
 import type { MentionItem } from "../../../utils/fileMention";
 import { getMentionCandidates } from "../../../api";
 import { useProject } from "../../../context/ProjectContext";
@@ -622,10 +631,6 @@ function resolveLatestPendingPermission(
     }
   }
 
-  if (targetIndex === -1) {
-    return messages;
-  }
-
   return messages.map((message, index) =>
     index === targetIndex && message.type === "permission"
       ? {
@@ -770,23 +775,49 @@ function createAgentMentionChip(item: MentionItem): HTMLSpanElement {
   if (item.agentName) chip.dataset.agentName = item.agentName;
   if (item.displayName) chip.dataset.displayName = item.displayName;
 
-  const isPending = item.kind === "agent_reply";
-  const accent = isPending
-    ? "var(--color-error, #ef4444)"
-    : "var(--color-accent, var(--color-highlight))";
+  // Neutral surface — readable in any theme. Type is conveyed by the brand
+  // icon + the optional ↩ glyph for reply, not by tinted color.
   chip.style.cssText =
     "display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:4px;" +
-    `background:color-mix(in srgb,${accent} 15%,transparent);` +
-    `border:1px solid color-mix(in srgb,${accent} 35%,transparent);` +
-    `font-size:12px;font-weight:500;color:${accent};` +
+    "background:var(--color-bg-tertiary);" +
+    "border:1px solid var(--color-border);" +
+    "font-size:12px;font-weight:500;color:var(--color-text);" +
     "margin:0 2px;user-select:none;vertical-align:baseline;line-height:1.5;";
   if (item.kind === "agent_send" && item.duty) {
     chip.title = `${item.displayName ?? ""} — ${item.duty}`;
   }
+  if (item.kind === "agent_reply" && item.msgId) {
+    chip.title = `Reply to ${item.displayName ?? ""} (msg ${item.msgId})`;
+  }
+
+  // Layout: <verb> <agent_icon> <name>
+  //   - mention_spawn  → "Spawn  <icon> <agent>"
+  //   - mention_send   → "Send To <icon> <session>"
+  //   - mention_reply  → "Reply To <icon> <session>"
+  const name = item.displayName ?? item.agentName ?? "";
+  const action =
+    item.kind === "agent_spawn"
+      ? "Spawn"
+      : item.kind === "agent_send"
+        ? "Send To"
+        : "Reply To";
+  const verb = document.createElement("span");
+  verb.textContent = action;
+  verb.style.cssText = "opacity:0.7;font-weight:500;";
+  chip.appendChild(verb);
+
+  const iconUrl = agentIconUrl(item.agentName);
+  if (iconUrl) {
+    const img = document.createElement("img");
+    img.src = iconUrl;
+    img.alt = "";
+    img.style.cssText =
+      "width:12px;height:12px;flex-shrink:0;display:inline-block;vertical-align:-2px;";
+    chip.appendChild(img);
+  }
 
   const label = document.createElement("span");
-  const name = item.displayName ?? item.agentName ?? "";
-  label.textContent = isPending ? `@${name} ⚠` : `@${name}`;
+  label.textContent = name;
   chip.appendChild(label);
 
   const closeBtn = document.createElement("span");
@@ -800,27 +831,48 @@ function createAgentMentionChip(item: MentionItem): HTMLSpanElement {
 }
 
 /**
- * Expand an agent-graph @-mention chip into the spec §6 template string. The
- * resulting text is what the AI receiving the prompt sees — Grove never calls
- * the underlying `grove_agent_*` tools itself; the AI decides whether to.
+ * Expand an agent-graph @-mention chip into a `<grove-meta>` envelope. The
+ * envelope's `system-prompt` field carries the spec §6 instruction text the AI
+ * reads; the `data` field carries the rendering metadata the receiving chat's
+ * frontend uses to draw a pill. Grove never calls the underlying
+ * `grove_agent_*` tools itself — the AI decides whether to act on the hint.
  */
 function expandAgentMentionChip(node: HTMLElement): string {
   const kind = node.dataset.mentionKind;
   if (kind === "agent_spawn") {
     const agent = node.dataset.agentName ?? node.dataset.displayName ?? "";
-    return `@[agent=${agent} · use grove_agent_spawn to create a Session, then grove_agent_send to dispatch]`;
+    return buildGroveMetaTag(
+      "mention_spawn",
+      { agent },
+      `@[agent=${agent} · use grove_agent_spawn to create a Session, then grove_agent_send to dispatch]`,
+    );
   }
   if (kind === "agent_send") {
     const id = node.dataset.sessionId ?? "";
     const name = node.dataset.displayName ?? "";
     const duty = node.dataset.duty ?? "";
-    return `@[session id=${id}, name=${name}, duty="${duty}" · use grove_agent_send(to="${id}") to dispatch]`;
+    const agent = node.dataset.agentName ?? "";
+    const data: Record<string, unknown> = { sid: id, name };
+    if (duty) data.duty = duty;
+    if (agent) data.agent = agent;
+    return buildGroveMetaTag(
+      "mention_send",
+      data,
+      `@[session id=${id}, name=${name}, duty="${duty}" · use grove_agent_send(to="${id}") to dispatch]`,
+    );
   }
   if (kind === "agent_reply") {
     const id = node.dataset.sessionId ?? "";
     const name = node.dataset.displayName ?? "";
     const msg = node.dataset.msgId ?? "";
-    return `@[session id=${id}, name=${name}, pending_msg=${msg} · use grove_agent_reply(msg_id="${msg}") to respond]`;
+    const agent = node.dataset.agentName ?? "";
+    const data: Record<string, unknown> = { sid: id, name, msg_id: msg };
+    if (agent) data.agent = agent;
+    return buildGroveMetaTag(
+      "mention_reply",
+      data,
+      `@[session id=${id}, name=${name}, pending_msg=${msg} · use grove_agent_reply(msg_id="${msg}") to respond]`,
+    );
   }
   return "";
 }
@@ -1451,12 +1503,13 @@ export function TaskChat({
   }, [acpAgentAvailability, acpAvailabilityLoaded]);
 
   const getChatIcon = (agentId: string) => {
-    const builtin = agentOptions.find((option) => option.value === agentId);
-    if (builtin?.icon) return builtin.icon;
+    // Custom agents (user-configured remote / local) take precedence — they
+    // aren't in the static agent table. Builtins fall through to the shared
+    // `agentIcon` resolver, which handles every value/id/icon_id/alias.
     const custom = customAgents.find((agent) => agent.id === agentId);
     if (custom?.type === "remote") return Globe;
     if (custom) return Terminal;
-    return MessageSquare;
+    return agentIconComponent(agentId);
   };
 
   // Resolve a message sender id ("user" | "agent:<chat_id>" | other) into a
@@ -5440,6 +5493,63 @@ const DropdownSelect = ({
   );
 };
 
+/**
+ * Render a user-message body, replacing every `<grove-meta>` envelope with the
+ * type's pretty React renderer (mention pill / inject badge / future kinds).
+ * Plain text segments keep `whitespace-pre-wrap` so user formatting survives.
+ *
+ * Inline vs block layout is decided per envelope type — pills stay inline,
+ * inject badges flow as their own paragraph above remaining text.
+ */
+function UserMessageBody({ content }: { content: string }) {
+  const segments = parseGroveMetaSegments(content);
+  if (segments.length === 0) {
+    return <div className="whitespace-pre-wrap break-words">{content}</div>;
+  }
+  // Hoist top-level inject badges out of the prose flow so they sit above the
+  // body line. Inline mention pills stay where they appear.
+  const blockBadges: React.ReactNode[] = [];
+  const inlineBody: React.ReactNode[] = [];
+  segments.forEach((seg, i) => {
+    if (seg.kind === "text") {
+      if (seg.content) inlineBody.push(<span key={`t-${i}`}>{seg.content}</span>);
+      return;
+    }
+    const isInjectBadge = seg.envelope.type.startsWith("agent_inject_");
+    const node = renderGroveMetaEnvelope(seg.envelope, {
+      layout: isInjectBadge ? "block" : "inline",
+    });
+    if (isInjectBadge) {
+      blockBadges.push(<div key={`b-${i}`}>{node}</div>);
+    } else {
+      inlineBody.push(<span key={`m-${i}`}>{node}</span>);
+    }
+  });
+  // Trim a single leading newline from the first inline text segment when a
+  // block badge was hoisted out — keeps the body from starting with a blank
+  // line just because the envelope was followed by `\n\n`.
+  if (blockBadges.length > 0 && inlineBody.length > 0) {
+    const first = inlineBody[0];
+    if (typeof first === "object" && first && "props" in first) {
+      const props = (first as React.ReactElement<{ children?: React.ReactNode }>).props;
+      if (typeof props.children === "string") {
+        const trimmed = props.children.replace(/^\s*\n+/, "");
+        if (trimmed !== props.children) {
+          inlineBody[0] = <span key="trimmed">{trimmed}</span>;
+        }
+      }
+    }
+  }
+  return (
+    <>
+      {blockBadges}
+      {inlineBody.length > 0 && (
+        <div className="whitespace-pre-wrap break-words">{inlineBody}</div>
+      )}
+    </>
+  );
+}
+
 /** Individual message rendering */
 const MessageItem = memo(function MessageItem({
   message,
@@ -5607,7 +5717,7 @@ const MessageItem = memo(function MessageItem({
                 ) : null,
               )}
               {message.content && (
-                <div className="whitespace-pre-wrap break-words">{message.content}</div>
+                <UserMessageBody content={message.content} />
               )}
             </div>
           </div>

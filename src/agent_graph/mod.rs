@@ -25,9 +25,9 @@
 //!   broadcast and persist to `chat_history.jsonl`.
 //! - `sender` is `Some("agent:<caller_chat_id>")` for agent-injected prompts,
 //!   `None` for normal user input. This is the canonical sender identity used
-//!   by storage and UI; the human-readable `[from:<name> · session=<id> ·
-//!   kind=<send|reply>]` prefix is woven into the prompt body for AI context
-//!   only and is not the source of truth.
+//!   by storage and UI; the `<grove-meta>{...}</grove-meta>` envelope at the
+//!   head of the prompt body (see `inject::build_injected_prompt`) is woven in
+//!   for AI context + frontend rendering and is not the source of truth.
 
 pub mod error;
 pub mod inject;

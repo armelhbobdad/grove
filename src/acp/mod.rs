@@ -3266,14 +3266,22 @@ fn notify_acp_event(
     let sound = match event {
         AcpNotificationEvent::TurnComplete => {
             if cfg.response_sound_enabled {
-                Some(if cfg.response_sound.is_empty() { "Glass" } else { &cfg.response_sound })
+                Some(if cfg.response_sound.is_empty() {
+                    "Glass"
+                } else {
+                    &cfg.response_sound
+                })
             } else {
                 None
             }
         }
         AcpNotificationEvent::PermissionRequired => {
             if cfg.permission_sound_enabled {
-                Some(if cfg.permission_sound.is_empty() { "Purr" } else { &cfg.permission_sound })
+                Some(if cfg.permission_sound.is_empty() {
+                    "Purr"
+                } else {
+                    &cfg.permission_sound
+                })
             } else {
                 None
             }
