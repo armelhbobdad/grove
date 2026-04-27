@@ -1,10 +1,40 @@
-import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from "react";
-import { updateChatTitle, sendGraphChatMessage, checkCommands, getConfig } from "../../../api";
+import {
+  createElement,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  updateChatTitle,
+  sendGraphChatMessage,
+  checkCommands,
+  getConfig,
+  deleteChat,
+} from "../../../api";
 import type { CustomAgent } from "../../../api";
 import type { NodeStatus } from "../../../api/walkieTalkie";
 import { useRadioEvents } from "../../../hooks/useRadioEvents";
 import { AgentPicker, agentOptions } from "../../ui/AgentPicker";
-import { Maximize2, ZoomIn, ZoomOut, X, Pencil, Trash2, Bell, Send, Loader2 } from "lucide-react";
+import {
+  agentIconComponent,
+  agentIconUrl,
+} from "../../../utils/agentIcon";
+import {
+  ZoomIn,
+  ZoomOut,
+  X,
+  Pencil,
+  Trash2,
+  Bell,
+  Send,
+  Loader2,
+  Plus,
+  GitBranch,
+  MessageSquare,
+} from "lucide-react";
 import {
   forceCenter,
   forceCollide,
@@ -95,29 +125,6 @@ const EDGE_COLORS: Record<string, string> = {
   blocked: "var(--color-warning)",
 };
 
-const AGENT_ICON_MAP: Record<string, string> = {
-  claude: "claude-color",
-  codex: "openai",
-  "gpt-4": "openai",
-  "gpt-4o": "openai",
-  gpt: "openai",
-  openai: "openai",
-  gemini: "gemini-color",
-  copilot: "githubcopilot",
-  "github-copilot": "githubcopilot",
-  githubcopilot: "githubcopilot",
-  cursor: "cursor",
-  trae: "trae-color",
-  qwen: "qwen-color",
-  kimi: "kimi-color",
-  windsurf: "windsurf",
-  opencode: "opencode",
-  junie: "junie-color",
-  openclaw: "openclaw-color",
-  hermes: "hermes",
-  kiro: "kiro",
-};
-
 const ERROR_HINTS: Record<string, string> = {
   name_taken: "Name already taken",
   cycle_would_form: "Would create a cycle",
@@ -133,74 +140,9 @@ const ERROR_HINTS: Record<string, string> = {
   internal_error: "Internal error",
 };
 
-function agentIconUrl(agent: string): string {
-  const key = agent.toLowerCase().replace(/[\s._-]+/g, "");
-  const match = AGENT_ICON_MAP[key] ?? AGENT_ICON_MAP[agent.toLowerCase()];
-  const file = match ?? agent.toLowerCase();
-  return `/agent-icon/${file}.svg`;
-}
-
 function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
   return str.slice(0, max - 1) + "\u2026";
-}
-
-// Title that truncates by default and marquee-scrolls on hover when overflowing.
-// Mirrors OverflowTitle in TaskChat.tsx for visual consistency.
-function OverflowTitle({ text, className = "" }: { text: string; className?: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [hovered, setHovered] = useState(false);
-  const [shift, setShift] = useState(0);
-
-  const measure = useCallback(() => {
-    const c = containerRef.current;
-    const ct = contentRef.current;
-    if (!c || !ct) return;
-    setShift(Math.max(0, ct.scrollWidth - c.clientWidth));
-  }, []);
-
-  useEffect(() => {
-    if (typeof ResizeObserver === "undefined") {
-      measure();
-      window.addEventListener("resize", measure);
-      return () => window.removeEventListener("resize", measure);
-    }
-    const c = containerRef.current;
-    const ct = contentRef.current;
-    if (!c || !ct) return;
-    const obs = new ResizeObserver(() => measure());
-    measure();
-    obs.observe(c);
-    obs.observe(ct);
-    return () => obs.disconnect();
-  }, [measure, text]);
-
-  const shouldAnimate = hovered && shift > 8;
-  const style: (CSSProperties & { "--overflow-shift"?: string }) | undefined =
-    shouldAnimate ? { "--overflow-shift": `-${shift}px` } : undefined;
-
-  return (
-    <div
-      ref={containerRef}
-      className={`overflow-hidden whitespace-nowrap ${className}`}
-      title={text}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div
-        ref={contentRef}
-        style={style}
-        className={
-          shouldAnimate
-            ? "overflow-title-animate inline-block whitespace-nowrap"
-            : "truncate"
-        }
-      >
-        {text}
-      </div>
-    </div>
-  );
 }
 
 export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
@@ -228,6 +170,9 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         agent: string;
         name: string;
         duty: string;
+        /** When set, the new session is spawned with an edge from this chat —
+         *  toolbar's "Spawn Child" button populates it. */
+        fromChatId?: string;
       }
     | null
   >(null);
@@ -263,14 +208,29 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
     | null
   >(null);
   const [edgeLoading, setEdgeLoading] = useState(false);
-  const [edgeActionPos, setEdgeActionPos] = useState<{ x: number; y: number; edgeId: number } | null>(null);
-  const [showPurposeEdit, setShowPurposeEdit] = useState(false);
-  const [purposeEditValue, setPurposeEditValue] = useState("");
-  const [purposeEditEdgeId, setPurposeEditEdgeId] = useState<number | null>(null);
-  const [editingDuty, setEditingDuty] = useState<string | null>(null);
-  const [dutyValue, setDutyValue] = useState("");
-  const [editingName, setEditingName] = useState<string | null>(null);
-  const [nameValue, setNameValue] = useState("");
+  /**
+   * The floating toolbar morphs between four modes. `null` is the default
+   * compact pill (context info + action buttons). Other modes expand the
+   * pill into an inline form. Each form carries its own draft so Cancel
+   * discards cleanly.
+   */
+  type ToolbarMode =
+    | { kind: "send"; chatId: string }
+    | { kind: "edit"; chatId: string; name: string; duty: string }
+    | {
+        kind: "spawn";
+        fromChatId: string | null;
+        agent: string;
+        name: string;
+        duty: string;
+        /** Edge purpose (only when spawning a child from an existing node;
+         *  ignored otherwise). */
+        purpose: string;
+      }
+    | { kind: "edit-edge"; edgeId: number; purpose: string }
+    | { kind: "confirm-delete-node"; chatId: string; name: string }
+    | { kind: "confirm-delete-edge"; edgeId: number };
+  const [toolbarMode, setToolbarMode] = useState<ToolbarMode | null>(null);
   const [directMessage, setDirectMessage] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
 
@@ -476,7 +436,7 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          from_chat_id: null,
+          from_chat_id: spawnBubble.fromChatId ?? null,
           agent: spawnBubble.agent,
           name: spawnBubble.name.trim(),
           duty: spawnBubble.duty.trim() || undefined,
@@ -574,15 +534,11 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
   const handleSaveName = useCallback(
     async (chatId: string, next: string) => {
       const trimmed = next.trim();
-      if (!trimmed) {
-        setEditingName(null);
-        return;
-      }
+      if (!trimmed) return;
       if (nameSaveInFlightRef.current.has(chatId)) return;
       nameSaveInFlightRef.current.add(chatId);
       try {
         await updateChatTitle(projectId, taskId, chatId, trimmed);
-        setEditingName(null);
         refreshGraph();
       } catch (e) {
         showError("internal_error", String(e));
@@ -609,7 +565,6 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
           showError(err.code, err.error);
           return;
         }
-        setEditingDuty(null);
         refreshGraph();
         setToast({ message: "Duty updated", type: "success" });
         setTimeout(() => setToast(null), 2000);
@@ -636,8 +591,6 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
           showError(err.code, err.error);
           return;
         }
-        setShowPurposeEdit(false);
-        setEdgeActionPos(null);
         refreshGraph();
       } catch (e) {
         showError("internal_error", String(e));
@@ -648,7 +601,8 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
 
   const handleDeleteEdge = useCallback(
     async (edgeId: number) => {
-      if (!window.confirm("Delete this connection? Pending messages on this edge will also be cleared.")) return;
+      // Confirmation now happens in the toolbar `confirm-delete-edge` mode
+      // before this is invoked — no second window.confirm.
       try {
         const res = await fetch(
           `/api/v1/projects/${projectId}/tasks/${taskId}/graph/edges/${edgeId}`,
@@ -659,7 +613,6 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
           showError(err.code, err.error);
           return;
         }
-        setEdgeActionPos(null);
         setSelectedEdge(null);
         refreshGraph();
         setToast({ message: "Connection deleted", type: "success" });
@@ -934,32 +887,6 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
       className="relative w-full h-full overflow-hidden bg-[var(--color-bg)]"
       style={{ cursor: dragEdge ? "crosshair" : undefined }}
     >
-      <div className="absolute right-3 top-3 z-40 flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/90 p-1 shadow-sm">
-        <button
-          type="button"
-          className="flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]"
-          title="Zoom out"
-          onClick={() => zoomBy(0.85)}
-        >
-          <ZoomOut size={14} />
-        </button>
-        <button
-          type="button"
-          className="flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]"
-          title="Fit graph"
-          onClick={fitView}
-        >
-          <Maximize2 size={14} />
-        </button>
-        <button
-          type="button"
-          className="flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]"
-          title="Zoom in"
-          onClick={() => zoomBy(1.18)}
-        >
-          <ZoomIn size={14} />
-        </button>
-      </div>
       <svg
         ref={svgRef}
         width="100%"
@@ -1022,10 +949,11 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
           setSelectedNode(null);
           setSelectedEdge(null);
           setSelectedNodeId(null);
-          setEdgeActionPos(null);
-          setShowPurposeEdit(false);
           setEdgeBubble(null);
           setSpawnBubble(null);
+          // Empty-canvas click also cancels any open inline form so the
+          // toolbar returns to its neutral compact state.
+          setToolbarMode(null);
         }}
         onDoubleClick={(e) => {
           if ((e.target as SVGElement).tagName !== "svg") return;
@@ -1094,8 +1022,7 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
             setSelectedEdge(link.edge_id);
             setSelectedNode(null);
             setSelectedNodeId(null);
-            const mid = graphToScreen((sx + tx) / 2, (sy + ty) / 2);
-            setEdgeActionPos({ x: mid.x, y: mid.y, edgeId: link.edge_id });
+            setToolbarMode(null);
           };
           const mx = (sx + tx) / 2;
           const my = (sy + ty) / 2;
@@ -1232,6 +1159,19 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
                 opacity: isDisconnected ? 0.4 : 1,
                 filter: isDisconnected ? "grayscale(100%)" : undefined,
               }}
+              onDoubleClick={(e) => {
+                // Double-click → expand the toolbar into edit mode. Stop
+                // propagation so the canvas's own dblclick (spawn) doesn't
+                // also fire.
+                e.stopPropagation();
+                const fresh = data?.nodes.find((n) => n.chat_id === node.id);
+                setToolbarMode({
+                  kind: "edit",
+                  chatId: node.id,
+                  name: fresh?.name ?? node.name,
+                  duty: fresh?.duty ?? "",
+                });
+              }}
               onMouseDown={(e) => {
                 e.stopPropagation();
                 const startX = e.clientX;
@@ -1272,6 +1212,16 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
                     setSelectedNode(node.id);
                     setSelectedEdge(null);
                     setSelectedNodeId(node.id);
+                    // Switching to a different node cancels any in-progress
+                    // inline form bound to the previous selection — its
+                    // draft would be stale against the new target.
+                    setToolbarMode((prev) =>
+                      prev &&
+                      "chatId" in prev &&
+                      prev.chatId !== node.id
+                        ? null
+                        : prev,
+                    );
                     // Sync the chat panel to this node — same event the
                     // "Open Chat →" link in the popup card dispatches.
                     window.dispatchEvent(
@@ -1361,7 +1311,7 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
                 className={liveStatus === "connecting" ? "graph-edge-in-flight" : undefined}
               />
               <image
-                href={agentIconUrl(node.agent)}
+                href={agentIconUrl(node.agent) ?? ""}
                 x="-14"
                 y="-14"
                 width="28"
@@ -1547,229 +1497,6 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         })}
         </g>
       </svg>
-
-      {selectedNodeData && (() => {
-        const simNode = nodesRef.current.find((n) => n.id === selectedNodeId);
-        if (!simNode) return null;
-        const sp = graphToScreen(simNode.x ?? 0, simNode.y ?? 0);
-        const containerRect = containerRef.current?.getBoundingClientRect();
-        const cw = containerRect?.width ?? 800;
-        const ch = containerRect?.height ?? 600;
-        const cardWidth = 300;
-        const cardHeight = 340;
-        const gap = 14;
-        const margin = 8;
-        // Node radius in screen px (graph radius 22 × view zoom × svg scale).
-        const nodeR = 22 * view.k * sp.scale;
-
-        const rightAvail = cw - (sp.x + nodeR) - gap - margin;
-        const leftAvail = sp.x - nodeR - gap - margin;
-        let left: number;
-        if (rightAvail >= cardWidth) {
-          left = sp.x + nodeR + gap;
-        } else if (leftAvail >= cardWidth) {
-          left = sp.x - nodeR - gap - cardWidth;
-        } else {
-          // Neither side fits: pick the side with more room and clamp inside container.
-          left =
-            rightAvail >= leftAvail
-              ? Math.min(sp.x + nodeR + gap, cw - cardWidth - margin)
-              : Math.max(sp.x - nodeR - gap - cardWidth, margin);
-        }
-
-        let top = sp.y - cardHeight / 2;
-        top = Math.max(margin, Math.min(top, ch - cardHeight - margin));
-        const liveCardStatus = getNodeStatus(selectedNodeData.chat_id);
-        return (
-          <div
-            className="absolute z-30 w-[300px] rounded-[16px] border border-[color-mix(in_srgb,var(--color-border)_50%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_88%,transparent)] backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.14)] flex flex-col overflow-hidden"
-            style={{
-              left,
-              top,
-              maxHeight: "calc(100vh - 1.5rem)",
-            }}
-        >
-          {/* Header */}
-          <div className="flex items-center gap-2.5 px-3.5 pt-3 pb-2.5 select-none">
-            <div className="relative shrink-0">
-              <img
-                src={agentIconUrl(selectedNodeData.agent)}
-                className="w-7 h-7"
-                alt={selectedNodeData.agent}
-                onError={(e) => { e.currentTarget.style.display = "none"; }}
-              />
-              {/* Presence dot — replaces the small status pill */}
-              <span
-                className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-[var(--color-bg-secondary)]"
-                style={{ backgroundColor: STATUS_COLORS[liveCardStatus] || STATUS_COLORS.disconnected }}
-                title={liveCardStatus}
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              {editingName === selectedNodeData.chat_id ? (
-                <input
-                  autoFocus
-                  value={nameValue}
-                  onChange={(e) => setNameValue(e.target.value)}
-                  onBlur={() => handleSaveName(selectedNodeData.chat_id, nameValue)}
-                  onKeyDown={(e) => {
-                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                    if (e.key === "Enter") handleSaveName(selectedNodeData.chat_id, nameValue);
-                    else if (e.key === "Escape") setEditingName(null);
-                  }}
-                  className="w-full min-w-0 border-b border-[var(--color-highlight)] bg-transparent px-0 py-0 text-sm font-medium text-[var(--color-text)] outline-none"
-                />
-              ) : (
-                <div
-                  onDoubleClick={() => {
-                    setNameValue(selectedNodeData.name);
-                    setEditingName(selectedNodeData.chat_id);
-                  }}
-                  title="Double-click to rename"
-                  className="cursor-text"
-                >
-                  <OverflowTitle
-                    text={selectedNodeData.name}
-                    className="font-medium text-[var(--color-text)] text-sm"
-                  />
-                </div>
-              )}
-              <div className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
-                <span>{selectedNodeData.agent}</span>
-                <span aria-hidden>·</span>
-                <span style={{ color: STATUS_COLORS[liveCardStatus] || STATUS_COLORS.disconnected }}>
-                  {liveCardStatus}
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={() => { setSelectedNodeId(null); setSelectedNode(null); }}
-              className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Duty — clearer hierarchy: subtle inset card with stronger body text */}
-          <div className="px-3.5 pb-2.5 border-t border-[color-mix(in_srgb,var(--color-border)_35%,transparent)] pt-2.5">
-            <label className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">Duty</label>
-            {editingDuty === selectedNodeData.chat_id ? (
-              <div className="mt-1.5 space-y-1.5">
-                <textarea
-                  className="w-full px-2.5 py-2 text-[13px] leading-snug rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)] resize-y min-h-[68px]"
-                  value={dutyValue}
-                  onChange={(e) => setDutyValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault();
-                      handleUpdateDuty(selectedNodeData.chat_id, dutyValue);
-                    } else if (e.key === "Escape") {
-                      setEditingDuty(null);
-                    }
-                  }}
-                  autoFocus
-                  placeholder="Describe the duty for this agent..."
-                />
-                <div className="flex items-center justify-between">
-                  <span className="text-[9px] text-[var(--color-text-muted)]">⌘/Ctrl + Enter to save · Esc to cancel</span>
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => setEditingDuty(null)}
-                      className="px-2 py-1 text-[10px] rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={() => handleUpdateDuty(selectedNodeData.chat_id, dutyValue)}
-                      className="px-2.5 py-1 text-[10px] font-medium rounded-md bg-[var(--color-highlight)] text-white hover:opacity-90 transition-opacity"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div
-                className="mt-1.5 px-2.5 py-2 rounded-lg bg-[color-mix(in_srgb,var(--color-bg)_85%,transparent)] border border-[color-mix(in_srgb,var(--color-border)_30%,transparent)] text-[13px] leading-snug text-[var(--color-text)] cursor-text hover:border-[color-mix(in_srgb,var(--color-highlight)_50%,transparent)] transition-colors whitespace-pre-wrap break-words"
-                onClick={() => {
-                  setEditingDuty(selectedNodeData.chat_id);
-                  setDutyValue(selectedNodeData.duty || "");
-                }}
-                title="Click to edit"
-              >
-                {selectedNodeData.duty || (
-                  <span className="text-[var(--color-text-muted)] italic">Click to set duty…</span>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Pending Messages */}
-          {(selectedNodeData.pending_in > 0 || selectedNodeData.pending_out > 0) && (
-            <div className="px-3.5 pb-2.5 border-t border-[color-mix(in_srgb,var(--color-border)_35%,transparent)] pt-2.5">
-              <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold mb-1.5">Pending</div>
-              <div className="space-y-0.5 max-h-16 overflow-y-auto">
-                {selectedNodeData.pending_messages?.map((pm, i) => (
-                  <div key={i} className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
-                    <span className="font-medium">{pm.from_name}</span>
-                    <span>→</span>
-                    <span className="font-medium">{pm.to_name}</span>
-                    <span className="truncate">: {pm.body_excerpt}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Footer: direct send + open chat */}
-          <div className="px-3 pt-2 pb-2.5 border-t border-[color-mix(in_srgb,var(--color-border)_35%,transparent)]">
-            <div className="flex items-end gap-1.5">
-              <textarea
-                rows={1}
-                className="flex-1 min-h-[34px] max-h-32 px-2.5 py-2 text-[13px] leading-snug rounded-lg border border-[color-mix(in_srgb,var(--color-border)_45%,transparent)] bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)] resize-none transition-all"
-                placeholder={liveCardStatus === "disconnected" ? "Agent disconnected" : "Send a message…"}
-                value={directMessage}
-                onChange={(e) => setDirectMessage(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                  if (e.key === "Enter" && !e.shiftKey && directMessage.trim()) {
-                    e.preventDefault();
-                    handleDirectSend(selectedNodeData.chat_id, directMessage);
-                  }
-                }}
-                disabled={sendingMessage || liveCardStatus === "disconnected"}
-              />
-              <button
-                onClick={() => handleDirectSend(selectedNodeData.chat_id, directMessage)}
-                disabled={sendingMessage || !directMessage.trim() || liveCardStatus === "disconnected"}
-                className="h-8 w-8 flex items-center justify-center rounded-lg bg-[var(--color-highlight)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0"
-                title="Send (Enter)"
-              >
-                {sendingMessage ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Send className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between">
-              <span className="text-[9px] text-[var(--color-text-muted)]">Enter to send · Shift+Enter for newline</span>
-              <button
-                onClick={() => {
-                  window.dispatchEvent(
-                    new CustomEvent("grove:open-chat", { detail: { chatId: selectedNodeData.chat_id } }),
-                  );
-                }}
-                className="text-[10px] text-[var(--color-highlight)] hover:underline font-medium"
-              >
-                Open Chat →
-              </button>
-            </div>
-          </div>
-        </div>
-        );
-      })()}
 
       {spawnBubble && (() => {
         const containerRect = containerRef.current?.getBoundingClientRect();
@@ -1968,139 +1695,149 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         );
       })()}
 
-      {edgeActionPos && (() => {
-        const edge = data?.edges.find((e) => e.edge_id === edgeActionPos.edgeId);
-        const toNode = data?.nodes.find((n) => n.chat_id === edge?.to);
-        const fromNode = data?.nodes.find((n) => n.chat_id === edge?.from);
-        // Use live state, not the stale value baked into /graph at hydration.
-        const liveEdgeState = edge ? deriveEdgeState(edge.from, edge.to) : "idle";
-        const liveTargetStatus = edge ? getNodeStatus(edge.to) : "disconnected";
-        const showRemind = liveEdgeState === "blocked" && liveTargetStatus === "idle";
-        // Edge has pending iff the key exists; the value (excerpt) MAY be
-        // undefined for events that don't carry a body (e.g. PendingChanged
-        // delete) but `has` is the source of truth for the chip.
-        const pendingKey_ = edge ? pendingKey(edge.from, edge.to) : null;
-        const hasPending = pendingKey_ ? pendingPairsMap.has(pendingKey_) : false;
-        const pendingExcerpt = pendingKey_ ? pendingPairsMap.get(pendingKey_) : undefined;
-        const stateLabel: Record<string, string> = {
-          idle: "Idle",
-          in_flight: "In flight",
-          blocked: "Blocked",
-        };
-        const stateColor = EDGE_COLORS[liveEdgeState] || EDGE_COLORS.idle;
-        const containerRect = containerRef.current?.getBoundingClientRect();
-        const cw = containerRect?.width ?? 800;
-        const ch = containerRect?.height ?? 600;
-        const popW = showPurposeEdit ? 300 : 240;
-        // Rough height estimate including the new status row + optional pending block.
-        const baseH = showPurposeEdit ? 124 : showRemind ? 200 : 156;
-        const popH = baseH + (hasPending ? 56 : 0);
-        const left = Math.max(8, Math.min(edgeActionPos.x - popW / 2, cw - popW - 8));
-        const top = Math.max(8, Math.min(edgeActionPos.y + 14, ch - popH - 8));
-        return (
-          <div
-            className="absolute z-40 rounded-xl border border-[color-mix(in_srgb,var(--color-border)_55%,transparent)] bg-[color-mix(in_srgb,var(--color-bg-secondary)_92%,transparent)] backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.18)] overflow-hidden"
-            style={{ left, top, width: popW }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-3 pt-2 pb-1.5 border-b border-[color-mix(in_srgb,var(--color-border)_35%,transparent)]">
-              <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-                <span className="truncate font-medium text-[var(--color-text)]" title={fromNode?.name}>{fromNode?.name}</span>
-                <span className="shrink-0">→</span>
-                <span className="truncate font-medium text-[var(--color-text)]" title={toNode?.name}>{toNode?.name}</span>
-                <span className="ml-auto shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium"
-                  style={{
-                    backgroundColor: `color-mix(in srgb, ${stateColor} 18%, transparent)`,
-                    color: stateColor,
-                  }}
-                  title={`Edge state: ${liveEdgeState}`}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: stateColor }} />
-                  {stateLabel[liveEdgeState] ?? liveEdgeState}
-                </span>
-              </div>
-            </div>
-            {!showPurposeEdit && hasPending && (
-              <div className="px-3 pt-2 pb-2 border-b border-[color-mix(in_srgb,var(--color-border)_35%,transparent)]">
-                <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold mb-1">Pending message</div>
-                <div className="text-[11px] leading-snug text-[var(--color-text)] line-clamp-3 break-words">
-                  {pendingExcerpt ?? (
-                    <span className="italic text-[var(--color-text-muted)]">(message body unavailable)</span>
-                  )}
-                </div>
-              </div>
-            )}
-            {!showPurposeEdit ? (
-              <div className="p-1.5 flex flex-col gap-0.5">
-                <button
-                  onClick={() => {
-                    setPurposeEditEdgeId(edgeActionPos.edgeId);
-                    setPurposeEditValue(edge?.purpose || "");
-                    setShowPurposeEdit(true);
-                  }}
-                  className="flex items-center gap-2 px-2.5 py-1.5 text-[12px] rounded-md text-left hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text)] transition-colors"
-                >
-                  <Pencil className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                  <span className="flex-1">{edge?.purpose ? "Edit purpose" : "Set purpose"}</span>
-                </button>
-                {showRemind && (
-                  <button
-                    onClick={() => handleRemind(edgeActionPos.edgeId)}
-                    className="flex items-center gap-2 px-2.5 py-1.5 text-[12px] rounded-md text-left hover:bg-[var(--color-bg-tertiary)] text-[var(--color-warning)] transition-colors"
-                  >
-                    <Bell className="w-3.5 h-3.5" />
-                    <span className="flex-1">Remind target</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => handleDeleteEdge(edgeActionPos.edgeId)}
-                  className="flex items-center gap-2 px-2.5 py-1.5 text-[12px] rounded-md text-left hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)] text-[var(--color-error)] transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span className="flex-1">Delete connection</span>
-                </button>
-              </div>
-            ) : (
-              <div className="p-2.5 space-y-1.5">
-                <label className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">Purpose</label>
-                <textarea
-                  autoFocus
-                  className="w-full px-2.5 py-2 text-[13px] leading-snug rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)] resize-y min-h-[56px]"
-                  value={purposeEditValue}
-                  onChange={(e) => setPurposeEditValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && purposeEditEdgeId !== null) {
-                      e.preventDefault();
-                      handleUpdatePurpose(purposeEditEdgeId, purposeEditValue);
-                    } else if (e.key === "Escape") setShowPurposeEdit(false);
-                  }}
-                  placeholder="Why this connection exists"
-                />
-                <div className="flex justify-end gap-1.5">
-                  <button
-                    onClick={() => setShowPurposeEdit(false)}
-                    className="px-2.5 py-1 text-[11px] rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => purposeEditEdgeId !== null && handleUpdatePurpose(purposeEditEdgeId, purposeEditValue)}
-                    className="px-3 py-1 text-[11px] font-medium rounded-md bg-[var(--color-highlight)] text-white hover:opacity-90 transition-opacity"
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })()}
+
+      {/* Bottom context toolbar — replaces the legacy popup card. Always
+       *  rendered, content depends on what's selected. */}
+      <GraphContextToolbar
+        node={selectedNodeData}
+        edge={
+          selectedEdge != null
+            ? data?.edges.find((e) => e.edge_id === selectedEdge) ?? null
+            : null
+        }
+        nodeStatus={selectedNodeData ? getNodeStatus(selectedNodeData.chat_id) : null}
+        nodeNameById={(id) =>
+          data?.nodes.find((n) => n.chat_id === id)?.name ?? id
+        }
+        directMessage={directMessage}
+        sendingMessage={sendingMessage}
+        onDirectMessageChange={setDirectMessage}
+        onSendDirect={(chatId, text) => handleDirectSend(chatId, text)}
+        mode={toolbarMode}
+        defaultAgent={defaultAgent}
+        agentOptionsList={acpAgentOptions}
+        customAgentsList={customAgents}
+        onModeChange={setToolbarMode}
+        onEditNode={(node) =>
+          setToolbarMode({
+            kind: "edit",
+            chatId: node.chat_id,
+            name: node.name,
+            duty: node.duty ?? "",
+          })
+        }
+        onSpawnFrom={(node) =>
+          setToolbarMode({
+            kind: "spawn",
+            fromChatId: node.chat_id,
+            agent: defaultAgent,
+            name: "",
+            duty: "",
+            purpose: "",
+          })
+        }
+        onSubmitEdit={async (chatId, nextName, nextDuty) => {
+          const fresh = data?.nodes.find((n) => n.chat_id === chatId);
+          const tasks: Promise<unknown>[] = [];
+          if (nextName.trim() && nextName.trim() !== fresh?.name) {
+            tasks.push(handleSaveName(chatId, nextName));
+          }
+          if (nextDuty !== (fresh?.duty ?? "")) {
+            tasks.push(handleUpdateDuty(chatId, nextDuty));
+          }
+          await Promise.all(tasks);
+          setToolbarMode(null);
+        }}
+        onSubmitSpawn={async (fromChatId, agent, name, duty, purpose) => {
+          if (!agent || !name.trim()) return;
+          setSpawnLoading(true);
+          try {
+            const res = await fetch(
+              `/api/v1/projects/${projectId}/tasks/${taskId}/graph/spawn`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  from_chat_id: fromChatId,
+                  agent,
+                  name: name.trim(),
+                  duty: duty.trim() || undefined,
+                  // purpose only travels along an edge — drop it for orphan
+                  // spawns where there's no edge to label.
+                  purpose:
+                    fromChatId && purpose.trim() ? purpose.trim() : undefined,
+                }),
+              },
+            );
+            if (!res.ok) {
+              const err = await res.json();
+              showError(err.code, err.error);
+              return;
+            }
+            setToolbarMode(null);
+            refreshGraph();
+            setToast({ message: "Node created", type: "success" });
+            setTimeout(() => setToast(null), 2000);
+          } catch (e) {
+            showError("internal_error", String(e));
+          } finally {
+            setSpawnLoading(false);
+          }
+        }}
+        spawning={spawnLoading}
+        onDeleteNode={(node) =>
+          setToolbarMode({
+            kind: "confirm-delete-node",
+            chatId: node.chat_id,
+            name: node.name,
+          })
+        }
+        onConfirmDeleteNode={async (chatId) => {
+          try {
+            await deleteChat(projectId, taskId, chatId);
+            setSelectedNodeId(null);
+            setSelectedNode(null);
+            setToolbarMode(null);
+            refreshGraph();
+            setToast({ message: "Session deleted", type: "success" });
+            setTimeout(() => setToast(null), 2000);
+          } catch (e) {
+            showError("internal_error", String(e));
+          }
+        }}
+        onEditEdge={(edge) =>
+          setToolbarMode({
+            kind: "edit-edge",
+            edgeId: edge.edge_id,
+            purpose: edge.purpose ?? "",
+          })
+        }
+        onSubmitEditEdge={async (edgeId, purpose) => {
+          await handleUpdatePurpose(edgeId, purpose);
+          setToolbarMode(null);
+        }}
+        onRemindEdge={(edge) => handleRemind(edge.edge_id)}
+        onDeleteEdge={(edge) =>
+          setToolbarMode({ kind: "confirm-delete-edge", edgeId: edge.edge_id })
+        }
+        onConfirmDeleteEdge={async (edgeId) => {
+          await handleDeleteEdge(edgeId);
+          setToolbarMode(null);
+        }}
+        onNewSession={() => {
+          // No-op: New Session entry is handled by the toolbar itself, which
+          // sets toolbarMode = 'spawn' (no fromChatId). Kept as a hook for
+          // future telemetry / analytics if needed.
+        }}
+        zoomLevel={view.k}
+        onZoomIn={() => zoomBy(1.18)}
+        onZoomOut={() => zoomBy(0.85)}
+        onZoomFit={fitView}
+      />
 
       {toast && (
         <div
-          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg text-sm ${
+          className={`absolute bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg text-sm ${
             toast.type === "error"
               ? "bg-[var(--color-error)] text-white"
               : "bg-[var(--color-success)] text-white"
@@ -2110,5 +1847,954 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         </div>
       )}
     </div>
+  );
+}
+
+
+// ─── Bottom context toolbar ──────────────────────────────────────────────
+// Single floating pill that morphs between four modes:
+//   - compact     (default): context info + action buttons
+//   - send                  : inline message input
+//   - edit                  : name + duty form
+//   - spawn                 : agent picker + name + duty form
+// Shape changes are framer-motion `layout`-animated; child swaps fade with
+// AnimatePresence. The user perceives the toolbar as a single live surface
+// that grows / shrinks / reshapes around the active task.
+
+type ToolbarModeShape =
+  | { kind: "send"; chatId: string }
+  | { kind: "edit"; chatId: string; name: string; duty: string }
+  | {
+      kind: "spawn";
+      fromChatId: string | null;
+      agent: string;
+      name: string;
+      duty: string;
+      /** Edge purpose — only meaningful when fromChatId != null. */
+      purpose: string;
+    }
+  | { kind: "edit-edge"; edgeId: number; purpose: string }
+  | { kind: "confirm-delete-node"; chatId: string; name: string }
+  | { kind: "confirm-delete-edge"; edgeId: number };
+
+interface AcpAgentOption {
+  id: string;
+  value: string;
+  label: string;
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
+interface ToolbarProps {
+  node: GraphNode | null;
+  edge: GraphEdge | null;
+  nodeStatus: string | null;
+  nodeNameById: (id: string) => string;
+  directMessage: string;
+  sendingMessage: boolean;
+  spawning: boolean;
+  defaultAgent: string;
+  agentOptionsList: AcpAgentOption[];
+  customAgentsList: CustomAgent[];
+  mode: ToolbarModeShape | null;
+  onModeChange: (mode: ToolbarModeShape | null) => void;
+  onDirectMessageChange: (v: string) => void;
+  onSendDirect: (chatId: string, text: string) => void;
+  onEditNode: (node: GraphNode) => void;
+  onSpawnFrom: (node: GraphNode) => void;
+  onDeleteNode: (node: GraphNode) => void;
+  onEditEdge: (edge: GraphEdge) => void;
+  onRemindEdge: (edge: GraphEdge) => void;
+  onDeleteEdge: (edge: GraphEdge) => void;
+  onConfirmDeleteNode: (chatId: string) => void;
+  onConfirmDeleteEdge: (edgeId: number) => void;
+  onSubmitEditEdge: (edgeId: number, purpose: string) => void;
+  onNewSession: () => void;
+  onSubmitEdit: (chatId: string, name: string, duty: string) => void;
+  onSubmitSpawn: (
+    fromChatId: string | null,
+    agent: string,
+    name: string,
+    duty: string,
+    purpose: string,
+  ) => void;
+  zoomLevel: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomFit: () => void;
+}
+
+const FLOAT_PILL =
+  "rounded-3xl select-none border border-[color-mix(in_srgb,var(--color-border)_70%,transparent)] " +
+  "bg-[color-mix(in_srgb,var(--color-bg)_82%,transparent)] backdrop-blur-xl " +
+  "shadow-[0_10px_32px_rgba(0,0,0,0.16),0_2px_8px_rgba(0,0,0,0.06)] " +
+  "overflow-hidden";
+
+const MODE_TRANSITION = {
+  type: "spring" as const,
+  stiffness: 380,
+  damping: 32,
+  mass: 0.8,
+};
+
+function GraphContextToolbar(props: ToolbarProps) {
+  const {
+    node,
+    edge,
+    nodeStatus,
+    nodeNameById,
+    directMessage,
+    sendingMessage,
+    spawning,
+    defaultAgent,
+    agentOptionsList,
+    customAgentsList,
+    mode,
+    onModeChange,
+    onDirectMessageChange,
+    onSendDirect,
+    onEditNode,
+    onSpawnFrom,
+    onDeleteNode,
+    onEditEdge,
+    onRemindEdge,
+    onDeleteEdge,
+    onConfirmDeleteNode,
+    onConfirmDeleteEdge,
+    onSubmitEditEdge,
+    onNewSession,
+    onSubmitEdit,
+    onSubmitSpawn,
+    zoomLevel,
+    onZoomIn,
+    onZoomOut,
+    onZoomFit,
+  } = props;
+
+  // Active mode key drives AnimatePresence; the pill morphs around it.
+  // Cancellation when the selection moves elsewhere is handled upstream by
+  // the click handler that changed the selection.
+  const activeKey = mode?.kind ?? (node ? "node" : edge ? "edge" : "empty");
+
+  return (
+    <>
+      <motion.div
+        layout
+        transition={MODE_TRANSITION}
+        className={`absolute bottom-5 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100%-1.5rem)] ${FLOAT_PILL}`}
+        style={{ originY: 1 }}
+      >
+        <AnimatePresence mode="popLayout" initial={false}>
+          {mode?.kind === "send" && node && nodeStatus && (
+            <motion.div
+              key="send"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="px-3 py-2"
+            >
+              <SendForm
+                placeholder={
+                  nodeStatus === "disconnected"
+                    ? "Agent disconnected"
+                    : `Send to ${node.name}…`
+                }
+                value={directMessage}
+                disabled={sendingMessage || nodeStatus === "disconnected"}
+                sending={sendingMessage}
+                onChange={onDirectMessageChange}
+                onSend={() => {
+                  if (directMessage.trim()) {
+                    onSendDirect(node.chat_id, directMessage);
+                    onModeChange(null);
+                  }
+                }}
+                onCancel={() => onModeChange(null)}
+              />
+            </motion.div>
+          )}
+          {mode?.kind === "edit" && (
+            <motion.div
+              key="edit"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="p-3 w-[420px]"
+            >
+              <EditForm
+                name={mode.name}
+                duty={mode.duty}
+                onNameChange={(v) =>
+                  onModeChange(
+                    mode.kind === "edit" ? { ...mode, name: v } : mode,
+                  )
+                }
+                onDutyChange={(v) =>
+                  onModeChange(
+                    mode.kind === "edit" ? { ...mode, duty: v } : mode,
+                  )
+                }
+                onSubmit={() =>
+                  onSubmitEdit(mode.chatId, mode.name, mode.duty)
+                }
+                onCancel={() => onModeChange(null)}
+              />
+            </motion.div>
+          )}
+          {mode?.kind === "spawn" && (
+            <motion.div
+              key="spawn"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="p-3 w-[420px]"
+            >
+              <SpawnForm
+                agent={mode.agent}
+                name={mode.name}
+                duty={mode.duty}
+                purpose={mode.purpose}
+                fromName={
+                  mode.fromChatId ? nodeNameById(mode.fromChatId) : null
+                }
+                agents={agentOptionsList}
+                customAgents={customAgentsList}
+                onAgentChange={(v) =>
+                  onModeChange(
+                    mode.kind === "spawn" ? { ...mode, agent: v } : mode,
+                  )
+                }
+                onNameChange={(v) =>
+                  onModeChange(
+                    mode.kind === "spawn" ? { ...mode, name: v } : mode,
+                  )
+                }
+                onDutyChange={(v) =>
+                  onModeChange(
+                    mode.kind === "spawn" ? { ...mode, duty: v } : mode,
+                  )
+                }
+                onPurposeChange={(v) =>
+                  onModeChange(
+                    mode.kind === "spawn" ? { ...mode, purpose: v } : mode,
+                  )
+                }
+                submitting={spawning}
+                onSubmit={() =>
+                  onSubmitSpawn(
+                    mode.fromChatId,
+                    mode.agent,
+                    mode.name,
+                    mode.duty,
+                    mode.purpose,
+                  )
+                }
+                onCancel={() => onModeChange(null)}
+              />
+            </motion.div>
+          )}
+          {mode?.kind === "edit-edge" && (
+            <motion.div
+              key="edit-edge"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="p-3 w-[420px]"
+            >
+              <EditEdgeForm
+                purpose={mode.purpose}
+                onPurposeChange={(v) =>
+                  onModeChange(
+                    mode.kind === "edit-edge"
+                      ? { ...mode, purpose: v }
+                      : mode,
+                  )
+                }
+                onSubmit={() => onSubmitEditEdge(mode.edgeId, mode.purpose)}
+                onCancel={() => onModeChange(null)}
+              />
+            </motion.div>
+          )}
+          {mode?.kind === "confirm-delete-node" && (
+            <motion.div
+              key="confirm-del-node"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="flex items-center gap-2 px-3 py-2"
+            >
+              <ConfirmDeleteRow
+                label={
+                  <>
+                    Delete{" "}
+                    <span className="font-semibold">{mode.name}</span>?
+                    <span className="text-[10.5px] text-[var(--color-text-muted)] ml-1">
+                      (chat + all its edges)
+                    </span>
+                  </>
+                }
+                onConfirm={() => onConfirmDeleteNode(mode.chatId)}
+                onCancel={() => onModeChange(null)}
+              />
+            </motion.div>
+          )}
+          {mode?.kind === "confirm-delete-edge" && (
+            <motion.div
+              key="confirm-del-edge"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="flex items-center gap-2 px-3 py-2"
+            >
+              <ConfirmDeleteRow
+                label={<>Delete this connection?</>}
+                onConfirm={() => onConfirmDeleteEdge(mode.edgeId)}
+                onCancel={() => onModeChange(null)}
+              />
+            </motion.div>
+          )}
+          {!mode && node && nodeStatus && (
+            <motion.div
+              key={`node-${node.chat_id}`}
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="flex items-center gap-2 px-3 py-2"
+            >
+              <NodeContextSection
+                node={node}
+                status={nodeStatus}
+                onSendClick={() =>
+                  onModeChange({ kind: "send", chatId: node.chat_id })
+                }
+                onEditClick={() => onEditNode(node)}
+                onSpawnFromClick={() => onSpawnFrom(node)}
+                onDeleteClick={() => onDeleteNode(node)}
+              />
+            </motion.div>
+          )}
+          {!mode && !node && edge && (
+            <motion.div
+              key={`edge-${edge.edge_id}`}
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="flex items-center gap-2 px-3 py-2"
+            >
+              <EdgeContextSection
+                edge={edge}
+                fromName={nodeNameById(edge.from)}
+                toName={nodeNameById(edge.to)}
+                onEditClick={() => onEditEdge(edge)}
+                onRemindClick={() => onRemindEdge(edge)}
+                onDeleteClick={() => onDeleteEdge(edge)}
+              />
+            </motion.div>
+          )}
+          {!mode && !node && !edge && (
+            <motion.div
+              key="empty"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={MODE_TRANSITION}
+              className="flex items-center gap-2 px-3 py-2"
+            >
+              <EmptyContextSection
+                onNewSession={() => {
+                  onModeChange({
+                    kind: "spawn",
+                    fromChatId: null,
+                    agent: defaultAgent,
+                    name: "",
+                    duty: "",
+                    purpose: "",
+                  });
+                  onNewSession?.();
+                }}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+
+      {/* Zoom widget: zoom out, current level (display-only label), zoom in,
+       *  divider, "Reset" text button. The label is intentionally not a
+       *  button — users were misreading it as an editable percentage. */}
+      <motion.div
+        layout
+        transition={MODE_TRANSITION}
+        className={`absolute bottom-5 right-5 z-40 flex items-center gap-0.5 px-1.5 py-1.5 ${FLOAT_PILL}`}
+        key={`zoom-${activeKey}`}
+      >
+        <button
+          type="button"
+          onClick={onZoomOut}
+          title="Zoom out"
+          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)] transition-colors"
+        >
+          <ZoomOut size={14} />
+        </button>
+        <span className="flex h-7 px-2 items-center justify-center text-[10.5px] font-mono tabular-nums text-[var(--color-text-muted)] select-none">
+          {Math.round(zoomLevel * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={onZoomIn}
+          title="Zoom in"
+          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)] transition-colors"
+        >
+          <ZoomIn size={14} />
+        </button>
+        <span
+          className="mx-1 h-4 w-px bg-[color-mix(in_srgb,var(--color-border)_70%,transparent)]"
+          aria-hidden
+        />
+        <button
+          type="button"
+          onClick={onZoomFit}
+          title="Reset zoom and fit graph to view"
+          className="flex h-7 px-3 items-center justify-center rounded-full text-[11px] font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)] transition-colors"
+        >
+          Reset
+        </button>
+      </motion.div>
+    </>
+  );
+}
+
+function EmptyContextSection({ onNewSession }: { onNewSession: () => void }) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onNewSession}
+        className="flex items-center gap-1.5 h-7 px-3 rounded-full bg-[var(--color-highlight)] text-[12px] font-medium text-white hover:opacity-90 transition-opacity shadow-sm"
+        title="Create a new session"
+      >
+        <Plus className="w-3.5 h-3.5" />
+        <span>New Session</span>
+      </button>
+      <span className="text-[11px] text-[var(--color-text-muted)] whitespace-nowrap">
+        Click a node to switch chat · double-click to edit · drag to rearrange
+      </span>
+    </>
+  );
+}
+
+function NodeContextSection({
+  node,
+  status,
+  onSendClick,
+  onEditClick,
+  onSpawnFromClick,
+  onDeleteClick,
+}: {
+  node: GraphNode;
+  status: string;
+  onSendClick: () => void;
+  onEditClick: () => void;
+  onSpawnFromClick: () => void;
+  onDeleteClick: () => void;
+}) {
+  const Icon = agentIconComponent(node.agent);
+  const dotColor = STATUS_COLORS[status] || STATUS_COLORS.disconnected;
+  const isDisconnected = status === "disconnected";
+  return (
+    <>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="relative shrink-0">
+          {createElement(Icon, { size: 16, className: "block" })}
+          <span
+            className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-[var(--color-bg)]"
+            style={{ backgroundColor: dotColor }}
+            title={status}
+          />
+        </span>
+        <span className="text-[12px] font-medium text-[var(--color-text)] truncate max-w-[180px]">
+          {node.name}
+        </span>
+        <span className="text-[10px] text-[var(--color-text-muted)] shrink-0">
+          {status}
+        </span>
+      </div>
+      <div className="ml-2 flex items-center gap-1">
+        <ToolbarButton
+          icon={<Send className="w-3.5 h-3.5" />}
+          label="Send"
+          onClick={onSendClick}
+          disabled={isDisconnected}
+          disabledTitle="Agent disconnected"
+        />
+        <ToolbarButton
+          icon={<GitBranch className="w-3.5 h-3.5" />}
+          label="Spawn Child"
+          onClick={onSpawnFromClick}
+        />
+        <ToolbarButton
+          icon={<Pencil className="w-3.5 h-3.5" />}
+          label="Edit"
+          onClick={onEditClick}
+        />
+        <ToolbarButton
+          icon={<Trash2 className="w-3.5 h-3.5" />}
+          label="Delete"
+          onClick={onDeleteClick}
+          danger
+        />
+      </div>
+    </>
+  );
+}
+
+function SendForm({
+  placeholder,
+  value,
+  disabled,
+  sending,
+  onChange,
+  onSend,
+  onCancel,
+}: {
+  placeholder: string;
+  value: string;
+  disabled: boolean;
+  sending: boolean;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 w-[480px] max-w-full">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSend();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        placeholder={placeholder}
+        disabled={disabled}
+        className="flex-1 min-w-0 h-8 px-3 text-[12.5px] rounded-full border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)]"
+      />
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={disabled || !value.trim()}
+        className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-highlight)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+        title="Send (Enter)"
+      >
+        {sending ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        ) : (
+          <Send className="w-3.5 h-3.5" />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="h-8 px-3 text-[11.5px] rounded-full text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+function EditForm({
+  name,
+  duty,
+  onNameChange,
+  onDutyChange,
+  onSubmit,
+  onCancel,
+}: {
+  name: string;
+  duty: string;
+  onNameChange: (v: string) => void;
+  onDutyChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-2"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          onSubmit();
+        }
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <Pencil className="w-3.5 h-3.5 text-[var(--color-text-muted)] shrink-0" />
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder="Name"
+          className="flex-1 h-8 px-3 text-[12.5px] rounded-full border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)]"
+        />
+      </div>
+      <textarea
+        value={duty}
+        onChange={(e) => onDutyChange(e.target.value)}
+        placeholder="Duty — what this session is responsible for…"
+        rows={3}
+        className="px-3 py-2 text-[12.5px] leading-snug rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)] resize-none min-h-[64px]"
+      />
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-[var(--color-text-muted)]">
+          ⌘/Ctrl + Enter to save · Esc to cancel
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-7 px-3 text-[11.5px] rounded-full text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            className="h-7 px-3 text-[11.5px] font-medium rounded-full bg-[var(--color-highlight)] text-white hover:opacity-90 transition-opacity"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SpawnForm({
+  agent,
+  name,
+  duty,
+  purpose,
+  fromName,
+  agents,
+  customAgents,
+  submitting,
+  onAgentChange,
+  onNameChange,
+  onDutyChange,
+  onPurposeChange,
+  onSubmit,
+  onCancel,
+}: {
+  agent: string;
+  name: string;
+  duty: string;
+  purpose: string;
+  fromName: string | null;
+  agents: AcpAgentOption[];
+  customAgents: CustomAgent[];
+  submitting: boolean;
+  onAgentChange: (v: string) => void;
+  onNameChange: (v: string) => void;
+  onDutyChange: (v: string) => void;
+  onPurposeChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-2"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          onSubmit();
+        }
+      }}
+    >
+      <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
+        <Plus className="w-3.5 h-3.5 shrink-0" />
+        <span className="truncate">
+          {fromName ? `Spawn child from ${fromName}` : "Spawn new session"}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="shrink-0">
+          <AgentPicker
+            value={agent}
+            onChange={onAgentChange}
+            allowCustom={false}
+            options={agents}
+            customAgents={customAgents}
+            triggerShape="pill"
+            triggerSize="compact"
+          />
+        </div>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder="Session name"
+          className="flex-1 h-8 px-3 text-[12.5px] rounded-full border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)]"
+        />
+      </div>
+      <textarea
+        value={duty}
+        onChange={(e) => onDutyChange(e.target.value)}
+        placeholder="Duty (optional)"
+        rows={2}
+        className="px-3 py-2 text-[12.5px] leading-snug rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)] resize-none min-h-[48px]"
+      />
+      {fromName && (
+        // Edge purpose only applies when there's a parent edge to label —
+        // orphan spawns (no fromName) hide it to keep the form minimal.
+        <input
+          value={purpose}
+          onChange={(e) => onPurposeChange(e.target.value)}
+          placeholder="Purpose of this connection (optional)"
+          className="h-8 px-3 text-[12.5px] rounded-full border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)]"
+        />
+      )}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-[var(--color-text-muted)]">
+          ⌘/Ctrl + Enter to spawn · Esc to cancel
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-7 px-3 text-[11.5px] rounded-full text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={submitting || !name.trim() || !agent}
+            className="h-7 px-3 text-[11.5px] font-medium rounded-full bg-[var(--color-highlight)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity flex items-center gap-1.5"
+          >
+            {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
+            Spawn
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EdgeContextSection({
+  edge,
+  fromName,
+  toName,
+  onEditClick,
+  onRemindClick,
+  onDeleteClick,
+}: {
+  edge: GraphEdge;
+  fromName: string;
+  toName: string;
+  onEditClick: () => void;
+  onRemindClick: () => void;
+  onDeleteClick: () => void;
+}) {
+  const hasPending = !!edge.pending_message;
+  return (
+    <>
+      <div className="flex items-center gap-2 min-w-0">
+        <MessageSquare className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-muted)]" />
+        <span className="text-[12px] text-[var(--color-text)] truncate">
+          <span className="font-medium">{fromName}</span>
+          <span className="mx-1.5 text-[var(--color-text-muted)]">→</span>
+          <span className="font-medium">{toName}</span>
+          {edge.purpose && (
+            <span className="ml-2 text-[var(--color-text-muted)]">
+              · {edge.purpose}
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="ml-2 flex items-center gap-1">
+        <ToolbarButton
+          icon={<Pencil className="w-3.5 h-3.5" />}
+          label="Edit Purpose"
+          onClick={onEditClick}
+        />
+        <ToolbarButton
+          icon={<Bell className="w-3.5 h-3.5" />}
+          label="Remind"
+          onClick={onRemindClick}
+          disabled={!hasPending}
+          disabledTitle="No pending message on this edge"
+        />
+        <ToolbarButton
+          icon={<Trash2 className="w-3.5 h-3.5" />}
+          label="Delete"
+          onClick={onDeleteClick}
+          danger
+        />
+      </div>
+    </>
+  );
+}
+
+function ToolbarButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+  disabledTitle,
+  danger,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+  danger?: boolean;
+}) {
+  const base =
+    "flex items-center gap-1 h-7 px-2.5 rounded-full text-[11.5px] font-medium transition-colors";
+  const enabled = danger
+    ? "text-[var(--color-error)] hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)]"
+    : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]";
+  const disabledCls =
+    "text-[var(--color-text-muted)] opacity-50 cursor-not-allowed";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={disabled ? disabledTitle : label}
+      className={`${base} ${disabled ? disabledCls : enabled}`}
+    >
+      {icon}
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
+
+function EditEdgeForm({
+  purpose,
+  onPurposeChange,
+  onSubmit,
+  onCancel,
+}: {
+  purpose: string;
+  onPurposeChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-2"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          onSubmit();
+        }
+      }}
+    >
+      <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
+        <Pencil className="w-3.5 h-3.5 shrink-0" />
+        <span>Edit connection purpose</span>
+      </div>
+      <textarea
+        autoFocus
+        value={purpose}
+        onChange={(e) => onPurposeChange(e.target.value)}
+        placeholder="Why does this connection exist?"
+        rows={2}
+        className="px-3 py-2 text-[12.5px] leading-snug rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-highlight)] resize-none min-h-[48px]"
+      />
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-[var(--color-text-muted)]">
+          ⌘/Ctrl + Enter to save · Esc to cancel
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-7 px-3 text-[11.5px] rounded-full text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            className="h-7 px-3 text-[11.5px] font-medium rounded-full bg-[var(--color-highlight)] text-white hover:opacity-90 transition-opacity"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Inline confirm-delete row. Replaces window.confirm so the confirmation lives
+ * in the same toolbar surface and matches the app's visual language.
+ */
+function ConfirmDeleteRow({
+  label,
+  onConfirm,
+  onCancel,
+}: {
+  label: React.ReactNode;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-2 min-w-0 text-[12px] text-[var(--color-text)] pr-2">
+        <Trash2 className="w-3.5 h-3.5 shrink-0 text-[var(--color-error)]" />
+        <span className="truncate">{label}</span>
+      </div>
+      <button
+        type="button"
+        onClick={onCancel}
+        autoFocus
+        className="h-7 px-3 text-[11.5px] font-medium rounded-full border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={onConfirm}
+        className="h-7 px-3 text-[11.5px] font-medium rounded-full bg-[var(--color-error)] text-white hover:opacity-90 transition-opacity"
+      >
+        Confirm Delete
+      </button>
+    </>
   );
 }
