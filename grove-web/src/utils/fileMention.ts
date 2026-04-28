@@ -131,6 +131,10 @@ export function filterMentionItems(
  */
 export function buildAgentMentionItems(input: {
   spawnAgents: { value: string; label: string }[];
+  /** Custom Agents (personas) that should appear as additional spawn targets.
+   *  `id` is used as the spawn template's `agentName` so backend resolves the
+   *  persona id → base_agent + system prompt at session create time. */
+  spawnPersonas?: { id: string; name: string; base_agent: string; duty?: string }[];
   outgoing: { session_id: string; name: string; agent: string; duty?: string }[];
   pending_replies: {
     session_id: string;
@@ -177,6 +181,24 @@ export function buildAgentMentionItems(input: {
       displayName: a.label,
       category: "Spawn agent",
       agentName: a.value,
+    });
+  }
+
+  // Custom Agents (personas) — listed alongside built-in spawn targets so the
+  // user can @-spawn an "Engineer" / "QA Reviewer" persona in one step. The
+  // backend resolves `agentName = persona.id` to the underlying base_agent on
+  // session create and injects the persona's system prompt.
+  for (const p of input.spawnPersonas ?? []) {
+    items.push({
+      kind: "agent_spawn",
+      path: `@spawn-${p.id}`,
+      isDir: false,
+      displayName: p.name,
+      category: "Spawn agent",
+      // `agentName = persona.id` — backend resolves to base_agent + injects
+      // system prompt; frontend `agentIconComponent` reads the persona icon
+      // registry to pick the brand icon transparently.
+      agentName: p.id,
     });
   }
 

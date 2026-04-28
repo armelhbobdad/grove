@@ -293,6 +293,20 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_pending_to ON agent_pending_message(to_session);
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_pair ON agent_pending_message(from_session, to_session);
+
+        -- Custom Agent (persona): 用户基于已有 ACP base agent 定制的身份配置
+        CREATE TABLE IF NOT EXISTS custom_agent (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            base_agent    TEXT NOT NULL,
+            model         TEXT,
+            mode          TEXT,
+            effort        TEXT,
+            duty          TEXT,
+            system_prompt TEXT NOT NULL DEFAULT '',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        );
     ",
     )?;
 

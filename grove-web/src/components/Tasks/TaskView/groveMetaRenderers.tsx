@@ -1,5 +1,5 @@
 import { createElement, type ReactNode } from "react";
-import { agentIconComponent } from "../../../utils/agentIcon";
+import { agentIconComponent, resolveAgentIcon } from "../../../utils/agentIcon";
 import type { GroveMetaEnvelope } from "../../../utils/groveMeta";
 
 /**
@@ -79,7 +79,12 @@ function pillWithVerb(
 
 function renderMentionSpawn(env: GroveMetaEnvelope): ReactNode {
   const data = env.data as unknown as MentionSpawnData;
-  return pillWithVerb(data.agent, "Spawn", data.agent, `Spawn ${data.agent}`);
+  // Persona ids resolve to a friendly label (the persona name) via the
+  // shared icon util's registry; built-in agent keys also resolve to their
+  // brand label (e.g. "Claude Code"). Fall back to the raw value only when
+  // neither registry has the key.
+  const label = resolveAgentIcon(data.agent).label || data.agent;
+  return pillWithVerb(data.agent, "Spawn", label, `Spawn ${label}`);
 }
 
 function renderMentionSend(env: GroveMetaEnvelope): ReactNode {

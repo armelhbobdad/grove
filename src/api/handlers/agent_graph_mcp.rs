@@ -145,6 +145,15 @@ not need to pass it. All tools operate within the caller's task only.
 - grove_agent_contacts: list who you can reach, who's awaiting your reply, who you're awaiting
 - grove_agent_capability: inspect models / modes / thought_levels of any session in your task
 
+Custom Agents (personas):
+- The user can configure "Custom Agents" in Settings — each is a base agent
+  (claude / codex / etc) preset with a model, mode, effort, and a system prompt.
+- `grove_agent_contacts` returns a `available_custom_agents[]` list. To spawn
+  one of them, pass that entry's `id` (e.g. "ca-...") as `grove_agent_spawn.agent`.
+- The spawn behaves exactly like a normal base-agent spawn except the new
+  session is pre-seeded with the persona's system prompt on Create. Resume
+  paths see no extra prompt.
+
 Constraints:
 - send requires an existing edge (no_edge if missing); single-in-flight per A→B
 - duty is locked once set; pass `duty` only when the target has none

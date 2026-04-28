@@ -58,6 +58,7 @@ import {
   VSCodeIcon,
   agentOptions,
   FileMentionDropdown,
+  AgentPickerMenuItems,
 } from "../../ui";
 import {
   buildMentionItems,
@@ -73,6 +74,8 @@ import { renderGroveMetaEnvelope } from "./groveMetaRenderers";
 import {
   agentIconComponent,
   agentIconUrl,
+  loadCustomAgentPersonas as loadCustomAgentPersonasIcon,
+  usePersonaRegistry,
 } from "../../../utils/agentIcon";
 import type { MentionItem } from "../../../utils/fileMention";
 import { getMentionCandidates } from "../../../api";
@@ -101,8 +104,9 @@ import {
   takeControl,
   readFile,
   updateNotes,
+  listCustomAgents,
 } from "../../../api";
-import type { ChatSessionResponse, CustomAgent } from "../../../api";
+import type { ChatSessionResponse, CustomAgentServer, CustomAgentPersona } from "../../../api";
 import { openExternalUrl } from "../../../utils/openExternal";
 import "./task-chat.css";
 
@@ -1155,7 +1159,8 @@ export function TaskChat({
     Record<string, boolean>
   >({});
   const [acpAvailabilityLoaded, setAcpAvailabilityLoaded] = useState(false);
-  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
+  const [customAgents, setCustomAgents] = useState<CustomAgentServer[]>([]);
+  const [customAgentPersonas, setCustomAgentPersonas] = useState<CustomAgentPersona[]>([]);
   const headerAgentPickerRef = useRef<HTMLDivElement>(null);
   const sidebarAgentPickerRef = useRef<HTMLDivElement>(null);
   const agentPickerMenuRef = useRef<HTMLDivElement>(null);
@@ -1236,6 +1241,10 @@ export function TaskChat({
     null,
   );
   const [editingPendingValue, setEditingPendingValue] = useState("");
+  // Subscribe to persona registry — re-renders this tree (and the picker /
+  // chip / icon descendants that read `agentIconComponent` / `resolveAgentIcon`)
+  // whenever a persona is created / edited / deleted from any page.
+  usePersonaRegistry();
   const [agentLabel, setAgentLabel] = useState("Chat");
   const [AgentIcon, setAgentIcon] = useState<React.ComponentType<{
     size?: number;
@@ -1472,24 +1481,36 @@ export function TaskChat({
 
   // Check ACP agent availability on mount
   useEffect(() => {
+    let cancelled = false;
     const checkAvailability = async () => {
       try {
         const acpCheckCmds = new Set<string>();
         for (const opt of agentOptions) {
           if (opt.acpCheck) acpCheckCmds.add(opt.acpCheck);
         }
-        const [cmdResults, cfg] = await Promise.all([
+        const [cmdResults, cfg, personas] = await Promise.all([
           checkCommands([...acpCheckCmds]),
           getConfig(),
+          // Centralized loader — only the most-recent in-flight request
+          // wins the icon-registry write, so a stale fetch from a previous
+          // mount can't clobber fresher data we just got elsewhere.
+          loadCustomAgentPersonasIcon(() =>
+            listCustomAgents().catch(() => [] as CustomAgentPersona[]),
+          ),
         ]);
+        if (cancelled) return;
         setAcpAgentAvailability(cmdResults);
         setCustomAgents(cfg.acp?.custom_agents ?? []);
+        setCustomAgentPersonas(personas);
       } catch {
         /* fail-open */
       }
-      setAcpAvailabilityLoaded(true);
+      if (!cancelled) setAcpAvailabilityLoaded(true);
     };
     checkAvailability();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Compute available ACP agent options
@@ -1507,9 +1528,10 @@ export function TaskChat({
   }, [acpAgentAvailability, acpAvailabilityLoaded]);
 
   const getChatIcon = (agentId: string) => {
-    // Custom agents (user-configured remote / local) take precedence — they
-    // aren't in the static agent table. Builtins fall through to the shared
-    // `agentIcon` resolver, which handles every value/id/icon_id/alias.
+    // Custom Agent Server (user-configured remote / local) takes precedence
+    // over the static brand table — servers aren't registered with
+    // agentIconComponent. Personas are resolved transparently by the util
+    // (it consults the persona registry seeded at fetch time).
     const custom = customAgents.find((agent) => agent.id === agentId);
     if (custom?.type === "remote") return Globe;
     if (custom) return Terminal;
@@ -1535,25 +1557,36 @@ export function TaskChat({
       return { label: sender, Icon: Bot };
     },
     // getChatIcon closes over agentOptions (constant) + customAgents (state).
+    // Personas are resolved transparently by `agentIconComponent` via the
+    // shared icon util's registry, so they don't need to be in deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chats, customAgents],
   );
 
   // Resolve agent label and icon from active chat's agent
   useEffect(() => {
-    const resolve = (cmd: string, customAgents?: CustomAgent[]) => {
+    const resolve = (cmd: string, customAgents?: CustomAgentServer[]) => {
       const match = agentOptions.find((a) => a.value === cmd);
       if (match) {
         setAgentLabel(match.label);
         if (match.icon) setAgentIcon(() => match.icon!);
+        return;
+      }
+      // Check Custom Agents (personas) first — their id starts with "ca-"
+      const persona = customAgentPersonas.find((p) => p.id === cmd);
+      if (persona) {
+        setAgentLabel(persona.name);
+        // Icon falls through to whatever the base agent's icon is. Look it up.
+        const base = agentOptions.find((a) => a.id === persona.base_agent);
+        if (base?.icon) setAgentIcon(() => base.icon!);
+        return;
+      }
+      // Custom Agent Servers
+      const custom = customAgents?.find((a) => a.id === cmd);
+      if (custom) {
+        setAgentLabel(custom.name);
       } else {
-        // Check custom agents
-        const custom = customAgents?.find((a) => a.id === cmd);
-        if (custom) {
-          setAgentLabel(custom.name);
-        } else {
-          setAgentLabel(cmd);
-        }
+        setAgentLabel(cmd);
       }
     };
 
@@ -1569,7 +1602,7 @@ export function TaskChat({
         )
         .catch(() => resolve("claude"));
     }
-  }, [activeChat]);
+  }, [activeChat, customAgentPersonas]);
 
   // ─── @ mention file list with TTL cache (5s) ──────────────────────
   const TASK_FILES_TTL_MS = 10_000;
@@ -1616,11 +1649,18 @@ export function TaskChat({
     const spawnAgents = acpAgentOptions
       .filter((o) => !o.disabled)
       .map((o) => ({ value: o.value, label: o.label }));
+    const spawnPersonas = customAgentPersonas.map((p) => ({
+      id: p.id,
+      name: p.name,
+      base_agent: p.base_agent,
+      duty: p.duty,
+    }));
     getMentionCandidates(projectId, task.id, activeChatId)
       .then((resp) => {
         setAgentMentionItems(
           buildAgentMentionItems({
             spawnAgents,
+            spawnPersonas,
             outgoing: resp.outgoing,
             pending_replies: resp.pending_replies,
           }),
@@ -1630,12 +1670,13 @@ export function TaskChat({
         setAgentMentionItems(
           buildAgentMentionItems({
             spawnAgents,
+            spawnPersonas,
             outgoing: [],
             pending_replies: [],
           }),
         );
       });
-  }, [projectId, task.id, activeChatId, acpAgentOptions]);
+  }, [projectId, task.id, activeChatId, acpAgentOptions, customAgentPersonas]);
 
   useEffect(() => {
     refreshAgentMentionCandidates();
@@ -1908,12 +1949,18 @@ export function TaskChat({
     if (!showAgentPicker) return;
 
     const close = () => setShowAgentPicker(false);
+    const onScroll = (e: Event) => {
+      // Don't close when the user scrolls inside the dropdown itself.
+      const menu = agentPickerMenuRef.current;
+      if (menu && e.target instanceof Node && menu.contains(e.target)) return;
+      close();
+    };
     window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScroll, true);
 
     return () => {
       window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [showAgentPicker]);
 
@@ -2109,7 +2156,33 @@ export function TaskChat({
       void (async () => {
         try {
           const fresh = await listChats(projectId, task.id);
+          const freshIds = new Set(fresh.map((chat) => chat.id));
+          for (const [chatId, ws] of wsMapRef.current) {
+            if (freshIds.has(chatId)) continue;
+            intentionalCloseRef.current.add(chatId);
+            ws.close();
+            wsMapRef.current.delete(chatId);
+            perChatStateRef.current.delete(chatId);
+          }
+
           setChats(fresh);
+          const current = activeChatIdRef.current;
+          if (current && freshIds.has(current)) return;
+
+          const next = fresh[fresh.length - 1];
+          if (next) {
+            setActiveChatId(next.id);
+            activeChatIdRef.current = next.id;
+            writeLastActiveTab("chat", projectId, task.id, next.id);
+            restoreChatState(next.id);
+            await connectChatWs(next.id);
+            wsRef.current = wsMapRef.current.get(next.id) ?? null;
+          } else {
+            setActiveChatId(null);
+            activeChatIdRef.current = null;
+            restoreChatState("__deleted__");
+            wsRef.current = null;
+          }
         } catch (err) {
           console.error("Failed to refetch chats after ChatListChanged:", err);
         }
@@ -5328,56 +5401,19 @@ export function TaskChat({
             }}
             className="min-w-48 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1"
           >
-            {!acpAvailabilityLoaded && (
+            {!acpAvailabilityLoaded ? (
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-text-muted)]">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking...
               </div>
-            )}
-            {acpAvailabilityLoaded &&
-              acpAgentOptions
-                .filter((opt) => !opt.disabled)
-                .map((opt) => {
-                  const Icon = opt.icon;
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={() => handleNewChatWithAgent(opt.value)}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)] transition-colors"
-                    >
-                      <div className="w-4 h-4 flex items-center justify-center shrink-0">
-                        {Icon ? (
-                          <Icon size={14} />
-                        ) : (
-                          <Bot className="w-3.5 h-3.5" />
-                        )}
-                      </div>
-                      <span className="truncate">{opt.label}</span>
-                    </button>
-                  );
-                })}
-            {acpAvailabilityLoaded && customAgents.length > 0 && (
-              <>
-                <div className="my-1 border-t border-[var(--color-border)]" />
-                <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                  Custom
-                </div>
-                {customAgents.map((agent) => (
-                  <button
-                    key={agent.id}
-                    onClick={() => handleNewChatWithAgent(agent.id)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-secondary)] transition-colors"
-                  >
-                    <div className="w-4 h-4 flex items-center justify-center shrink-0">
-                      {agent.type === "remote" ? (
-                        <Globe className="w-3.5 h-3.5 text-[var(--color-info)]" />
-                      ) : (
-                        <Terminal className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                      )}
-                    </div>
-                    <span className="truncate">{agent.name}</span>
-                  </button>
-                ))}
-              </>
+            ) : (
+              <AgentPickerMenuItems
+                displayOptions={acpAgentOptions.filter((opt) => !opt.disabled)}
+                customAgents={customAgents}
+                customAgentPersonas={customAgentPersonas}
+                triggerSize="compact"
+                onSelectBuiltin={(opt) => handleNewChatWithAgent(opt.value)}
+                onSelectId={(id) => handleNewChatWithAgent(id)}
+              />
             )}
           </div>,
           document.body,

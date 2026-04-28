@@ -47,9 +47,12 @@ enum LegacyMultiplexer {
     Acp,
 }
 
-/// 自定义 ACP Agent 配置
+/// 自定义 ACP Agent Server 配置（local 命令 / remote URL）
+///
+/// 注意：TOML key 仍是 `custom_agents`（保持向后兼容），但 Rust 类型名采用
+/// `CustomAgentServer` 以与新加的 Custom Agent (Persona, SQLite 存储) 区分。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomAgent {
+pub struct CustomAgentServer {
     /// 唯一标识 (e.g., "my-agent")
     pub id: String,
     /// 显示名 (e.g., "My Agent")
@@ -134,7 +137,7 @@ pub struct AcpConfig {
     pub agent_args: Vec<String>,
     /// 自定义 Agents
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub custom_agents: Vec<CustomAgent>,
+    pub custom_agents: Vec<CustomAgentServer>,
     /// Frontend chat view message window. 0 means unlimited.
     #[serde(default)]
     pub render_window_limit: u32,

@@ -13,14 +13,17 @@ import {
   checkCommands,
   getConfig,
   deleteChat,
+  listCustomAgents,
 } from "../../../api";
-import type { CustomAgent } from "../../../api";
+import type { CustomAgentServer, CustomAgentPersona } from "../../../api";
 import type { NodeStatus } from "../../../api/walkieTalkie";
 import { useRadioEvents } from "../../../hooks/useRadioEvents";
 import { AgentPicker, agentOptions } from "../../ui/AgentPicker";
 import {
   agentIconComponent,
   agentIconUrl,
+  loadCustomAgentPersonas as loadCustomAgentPersonasIcon,
+  usePersonaRegistry,
 } from "../../../utils/agentIcon";
 import {
   ZoomIn,
@@ -257,7 +260,11 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
   const discardFetchUpToRef = useRef(0);
   const [acpAgentAvailability, setAcpAgentAvailability] = useState<Record<string, boolean>>({});
   const [acpAvailabilityLoaded, setAcpAvailabilityLoaded] = useState(false);
-  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
+  const [customAgents, setCustomAgents] = useState<CustomAgentServer[]>([]);
+  const [customAgentPersonas, setCustomAgentPersonas] = useState<CustomAgentPersona[]>([]);
+  // Re-render on persona registry mutations so node icons & spawn pill labels
+  // pick up adds/edits/deletes from any other page without manual refetch.
+  usePersonaRegistry();
   // Default agent for the Spawn bubble — read from Settings (acp.agent_command)
   // so the user's preferred agent is pre-selected instead of forcing them to
   // pick from scratch every time.
@@ -271,13 +278,17 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
       try {
         const acpCheckCmds = new Set<string>();
         for (const opt of agentOptions) if (opt.acpCheck) acpCheckCmds.add(opt.acpCheck);
-        const [cmdResults, cfg] = await Promise.all([
+        const [cmdResults, cfg, personas] = await Promise.all([
           checkCommands([...acpCheckCmds]),
           getConfig(),
+          loadCustomAgentPersonasIcon(() =>
+            listCustomAgents().catch(() => [] as CustomAgentPersona[]),
+          ),
         ]);
         if (cancelled) return;
         setAcpAgentAvailability(cmdResults);
         setCustomAgents(cfg.acp?.custom_agents ?? []);
+        setCustomAgentPersonas(personas);
         if (cfg.acp?.agent_command) setDefaultAgent(cfg.acp.agent_command);
       } catch {
         /* fail-open */
@@ -1546,6 +1557,7 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
                     allowCustom={false}
                     options={acpAgentOptions}
                     customAgents={customAgents}
+                    customAgentPersonas={customAgentPersonas}
                   />
                 </div>
               </div>
@@ -1717,6 +1729,7 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         defaultAgent={defaultAgent}
         agentOptionsList={acpAgentOptions}
         customAgentsList={customAgents}
+        customAgentPersonasList={customAgentPersonas}
         onModeChange={setToolbarMode}
         onEditNode={(node) =>
           setToolbarMode({
@@ -1895,7 +1908,8 @@ interface ToolbarProps {
   spawning: boolean;
   defaultAgent: string;
   agentOptionsList: AcpAgentOption[];
-  customAgentsList: CustomAgent[];
+  customAgentsList: CustomAgentServer[];
+  customAgentPersonasList: CustomAgentPersona[];
   mode: ToolbarModeShape | null;
   onModeChange: (mode: ToolbarModeShape | null) => void;
   onDirectMessageChange: (v: string) => void;
@@ -1949,6 +1963,7 @@ function GraphContextToolbar(props: ToolbarProps) {
     defaultAgent,
     agentOptionsList,
     customAgentsList,
+    customAgentPersonasList,
     mode,
     onModeChange,
     onDirectMessageChange,
@@ -2065,6 +2080,7 @@ function GraphContextToolbar(props: ToolbarProps) {
                 }
                 agents={agentOptionsList}
                 customAgents={customAgentsList}
+                customAgentPersonas={customAgentPersonasList}
                 onAgentChange={(v) =>
                   onModeChange(
                     mode.kind === "spawn" ? { ...mode, agent: v } : mode,
@@ -2503,6 +2519,7 @@ function SpawnForm({
   fromName,
   agents,
   customAgents,
+  customAgentPersonas,
   submitting,
   onAgentChange,
   onNameChange,
@@ -2517,7 +2534,8 @@ function SpawnForm({
   purpose: string;
   fromName: string | null;
   agents: AcpAgentOption[];
-  customAgents: CustomAgent[];
+  customAgents: CustomAgentServer[];
+  customAgentPersonas: CustomAgentPersona[];
   submitting: boolean;
   onAgentChange: (v: string) => void;
   onNameChange: (v: string) => void;
@@ -2553,6 +2571,7 @@ function SpawnForm({
             allowCustom={false}
             options={agents}
             customAgents={customAgents}
+            customAgentPersonas={customAgentPersonas}
             triggerShape="pill"
             triggerSize="compact"
           />

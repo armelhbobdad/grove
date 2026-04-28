@@ -34,10 +34,30 @@ pub async fn user_spawn_node(
         return Err("name_taken".into());
     }
 
-    // 2. Resolve agent
-    let resolved = acp::resolve_agent(agent).ok_or_else(|| "agent_spawn_failed".to_string())?;
+    // 2. Resolve agent — Custom Agent (persona) ids resolve to their
+    //    underlying base_agent here; the persona's system_prompt is then
+    //    injected once on the **create** session path inside ACP bootstrap.
+    let (effective_agent, persona_injection) =
+        match crate::storage::custom_agent::try_get_persona(agent) {
+            Ok(Some(persona)) => {
+                let injection = Some(acp::PersonaInjection {
+                    persona_id: persona.id.clone(),
+                    persona_name: persona.name.clone(),
+                    base_agent: persona.base_agent.clone(),
+                    system_prompt: persona.system_prompt.clone(),
+                    model: persona.model.clone(),
+                    mode: persona.mode.clone(),
+                    effort: persona.effort.clone(),
+                });
+                (persona.base_agent.clone(), injection)
+            }
+            _ => (agent.to_string(), None),
+        };
+    let resolved =
+        acp::resolve_agent(&effective_agent).ok_or_else(|| "agent_spawn_failed".to_string())?;
 
-    // 3. Create chat
+    // 3. Create chat — store the original agent string (persona id when applicable)
+    //    so resume / icon / label resolution can find the persona later.
     let new_chat_id = tasks::generate_chat_id();
     let new_chat = tasks::ChatSession {
         id: new_chat_id.clone(),
@@ -106,6 +126,7 @@ pub async fn user_spawn_node(
         remote_url: resolved.url,
         remote_auth: resolved.auth_header,
         suppress_initial_connecting: true,
+        persona_injection,
     };
 
     // 6. Set duty BEFORE the broadcast so the new chat row is fully formed

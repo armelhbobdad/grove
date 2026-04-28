@@ -29,7 +29,7 @@ export interface AutoLinkConfig {
   patterns: string[];
 }
 
-export interface CustomAgent {
+export interface CustomAgentServer {
   id: string;
   name: string;
   type: 'local' | 'remote';
@@ -41,7 +41,7 @@ export interface CustomAgent {
 
 export interface AcpConfig {
   agent_command?: string;
-  custom_agents: CustomAgent[];
+  custom_agents: CustomAgentServer[];
   /** Frontend chat view message window. 0 means Unlimited. */
   render_window_limit: number;
   /** Prune when the frontend chat view reaches this many UI messages. */

@@ -69,6 +69,15 @@ pub fn create_api_router() -> Router {
             "/config/applications/icon",
             get(handlers::config::get_app_icon),
         )
+        // Custom Agent (Persona) API
+        .route(
+            "/custom-agents",
+            get(handlers::custom_agent::list).post(handlers::custom_agent::create),
+        )
+        .route(
+            "/custom-agents/{id}",
+            patch(handlers::custom_agent::update).delete(handlers::custom_agent::delete),
+        )
         // Environment API
         .route("/env/check", get(handlers::env::check_all))
         .route("/env/check/{name}", get(handlers::env::check_one))

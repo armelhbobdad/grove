@@ -63,6 +63,67 @@ struct InjectData<'a> {
 /// <body>
 /// ```
 ///
+/// Build a Custom Agent (persona) initialization prompt using the same
+/// `<grove-meta>` envelope. Sent as the first message after a fresh ACP
+/// session is created (Resume path skips this — the prompt is already in the
+/// chat history).
+///
+/// Format:
+/// ```text
+/// <grove-meta>{
+///   "v":1,
+///   "type":"custom_agent_init",
+///   "data":{ "persona_id":"...", "persona_name":"...", "base_agent":"..." },
+///   "system-prompt":"<the persona's user-defined system prompt>"
+/// }</grove-meta>
+/// ```
+///
+/// Body is empty — there's no user-visible message; the agent reads the
+/// `system-prompt` field as its identity instruction. Frontends that don't
+/// recognize `custom_agent_init` fall back to rendering the system-prompt
+/// text (per the envelope contract).
+pub fn build_custom_agent_init_prompt(
+    persona_id: &str,
+    persona_name: &str,
+    base_agent: &str,
+    system_prompt: &str,
+) -> String {
+    // Wrap the user's system prompt with a nonced fence so a stray literal
+    // `</user-system-prompt>` inside the prompt doesn't truncate the
+    // wrapper from the agent's perspective. The nonce is purely framing —
+    // the agent doesn't need to know it.
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let open = format!("<user-system-prompt id=\"{}\">", nonce);
+    let close = format!("</user-system-prompt id=\"{}\">", nonce);
+    let wrapped = format!(
+        "The user has configured this Custom Agent (\"{name}\") with the \
+         following system prompt. Treat it as your operating instructions for \
+         the rest of this session, then reply with exactly \"System Prompt \
+         Loaded\" — no other text — to acknowledge.\n\n\
+         {open}\n{prompt}\n{close}",
+        name = persona_name,
+        prompt = system_prompt,
+        open = open,
+        close = close,
+    );
+    // Persona id is intentionally omitted from the envelope sent over the
+    // wire — the agent doesn't need it, and remote ACP deployments shouldn't
+    // see an internal UUID. `persona_id` is kept as a function arg to leave
+    // room for in-process bookkeeping in callers.
+    let _ = persona_id;
+    let payload = json!({
+        "v": 1,
+        "type": "custom_agent_init",
+        "data": {
+            "persona_name": persona_name,
+            "base_agent": base_agent,
+        },
+        "system-prompt": wrapped,
+    });
+    let envelope = serde_json::to_string(&payload).expect("envelope serializes");
+    format!("<grove-meta>{envelope}</grove-meta>")
+}
+
 /// Reply variant has no msg_id field and no reply-instruction text.
 pub fn build_injected_prompt(
     sender_chat_id: &str,
@@ -213,5 +274,38 @@ mod tests {
         let close_idx = s.find("</grove-meta>").unwrap();
         let body_idx = s.find("before").unwrap();
         assert!(body_idx > close_idx);
+    }
+
+    #[test]
+    fn build_custom_agent_init_emits_well_formed_envelope() {
+        let s = build_custom_agent_init_prompt(
+            "ca-uuid",
+            "Senior Engineer",
+            "claude",
+            "You are a senior engineer.",
+        );
+        assert!(s.starts_with("<grove-meta>"));
+        assert!(s.ends_with("</grove-meta>"));
+        let env = parse_envelope(&s);
+        assert_eq!(env["v"], 1);
+        assert_eq!(env["type"], "custom_agent_init");
+        assert_eq!(env["data"]["persona_name"], "Senior Engineer");
+        assert_eq!(env["data"]["base_agent"], "claude");
+        // Persona id MUST NOT leak to the wire envelope.
+        assert!(env["data"].get("persona_id").is_none());
+        let prompt = env["system-prompt"].as_str().unwrap();
+        assert!(prompt.contains("Senior Engineer"));
+        assert!(prompt.contains("System Prompt Loaded"));
+        assert!(prompt.contains("You are a senior engineer."));
+    }
+
+    #[test]
+    fn custom_agent_init_escapes_quotes_and_newlines() {
+        let prompt = "line1\n\"quoted\"\nline3";
+        let s = build_custom_agent_init_prompt("ca-x", "Name \"q\"", "codex", prompt);
+        // Round-trips through serde — must be valid JSON.
+        let env = parse_envelope(&s);
+        assert_eq!(env["data"]["persona_name"], "Name \"q\"");
+        assert!(env["system-prompt"].as_str().unwrap().contains(prompt));
     }
 }

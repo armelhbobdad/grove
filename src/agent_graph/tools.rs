@@ -266,6 +266,24 @@ pub struct ContactsAwaitingReply {
     pub sent_at: String,
 }
 
+/// Custom Agent (persona) the caller can spawn via `grove_agent_spawn` —
+/// pass `id` as the `agent` argument; backend resolves to the underlying
+/// base_agent and injects the persona's system prompt on session create.
+///
+/// Note: personas are scoped to the user, NOT to a project or task — every
+/// session in every task can see the full list. This is intentional: a
+/// persona is a reusable identity, and surfacing them globally lets an AI
+/// in any context propose spawning e.g. "QA Reviewer" without first being
+/// told it exists. The cross-task visibility is by design, not a leak.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactsAvailableCustomAgent {
+    pub id: String,
+    pub name: String,
+    pub base_agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duty: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactsOutput {
     #[serde(rename = "self")]
@@ -273,6 +291,11 @@ pub struct ContactsOutput {
     pub can_contact: Vec<ContactsCanContact>,
     pub pending_replies: Vec<ContactsPendingReply>,
     pub awaiting_reply: Vec<ContactsAwaitingReply>,
+    /// Personas configured in Settings. Use `id` as the `agent` arg of
+    /// `grove_agent_spawn` to start a sibling session pre-seeded with the
+    /// persona's system prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_custom_agents: Vec<ContactsAvailableCustomAgent>,
 }
 
 pub async fn grove_agent_contacts(
@@ -318,6 +341,17 @@ pub async fn grove_agent_contacts(
         })
         .collect();
 
+    let available_custom_agents = crate::storage::custom_agent::list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| ContactsAvailableCustomAgent {
+            id: p.id,
+            name: p.name,
+            base_agent: p.base_agent,
+            duty: p.duty,
+        })
+        .collect();
+
     Ok(ContactsOutput {
         self_: ContactsSelf {
             session_id: caller_chat.id.clone(),
@@ -328,6 +362,7 @@ pub async fn grove_agent_contacts(
         can_contact,
         pending_replies,
         awaiting_reply,
+        available_custom_agents,
     })
 }
 
@@ -389,7 +424,10 @@ pub async fn grove_agent_capability(
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SpawnInput {
-    /// Agent kind (e.g. "claude", "codex", "opencode").
+    /// Base agent kind (e.g. "claude", "codex", "opencode") OR a Custom Agent
+    /// (persona) id from `grove_agent_contacts.available_custom_agents[].id`.
+    /// When you pass a persona id the spawn will start that persona's
+    /// underlying base agent and seed it with the user-defined system prompt.
     pub agent: String,
     /// Human-readable session name. Must be unique within the task.
     pub name: String,
@@ -422,7 +460,24 @@ pub async fn grove_agent_spawn(
         return Err(AgentGraphError::NameTaken);
     }
 
-    let resolved = acp::resolve_agent(&input.agent).ok_or(AgentGraphError::AgentSpawnFailed)?;
+    // Custom Agent (persona) → resolve to base_agent + capture system_prompt
+    let (effective_agent, persona_injection) =
+        match crate::storage::custom_agent::try_get_persona(&input.agent) {
+            Ok(Some(persona)) => {
+                let injection = Some(acp::PersonaInjection {
+                    persona_id: persona.id.clone(),
+                    persona_name: persona.name.clone(),
+                    base_agent: persona.base_agent.clone(),
+                    system_prompt: persona.system_prompt.clone(),
+                    model: persona.model.clone(),
+                    mode: persona.mode.clone(),
+                    effort: persona.effort.clone(),
+                });
+                (persona.base_agent.clone(), injection)
+            }
+            _ => (input.agent.clone(), None),
+        };
+    let resolved = acp::resolve_agent(&effective_agent).ok_or(AgentGraphError::AgentSpawnFailed)?;
 
     let project = workspace::load_project_by_hash(&project_key)
         .map_err(AgentGraphError::from)?
@@ -484,6 +539,7 @@ pub async fn grove_agent_spawn(
         remote_url: resolved.url,
         remote_auth: resolved.auth_header,
         suppress_initial_connecting: false,
+        persona_injection,
     };
 
     let start_res = acp::get_or_start_session(session_key, config).await;
@@ -653,8 +709,27 @@ pub(crate) async fn ensure_target_handle(
         .map_err(AgentGraphError::from)?
         .ok_or_else(|| AgentGraphError::Internal("target task vanished".into()))?;
 
-    let resolved =
-        acp::resolve_agent(&target_chat.agent).ok_or(AgentGraphError::AgentSpawnFailed)?;
+    // ensure_target_handle is the "wake an existing chat's agent" path. It's
+    // idempotent over Resume: if a session id was previously persisted, the
+    // ACP layer takes the LoadSession branch and skips persona_injection.
+    // Pass the persona payload anyway so a fresh-create fallback also re-seeds.
+    let (effective_agent, persona_injection) =
+        match crate::storage::custom_agent::try_get_persona(&target_chat.agent) {
+            Ok(Some(persona)) => {
+                let injection = Some(acp::PersonaInjection {
+                    persona_id: persona.id.clone(),
+                    persona_name: persona.name.clone(),
+                    base_agent: persona.base_agent.clone(),
+                    system_prompt: persona.system_prompt.clone(),
+                    model: persona.model.clone(),
+                    mode: persona.mode.clone(),
+                    effort: persona.effort.clone(),
+                });
+                (persona.base_agent.clone(), injection)
+            }
+            _ => (target_chat.agent.clone(), None),
+        };
+    let resolved = acp::resolve_agent(&effective_agent).ok_or(AgentGraphError::AgentSpawnFailed)?;
 
     let env_vars = crate::api::handlers::acp::build_grove_env(
         project_key,
@@ -676,6 +751,7 @@ pub(crate) async fn ensure_target_handle(
         remote_url: resolved.url,
         remote_auth: resolved.auth_header,
         suppress_initial_connecting: false,
+        persona_injection,
     };
 
     let (handle, mut rx) = acp::get_or_start_session(session_key.clone(), config)

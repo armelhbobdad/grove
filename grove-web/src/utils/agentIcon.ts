@@ -19,7 +19,7 @@
  * change.
  */
 
-import type { ComponentType } from "react";
+import { useSyncExternalStore, type ComponentType } from "react";
 import { Bot } from "lucide-react";
 import {
   Claude,
@@ -182,12 +182,107 @@ const FALLBACK: AgentIconInfo = {
   canonicalKey: "",
 };
 
+// ─── Custom Agent (persona) registry ─────────────────────────────────────────
+//
+// Personas live in the SQLite custom_agent table — pages that list / consume
+// agents (TaskChat, TaskGraph, SettingsPage) call `setCustomAgentPersonas`
+// after fetching them so this module can transparently resolve a persona id
+// to its underlying base agent's brand icon. Label is overridden to the
+// persona's display name so consumers using `info.label` show e.g.
+// "Senior Engineer" instead of "Claude Code".
+//
+// The registry is module-global mutable state, so we expose a tiny pub/sub
+// surface (`subscribePersonaRegistry` + `getPersonaRegistryVersion`) wired up
+// to React's `useSyncExternalStore` in `usePersonaRegistry()` below — when
+// any caller updates the list, every component that read it re-renders with
+// the new icons / labels. Without this, components mounted before the fetch
+// would keep showing the Bot fallback or stale persona names.
+interface PersonaRegEntry {
+  base: string;
+  name: string;
+}
+const personaRegistry: Map<string, PersonaRegEntry> = new Map();
+let personaRegistryVersion = 0;
+const personaRegistryListeners: Set<() => void> = new Set();
+
+export function setCustomAgentPersonas(
+  list: Array<{ id: string; name: string; base_agent: string }>,
+): void {
+  personaRegistry.clear();
+  for (const p of list) {
+    personaRegistry.set(p.id, { base: p.base_agent, name: p.name });
+  }
+  personaRegistryVersion += 1;
+  for (const fn of personaRegistryListeners) fn();
+}
+
+// ─── Centralized persona fetcher ─────────────────────────────────────────
+//
+// Pages used to call `listCustomAgents()` independently and write into the
+// registry — that race-conditioned: an in-flight stale fetch from page A
+// could overwrite the fresh data page B just wrote (e.g. user creates a
+// persona in Settings, navigates to Tasks, TaskChat's mount fetch resolves
+// from a stale cache and clobbers the new entry).
+//
+// `loadCustomAgentPersonas` now owns the single source of truth: it
+// dedupes concurrent callers via `inflight`, and only the resolution of
+// the LATEST fetch ever writes into the registry. Pages call this on
+// mount + after mutations; refresh races collapse onto one promise.
+let inflightLoad: Promise<unknown> | null = null;
+let lastLoadSeq = 0;
+
+export async function loadCustomAgentPersonas<
+  T extends { id: string; name: string; base_agent: string },
+>(fetcher: () => Promise<T[]>): Promise<T[]> {
+  const seq = ++lastLoadSeq;
+  const promise = fetcher();
+  inflightLoad = promise;
+  try {
+    const list = await promise;
+    // Only the most-recent caller's result wins the write — older
+    // resolutions are discarded so they can't clobber fresher data.
+    if (seq === lastLoadSeq) {
+      setCustomAgentPersonas(list);
+    }
+    return list;
+  } finally {
+    if (inflightLoad === promise) inflightLoad = null;
+  }
+}
+
+export function subscribePersonaRegistry(listener: () => void): () => void {
+  personaRegistryListeners.add(listener);
+  return () => {
+    personaRegistryListeners.delete(listener);
+  };
+}
+
+export function getPersonaRegistryVersion(): number {
+  return personaRegistryVersion;
+}
+
 /**
- * Resolve any agent key (value / id / icon_id / alias) to the row that owns
- * it. Returns a sentinel info object with `Component = Bot` for unknown keys.
+ * Resolve any agent key (value / id / icon_id / alias / persona id) to the row
+ * that owns it. Returns a sentinel info object with `Component = Bot` for
+ * unknown keys.
+ *
+ * Persona handling: if `key` matches a registered persona, the resolution
+ * recurses with `persona.base_agent` so the icon/url come from the underlying
+ * base; `label` is overridden to the persona's display name and
+ * `canonicalKey` keeps the persona id.
  */
 export function resolveAgentIcon(key: string | null | undefined): AgentIconInfo {
   if (!key) return { ...FALLBACK };
+  const persona = personaRegistry.get(key);
+  if (persona) {
+    const base = resolveAgentIcon(persona.base);
+    return {
+      Component: base.Component,
+      url: base.url,
+      label: persona.name,
+      canonicalKey: key,
+    };
+  }
   const row = TABLE_BY_KEY[key.toLowerCase()];
   if (!row) return { ...FALLBACK, label: key, canonicalKey: key };
   return {
@@ -209,4 +304,19 @@ export function agentIconComponent(
   key: string | null | undefined,
 ): ComponentType<{ size?: number; className?: string }> {
   return resolveAgentIcon(key).Component;
+}
+
+/**
+ * Subscribe a React component to persona-registry changes. Returns the
+ * registry version so React's `useSyncExternalStore` re-renders the caller
+ * whenever `setCustomAgentPersonas` fires — e.g. after a new persona is
+ * created in Settings, every list/icon consumer mounted on other pages picks
+ * up the change without manual refetching.
+ */
+export function usePersonaRegistry(): number {
+  return useSyncExternalStore(
+    subscribePersonaRegistry,
+    getPersonaRegistryVersion,
+    getPersonaRegistryVersion,
+  );
 }

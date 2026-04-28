@@ -2500,6 +2500,7 @@ async fn start_chat_impl(p: StartChatParams) -> Result<CallToolResult, McpError>
         remote_url: resolved.url,
         remote_auth: resolved.auth_header,
         suppress_initial_connecting: false,
+        persona_injection: None,
     };
 
     // Start session (non-blocking — caller should use grove_chat_status to wait for ready)
@@ -2554,6 +2555,7 @@ async fn resolve_session_access(
         remote_url: resolved.url,
         remote_auth: resolved.auth_header,
         suppress_initial_connecting: false,
+        persona_injection: None,
     };
 
     // Start session — may race with another process. If bind() fails (AddrInUse),

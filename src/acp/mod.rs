@@ -398,6 +398,29 @@ pub struct AcpStartConfig {
     /// to avoid a disconnected→connecting flicker) so the WS doesn't carry a
     /// duplicate event.
     pub suppress_initial_connecting: bool,
+    /// Custom Agent (persona) seed: injected as the first prompt on **create**
+    /// path only. Resume / Load paths intentionally skip this — the prompt is
+    /// already in chat history. Wrapped in a `<grove-meta>` envelope of type
+    /// `custom_agent_init` (see `agent_graph::inject::build_custom_agent_init_prompt`).
+    pub persona_injection: Option<PersonaInjection>,
+}
+
+/// Custom Agent (persona) identity bundle injected once per fresh session.
+///
+/// `model` / `mode` / `effort` are user-typed free-text matched against the
+/// session's `available_models` / `available_modes` / `available_thought_levels`
+/// (case-insensitive: exact id/name first, then substring; first match wins,
+/// no match → keep the agent's default). Applied BEFORE the system prompt is
+/// sent so the persona's chosen settings are in effect from message #1.
+#[derive(Debug, Clone)]
+pub struct PersonaInjection {
+    pub persona_id: String,
+    pub persona_name: String,
+    pub base_agent: String,
+    pub system_prompt: String,
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// Build Grove's own MCP server config for ACP session setup.
@@ -1612,6 +1635,53 @@ async fn drive_session(
         }
     }
 
+    /// Lowercase fuzzy-match a free-text query against `(id, name)` pairs.
+    /// Used by the Custom Agent (persona) layer to translate the user's
+    /// free-text `model` / `mode` / `effort` strings into the live session's
+    /// real ids.
+    ///
+    /// Resolution order:
+    ///   1. Exact lowercase id or name → return immediately (deterministic).
+    ///   2. Substring match: collect all hits. If exactly one, return it.
+    ///      If two or more (e.g. user typed "sonnet" and the agent advertises
+    ///      both "claude-sonnet-4-5" and "claude-3-5-sonnet"), return `None`
+    ///      — caller falls back to the agent's default rather than rolling
+    ///      the dice on an order-sensitive pick. A warn is logged so the
+    ///      ambiguity is debuggable from logs.
+    fn fuzzy_pick_id(query: &str, options: &[(String, String)]) -> Option<String> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        for (id, name) in options {
+            if id.to_lowercase() == q || name.to_lowercase() == q {
+                return Some(id.clone());
+            }
+        }
+        let hits: Vec<&String> = options
+            .iter()
+            .filter(|(id, name)| id.to_lowercase().contains(&q) || name.to_lowercase().contains(&q))
+            .map(|(id, _)| id)
+            .collect();
+        match hits.len() {
+            0 => None,
+            1 => Some(hits[0].clone()),
+            _ => {
+                eprintln!(
+                    "[ACP] Persona config: query '{}' matched {} options ambiguously \
+                     ({}); leaving agent default.",
+                    query,
+                    hits.len(),
+                    hits.iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                None
+            }
+        }
+    }
+
     fn extract_models(
         models: &Option<acp::SessionModelState>,
     ) -> (Vec<(String, String)>, Option<String>) {
@@ -1726,6 +1796,71 @@ async fn drive_session(
                 current_thought_level_id,
                 thought_level_config_id,
             ) = extract_thought_level(resp.config_options.as_deref().unwrap_or(&[]));
+
+            // Custom Agent (persona): apply the persona's preferred
+            // model/mode/effort BEFORE injecting the system prompt, so the
+            // first turn (and the system prompt itself) runs under those
+            // settings. Resume path skips both blocks — it goes through
+            // LoadSession instead.
+            if let Some(p) = config.persona_injection.as_ref() {
+                let sid_arc = acp::SessionId::new(&*sid);
+
+                // Fuzzy match by lowercase id-or-name: exact first, then
+                // substring. No match → leave default.
+                if let Some(query) = p.model.as_deref() {
+                    if let Some(id) = fuzzy_pick_id(query, &available_models) {
+                        let _ = conn
+                            .send_request(acp::SetSessionModelRequest::new(
+                                sid_arc.clone(),
+                                acp::ModelId::new(id),
+                            ))
+                            .block_task()
+                            .await;
+                    }
+                }
+                if let Some(query) = p.mode.as_deref() {
+                    if let Some(id) = fuzzy_pick_id(query, &available_modes) {
+                        let _ = conn
+                            .send_request(acp::SetSessionModeRequest::new(
+                                sid_arc.clone(),
+                                acp::SessionModeId::new(id),
+                            ))
+                            .block_task()
+                            .await;
+                    }
+                }
+                if let Some(query) = p.effort.as_deref() {
+                    if let (Some(value_id), Some(cfg_id)) = (
+                        fuzzy_pick_id(query, &available_thought_levels),
+                        thought_level_config_id.clone(),
+                    ) {
+                        let _ = conn
+                            .send_request(acp::SetSessionConfigOptionRequest::new(
+                                sid_arc.clone(),
+                                acp::SessionConfigId::new(cfg_id),
+                                acp::SessionConfigValueId::new(value_id),
+                            ))
+                            .block_task()
+                            .await;
+                    }
+                }
+
+                if !p.system_prompt.trim().is_empty() {
+                    let body = crate::agent_graph::inject::build_custom_agent_init_prompt(
+                        &p.persona_id,
+                        &p.persona_name,
+                        &p.base_agent,
+                        &p.system_prompt,
+                    );
+                    let inject = conn
+                        .send_request(acp::PromptRequest::new(sid_arc, vec![body.into()]))
+                        .block_task()
+                        .await;
+                    if let Err(e) = inject {
+                        eprintln!("[ACP] Persona system prompt injection failed: {:?}", e);
+                    }
+                }
+            }
             sid
         }};
     }

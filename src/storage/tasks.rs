@@ -469,6 +469,20 @@ pub fn update_chat_duty(
 }
 
 /// 删除 ChatSession
+/// Count how many chat sessions reference `agent_str` exactly. Used by the
+/// Custom Agent (persona) layer to refuse a delete / base_agent change while
+/// in-flight chats still depend on the persona — see
+/// `api/handlers/custom_agent.rs::delete` and `update`.
+pub fn count_chats_with_agent(agent_str: &str) -> Result<i64> {
+    let conn = crate::storage::database::connection();
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM session WHERE agent = ?1",
+        params![agent_str],
+        |row| row.get(0),
+    )?;
+    Ok(n)
+}
+
 pub fn delete_chat_session(project: &str, task_id: &str, chat_id: &str) -> Result<()> {
     let conn = crate::storage::database::connection();
     let tx = conn.unchecked_transaction()?;

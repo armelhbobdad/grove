@@ -883,6 +883,13 @@ pub async fn create_chat(
     tasks::add_chat_session(&project_key, &task_id, chat.clone())
         .map_err(|e| AcpError::Internal(e.to_string()))?;
 
+    crate::api::handlers::walkie_talkie::broadcast_radio_event(
+        crate::api::handlers::walkie_talkie::RadioEvent::ChatListChanged {
+            project_id: project_id.clone(),
+            task_id: task_id.clone(),
+        },
+    );
+
     Ok(Json(ChatSessionResponse::from(&chat)))
 }
 
@@ -938,6 +945,13 @@ pub async fn delete_chat(
 
     // Clean up socket file
     let _ = std::fs::remove_file(acp::sock_path(&project_key, &task_id, &chat_id));
+
+    crate::api::handlers::walkie_talkie::broadcast_radio_event(
+        crate::api::handlers::walkie_talkie::RadioEvent::ChatListChanged {
+            project_id: project_id.clone(),
+            task_id: task_id.clone(),
+        },
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1018,9 +1032,34 @@ pub async fn chat_ws_handler(
         .map_err(|e| AcpError::Internal(e.to_string()))?
         .ok_or(AcpError::NotFound("Chat not found".to_string()))?;
 
-    // Resolve agent command from the chat's stored agent
-    let resolved = acp::resolve_agent(&chat.agent)
-        .ok_or(AcpError::Internal(format!("Unknown agent: {}", chat.agent)))?;
+    // Resolve agent command from the chat's stored agent.
+    //
+    // Custom Agent (persona) ids resolve to their underlying base_agent here;
+    // the persona's system_prompt is then injected once on the **create**
+    // session path (not on Resume) inside the ACP session bootstrap.
+    let (effective_agent, persona_injection) =
+        match crate::storage::custom_agent::try_get_persona(&chat.agent) {
+            Ok(Some(persona)) => {
+                // Always pass an injection bundle when the agent string is a
+                // persona id — even with empty system_prompt, the model/mode/
+                // effort still need to be applied on Create.
+                let injection = Some(acp::PersonaInjection {
+                    persona_id: persona.id.clone(),
+                    persona_name: persona.name.clone(),
+                    base_agent: persona.base_agent.clone(),
+                    system_prompt: persona.system_prompt.clone(),
+                    model: persona.model.clone(),
+                    mode: persona.mode.clone(),
+                    effort: persona.effort.clone(),
+                });
+                (persona.base_agent.clone(), injection)
+            }
+            _ => (chat.agent.clone(), None),
+        };
+    let resolved = acp::resolve_agent(&effective_agent).ok_or(AcpError::Internal(format!(
+        "Unknown agent: {}",
+        effective_agent
+    )))?;
 
     let env_vars = build_grove_env(&project_key, &project_path, &project_name, &task);
     let working_dir = std::path::PathBuf::from(&task.worktree_path);
@@ -1039,6 +1078,7 @@ pub async fn chat_ws_handler(
         remote_url: resolved.url,
         remote_auth: resolved.auth_header,
         suppress_initial_connecting: false,
+        persona_injection,
     };
 
     Ok(ws.on_upgrade(move |socket| handle_acp_ws(socket, session_key, config)))

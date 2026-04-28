@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, Check, Bot, Globe, Terminal, Settings } from "lucide-react";
-import type { CustomAgent } from "../../api/config";
+import type { CustomAgentServer } from "../../api/config";
+import type { CustomAgentPersona } from "../../api";
 
 import { Claude, Gemini, Copilot, Cursor, Trae, Qwen, Kimi, OpenAI, Junie, OpenCode, OpenClaw, Hermes, Kiro, Windsurf } from "./AgentIcons";
 
@@ -50,9 +51,12 @@ interface AgentPickerProps {
   allowCustom?: boolean;
   customPlaceholder?: string;
   options?: AgentOption[];
-  /** ACP custom agents shown in dropdown (Chat mode) */
-  customAgents?: CustomAgent[];
-  /** Open the custom agent management modal (Chat mode) */
+  /** ACP custom agent SERVERS shown in dropdown (Chat mode) */
+  customAgents?: CustomAgentServer[];
+  /** Custom Agents (personas) shown in dropdown (Chat mode). Selecting one
+   *  passes the persona id back via onChange — caller resolves base agent. */
+  customAgentPersonas?: CustomAgentPersona[];
+  /** Open the custom agent server management modal (Chat mode) */
   onManageCustomAgents?: () => void;
   /**
    * Trigger button corner shape. Default `"rounded"` keeps the existing
@@ -92,6 +96,7 @@ export function AgentPicker({
   customPlaceholder = "Enter agent command...",
   options: externalOptions,
   customAgents = [],
+  customAgentPersonas = [],
   onManageCustomAgents,
   triggerShape = "rounded",
   triggerSize = "default",
@@ -104,11 +109,38 @@ export function AgentPicker({
   const selectedCustomAgent = !selectedOption
     ? customAgents.find((a) => a.id === value)
     : null;
-  const isCustomValue = value && !selectedOption && !selectedCustomAgent;
+  const selectedPersona = !selectedOption && !selectedCustomAgent
+    ? customAgentPersonas.find((p) => p.id === value)
+    : null;
+  const isCustomValue = value && !selectedOption && !selectedCustomAgent && !selectedPersona;
 
-  // Initialize custom mode from initial props (lazy state initializer)
-  const [isCustomMode, setIsCustomMode] = useState(() => !!(allowCustom && value && !displayOptions.find((opt) => opt.value === value) && !customAgents.find((a) => a.id === value)));
-  const [customValue, setCustomValue] = useState(() => (allowCustom && value && !displayOptions.find((opt) => opt.value === value) && !customAgents.find((a) => a.id === value)) ? value : "");
+  // Helper for trigger button icon when value resolves to a persona
+  const resolvePersonaIcon = (p: CustomAgentPersona): React.ReactNode => {
+    const builtin = displayOptions.find((opt) => opt.id === p.base_agent);
+    if (builtin?.icon) {
+      const Ic = builtin.icon;
+      return <Ic size={triggerSize === "compact" ? 14 : 18} />;
+    }
+    const server = customAgents.find((s) => s.id === p.base_agent);
+    if (server?.type === "remote") {
+      return <Globe className={triggerSize === "compact" ? "w-3.5 h-3.5 text-[var(--color-info)]" : "w-4 h-4 text-[var(--color-info)]"} />;
+    }
+    return <Terminal className={triggerSize === "compact" ? "w-3.5 h-3.5 text-[var(--color-text-muted)]" : "w-4 h-4 text-[var(--color-text-muted)]"} />;
+  };
+
+  // Initialize custom mode from initial props (lazy state initializer).
+  // NOTE: This runs ONCE per mount. If `value` is a persona id but the
+  // personas list arrives later, we'd misclassify it as a free-text custom
+  // command and flip into custom-input mode showing the raw `ca-uuid`. The
+  // useEffect below recomputes whenever any of the membership lists change,
+  // skipping the recompute while the user is actively typing in custom mode.
+  const [isCustomMode, setIsCustomMode] = useState(() => !!(allowCustom && value && !displayOptions.find((opt) => opt.value === value) && !customAgents.find((a) => a.id === value) && !customAgentPersonas.find((p) => p.id === value)));
+  const [customValue, setCustomValue] = useState(() => (allowCustom && value && !displayOptions.find((opt) => opt.value === value) && !customAgents.find((a) => a.id === value) && !customAgentPersonas.find((p) => p.id === value)) ? value : "");
+  /** True once the user has interacted with the custom-mode input. While
+   *  set, the resync effect below does NOT touch `isCustomMode` /
+   *  `customValue` — otherwise an in-flight persona fetch could yank the
+   *  input out from under the user mid-keystroke. */
+  const userTouchedCustomRef = useRef(false);
   const [dropdownPosition, setDropdownPosition] = useState<DropdownPosition | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -182,6 +214,29 @@ export function AgentPicker({
     }
   }, [isCustomMode]);
 
+  // Re-classify `value` whenever the membership lists change — so a persona
+  // id that arrives via async fetch flips out of "custom command" mode the
+  // moment the persona shows up in `customAgentPersonas`. Skip while the
+  // user is actively typing (userTouchedCustomRef) so we don't yank the
+  // field. This complements the lazy initializer above.
+  useEffect(() => {
+    if (userTouchedCustomRef.current) return;
+    const known =
+      !!displayOptions.find((opt) => opt.value === value) ||
+      !!customAgents.find((a) => a.id === value) ||
+      !!customAgentPersonas.find((p) => p.id === value);
+    const shouldBeCustom = !!(allowCustom && value && !known);
+    if (shouldBeCustom !== isCustomMode) setIsCustomMode(shouldBeCustom);
+    if (shouldBeCustom) {
+      if (customValue !== value) setCustomValue(value);
+    } else if (customValue !== "") {
+      setCustomValue("");
+    }
+    // `isCustomMode` / `customValue` intentionally not in deps — the effect
+    // is a one-way "props → state" sync, not a state-watcher.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, displayOptions, customAgents, customAgentPersonas, allowCustom]);
+
   const handleSelect = (option: AgentOption | "custom") => {
     if (option === "custom") {
       setIsCustomMode(true);
@@ -218,7 +273,7 @@ export function AgentPicker({
 
   const displayValue = isCustomMode
     ? customValue || customPlaceholder
-    : selectedOption?.label || selectedCustomAgent?.name || (isCustomValue ? value : placeholder);
+    : selectedOption?.label || selectedPersona?.name || selectedCustomAgent?.name || (isCustomValue ? value : placeholder);
 
   const SelectedIcon = selectedOption?.icon;
 
@@ -246,138 +301,15 @@ export function AgentPicker({
           }}
           className="py-1 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg shadow-lg overflow-y-auto"
         >
-          {/* Built-in agent options */}
-          {displayOptions.map((option) => {
-            const Icon = option.icon;
-            const isDisabled = !!option.disabled;
-            return (
-              <button
-                key={option.id}
-                onClick={() => !isDisabled && handleSelect(option)}
-                disabled={isDisabled}
-                title={isDisabled ? option.disabledReason : undefined}
-                className={`w-full flex items-center transition-colors ${
-                  triggerSize === "compact"
-                    ? "gap-2 px-2.5 py-1.5 text-[12.5px]"
-                    : "gap-3 px-3 py-2.5 text-sm"
-                }
-                  ${isDisabled
-                    ? "opacity-45 cursor-not-allowed"
-                    : option.value === value
-                      ? "bg-[var(--color-highlight)]/10 text-[var(--color-highlight)]"
-                      : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
-                  }`}
-              >
-                <div
-                  className={`flex items-center justify-center flex-shrink-0 ${
-                    triggerSize === "compact" ? "w-4 h-4" : "w-6 h-6"
-                  }`}
-                >
-                  {Icon ? (
-                    <Icon size={triggerSize === "compact" ? 14 : 20} />
-                  ) : (
-                    <Bot
-                      className={
-                        triggerSize === "compact"
-                          ? "w-3.5 h-3.5 text-[var(--color-text-muted)]"
-                          : "w-5 h-5 text-[var(--color-text-muted)]"
-                      }
-                    />
-                  )}
-                </div>
-                <div className="flex-1 text-left">
-                  <div>{option.label}</div>
-                  <div
-                    className={
-                      triggerSize === "compact"
-                        ? "text-[10px] text-[var(--color-text-muted)]"
-                        : "text-xs text-[var(--color-text-muted)]"
-                    }
-                  >
-                    {isDisabled ? option.disabledReason : option.value}
-                  </div>
-                </div>
-                {!isDisabled && option.value === value && (
-                  <Check
-                    className={
-                      triggerSize === "compact"
-                        ? "w-3.5 h-3.5 flex-shrink-0"
-                        : "w-4 h-4 flex-shrink-0"
-                    }
-                  />
-                )}
-              </button>
-            );
-          })}
-
-          {/* ACP custom agents section (Chat mode) */}
-          {customAgents.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 px-3 py-1.5 mt-1 border-t border-[var(--color-border)]">
-                <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] font-medium">Custom</span>
-              </div>
-              {customAgents.map((agent) => (
-                <button
-                  key={agent.id}
-                  onClick={() => handleSelectCustomAgent(agent.id)}
-                  className={`w-full flex items-center transition-colors ${
-                    triggerSize === "compact"
-                      ? "gap-2 px-2.5 py-1.5 text-[12.5px]"
-                      : "gap-3 px-3 py-2.5 text-sm"
-                  }
-                    ${agent.id === value
-                      ? "bg-[var(--color-highlight)]/10 text-[var(--color-highlight)]"
-                      : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
-                    }`}
-                >
-                  <div
-                    className={`flex items-center justify-center flex-shrink-0 ${
-                      triggerSize === "compact" ? "w-4 h-4" : "w-6 h-6"
-                    }`}
-                  >
-                    {agent.type === "remote" ? (
-                      <Globe
-                        className={
-                          triggerSize === "compact"
-                            ? "w-3.5 h-3.5 text-[var(--color-info)]"
-                            : "w-5 h-5 text-[var(--color-info)]"
-                        }
-                      />
-                    ) : (
-                      <Terminal
-                        className={
-                          triggerSize === "compact"
-                            ? "w-3.5 h-3.5 text-[var(--color-text-muted)]"
-                            : "w-5 h-5 text-[var(--color-text-muted)]"
-                        }
-                      />
-                    )}
-                  </div>
-                  <div className="flex-1 text-left">
-                    <div>{agent.name}</div>
-                    <div
-                      className={
-                        triggerSize === "compact"
-                          ? "text-[10px] text-[var(--color-text-muted)]"
-                          : "text-xs text-[var(--color-text-muted)]"
-                      }
-                    >
-                      {agent.type === "remote" ? agent.url : agent.command}
-                    </div>
-                  </div>
-                  {agent.id === value && (
-                    <Check
-                      className={
-                        triggerSize === "compact"
-                          ? "w-3.5 h-3.5 flex-shrink-0"
-                          : "w-4 h-4 flex-shrink-0"
-                      }
-                    />
-                  )}
-                </button>
-              ))}
-            </>
-          )}
+          <AgentPickerMenuItems
+            displayOptions={displayOptions}
+            customAgents={customAgents}
+            customAgentPersonas={customAgentPersonas}
+            value={value}
+            triggerSize={triggerSize}
+            onSelectBuiltin={(opt) => handleSelect(opt)}
+            onSelectId={(id) => handleSelectCustomAgent(id)}
+          />
 
           {/* Footer actions: "Custom command..." OR "Manage Custom Agents..." */}
           {allowCustom && (
@@ -424,9 +356,15 @@ export function AgentPicker({
               ref={inputRef}
               type="text"
               value={customValue}
-              onChange={(e) => setCustomValue(e.target.value)}
+              onChange={(e) => {
+                userTouchedCustomRef.current = true;
+                setCustomValue(e.target.value);
+              }}
               onKeyDown={handleCustomKeyDown}
-              onBlur={handleCustomSubmit}
+              onBlur={() => {
+                handleCustomSubmit();
+                userTouchedCustomRef.current = false;
+              }}
               placeholder={customPlaceholder}
               className="flex-1 px-3 py-2 bg-[var(--color-bg-secondary)] border border-[var(--color-highlight)] rounded-lg
                 text-[var(--color-text)] placeholder-[var(--color-text-muted)] text-sm
@@ -434,7 +372,11 @@ export function AgentPicker({
                 transition-all duration-200"
             />
             <button
-              onClick={() => {
+              // `onMouseDown` runs BEFORE the input's `onBlur`, letting us
+              // switch out of custom mode without firing a stray
+              // `handleCustomSubmit` on the (often empty) input value.
+              onMouseDown={(e) => {
+                e.preventDefault();
                 setIsCustomMode(false);
                 setIsOpen(true);
               }}
@@ -468,6 +410,8 @@ export function AgentPicker({
             >
               {SelectedIcon ? (
                 <SelectedIcon size={triggerSize === "compact" ? 14 : 18} />
+              ) : selectedPersona ? (
+                resolvePersonaIcon(selectedPersona)
               ) : selectedCustomAgent ? (
                 selectedCustomAgent.type === "remote" ? (
                   <Globe
@@ -496,7 +440,7 @@ export function AgentPicker({
                 />
               )}
             </div>
-            <span className={`flex-1 text-left ${selectedOption || selectedCustomAgent || isCustomValue ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"}`}>
+            <span className={`flex-1 text-left ${selectedOption || selectedCustomAgent || selectedPersona || isCustomValue ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"}`}>
               {displayValue}
             </span>
             <motion.div
@@ -518,5 +462,244 @@ export function AgentPicker({
         {renderDropdown()}
       </div>
     </div>
+  );
+}
+
+// ─── Reusable dropdown items list ─────────────────────────────────────────
+//
+// Used internally by AgentPicker, and by other call sites that already manage
+// their own portal/anchor (e.g. TaskChat's "+" new-chat picker) but want the
+// same Base Agents (Builtin + Custom Server) + Custom Agents (personas)
+// structure with a plain divider bar between them.
+
+interface AgentPickerMenuItemsProps {
+  displayOptions: AgentOption[];
+  customAgents: CustomAgentServer[];
+  customAgentPersonas: CustomAgentPersona[];
+  /** Currently selected value/id; used to highlight + draw the check mark. */
+  value?: string;
+  triggerSize?: "default" | "compact";
+  onSelectBuiltin: (opt: AgentOption) => void;
+  /** Called for both Custom Server ids and Custom Agent (persona) ids. */
+  onSelectId: (id: string) => void;
+}
+
+export function AgentPickerMenuItems({
+  displayOptions,
+  customAgents,
+  customAgentPersonas,
+  value,
+  triggerSize = "default",
+  onSelectBuiltin,
+  onSelectId,
+}: AgentPickerMenuItemsProps) {
+  const resolvePersonaIcon = (p: CustomAgentPersona): React.ReactNode => {
+    const builtin = displayOptions.find((opt) => opt.id === p.base_agent);
+    if (builtin?.icon) {
+      const Ic = builtin.icon;
+      return <Ic size={triggerSize === "compact" ? 14 : 20} />;
+    }
+    const server = customAgents.find((s) => s.id === p.base_agent);
+    if (server?.type === "remote") {
+      return (
+        <Globe
+          className={
+            triggerSize === "compact"
+              ? "w-3.5 h-3.5 text-[var(--color-info)]"
+              : "w-5 h-5 text-[var(--color-info)]"
+          }
+        />
+      );
+    }
+    return (
+      <Terminal
+        className={
+          triggerSize === "compact"
+            ? "w-3.5 h-3.5 text-[var(--color-text-muted)]"
+            : "w-5 h-5 text-[var(--color-text-muted)]"
+        }
+      />
+    );
+  };
+
+  return (
+    <>
+      {/* Built-in agents */}
+      {displayOptions.map((option) => {
+        const Icon = option.icon;
+        const isDisabled = !!option.disabled;
+        return (
+          <button
+            key={option.id}
+            onClick={() => !isDisabled && onSelectBuiltin(option)}
+            disabled={isDisabled}
+            title={isDisabled ? option.disabledReason : undefined}
+            className={`w-full flex items-center transition-colors ${
+              triggerSize === "compact"
+                ? "gap-2 px-2.5 py-1.5 text-[12.5px]"
+                : "gap-3 px-3 py-2.5 text-sm"
+            }
+              ${isDisabled
+                ? "opacity-45 cursor-not-allowed"
+                : option.value === value
+                  ? "bg-[var(--color-highlight)]/10 text-[var(--color-highlight)]"
+                  : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
+              }`}
+          >
+            <div
+              className={`flex items-center justify-center flex-shrink-0 ${
+                triggerSize === "compact" ? "w-4 h-4" : "w-6 h-6"
+              }`}
+            >
+              {Icon ? (
+                <Icon size={triggerSize === "compact" ? 14 : 20} />
+              ) : (
+                <Bot
+                  className={
+                    triggerSize === "compact"
+                      ? "w-3.5 h-3.5 text-[var(--color-text-muted)]"
+                      : "w-5 h-5 text-[var(--color-text-muted)]"
+                  }
+                />
+              )}
+            </div>
+            <div className="flex-1 text-left">
+              <div>{option.label}</div>
+              <div
+                className={
+                  triggerSize === "compact"
+                    ? "text-[10px] text-[var(--color-text-muted)]"
+                    : "text-xs text-[var(--color-text-muted)]"
+                }
+              >
+                {isDisabled ? option.disabledReason : option.value}
+              </div>
+            </div>
+            {!isDisabled && option.value === value && (
+              <Check
+                className={
+                  triggerSize === "compact"
+                    ? "w-3.5 h-3.5 flex-shrink-0"
+                    : "w-4 h-4 flex-shrink-0"
+                }
+              />
+            )}
+          </button>
+        );
+      })}
+
+      {/* Custom Agent Servers — inline as base agents, no header */}
+      {customAgents.map((agent) => (
+        <button
+          key={agent.id}
+          onClick={() => onSelectId(agent.id)}
+          className={`w-full flex items-center transition-colors ${
+            triggerSize === "compact"
+              ? "gap-2 px-2.5 py-1.5 text-[12.5px]"
+              : "gap-3 px-3 py-2.5 text-sm"
+          }
+            ${agent.id === value
+              ? "bg-[var(--color-highlight)]/10 text-[var(--color-highlight)]"
+              : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
+            }`}
+        >
+          <div
+            className={`flex items-center justify-center flex-shrink-0 ${
+              triggerSize === "compact" ? "w-4 h-4" : "w-6 h-6"
+            }`}
+          >
+            {agent.type === "remote" ? (
+              <Globe
+                className={
+                  triggerSize === "compact"
+                    ? "w-3.5 h-3.5 text-[var(--color-info)]"
+                    : "w-5 h-5 text-[var(--color-info)]"
+                }
+              />
+            ) : (
+              <Terminal
+                className={
+                  triggerSize === "compact"
+                    ? "w-3.5 h-3.5 text-[var(--color-text-muted)]"
+                    : "w-5 h-5 text-[var(--color-text-muted)]"
+                }
+              />
+            )}
+          </div>
+          <div className="flex-1 text-left">
+            <div>{agent.name}</div>
+            <div
+              className={
+                triggerSize === "compact"
+                  ? "text-[10px] text-[var(--color-text-muted)]"
+                  : "text-xs text-[var(--color-text-muted)]"
+              }
+            >
+              {agent.type === "remote" ? agent.url : agent.command}
+            </div>
+          </div>
+          {agent.id === value && (
+            <Check
+              className={
+                triggerSize === "compact"
+                  ? "w-3.5 h-3.5 flex-shrink-0"
+                  : "w-4 h-4 flex-shrink-0"
+              }
+            />
+          )}
+        </button>
+      ))}
+
+      {/* Custom Agents (personas) — separated by a plain divider bar */}
+      {customAgentPersonas.length > 0 && (
+        <>
+          <div className="my-1 border-t border-[var(--color-border)]" />
+          {customAgentPersonas.map((persona) => (
+            <button
+              key={persona.id}
+              onClick={() => onSelectId(persona.id)}
+              className={`w-full flex items-center transition-colors ${
+                triggerSize === "compact"
+                  ? "gap-2 px-2.5 py-1.5 text-[12.5px]"
+                  : "gap-3 px-3 py-2.5 text-sm"
+              }
+                ${persona.id === value
+                  ? "bg-[var(--color-highlight)]/10 text-[var(--color-highlight)]"
+                  : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
+                }`}
+            >
+              <div
+                className={`flex items-center justify-center flex-shrink-0 ${
+                  triggerSize === "compact" ? "w-4 h-4" : "w-6 h-6"
+                }`}
+              >
+                {resolvePersonaIcon(persona)}
+              </div>
+              <div className="flex-1 text-left min-w-0">
+                <div className="truncate">{persona.name}</div>
+                <div
+                  className={
+                    triggerSize === "compact"
+                      ? "text-[10px] text-[var(--color-text-muted)] truncate"
+                      : "text-xs text-[var(--color-text-muted)] truncate"
+                  }
+                >
+                  {persona.duty || `Based on ${persona.base_agent}`}
+                </div>
+              </div>
+              {persona.id === value && (
+                <Check
+                  className={
+                    triggerSize === "compact"
+                      ? "w-3.5 h-3.5 flex-shrink-0"
+                      : "w-4 h-4 flex-shrink-0"
+                  }
+                />
+              )}
+            </button>
+          ))}
+        </>
+      )}
+    </>
   );
 }

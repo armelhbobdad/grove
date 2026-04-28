@@ -10,7 +10,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
-use crate::storage::config::{self, Config, CustomAgent, CustomLayoutConfig, ThemeConfig};
+use crate::storage::config::{self, Config, CustomAgentServer, CustomLayoutConfig, ThemeConfig};
 
 /// GET /api/v1/config response
 #[derive(Debug, Serialize)]
@@ -282,7 +282,7 @@ pub async fn patch_config(
         if let Some(custom_agents) = acp_patch.custom_agents {
             config.acp.custom_agents = custom_agents
                 .into_iter()
-                .map(|a| CustomAgent {
+                .map(|a| CustomAgentServer {
                     id: a.id,
                     name: a.name,
                     agent_type: a.agent_type,

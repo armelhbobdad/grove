@@ -6,6 +6,7 @@ pub mod agent_usage;
 pub mod ai;
 pub mod common;
 pub mod config;
+pub mod custom_agent;
 pub mod env;
 pub mod folder;
 pub mod git;

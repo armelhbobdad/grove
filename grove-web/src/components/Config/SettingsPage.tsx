@@ -18,8 +18,10 @@ import {
   Link,
   Plus,
   X,
-  MessageSquare,
   Volume2,
+  Bot,
+  Server,
+  UserCog,
 } from "lucide-react";
 import { Button, Combobox, AppPicker, AgentPicker, agentOptions, ideAppOptions, terminalAppOptions, CustomAgentModal } from "../ui";
 import type { ComboboxOption } from "../ui";
@@ -31,10 +33,17 @@ import {
   checkAllDependencies,
   checkCommands,
   listApplications,
+  listCustomAgents,
   type AppInfo,
-  type CustomAgent,
+  type CustomAgentServer,
+  type CustomAgentPersona,
 } from "../../api";
 import { LayoutEditor, type CustomLayoutConfig, type PaneType, type LayoutNode, createDefaultLayout, countPanes } from "./LayoutEditor";
+import { CustomAgentsModal } from "./CustomAgentsModal";
+import {
+  setCustomAgentPersonas as setCustomAgentPersonasIconRegistry,
+  loadCustomAgentPersonas as loadCustomAgentPersonasIcon,
+} from "../../utils/agentIcon";
 import { useIsMobile } from "../../hooks";
 
 interface SettingsPageProps {
@@ -219,8 +228,11 @@ export function SettingsPage({ config }: SettingsPageProps) {
 
   // ACP / Custom agents state
   const [acpAgent, setAcpAgent] = useState("claude"); // Chat mode agent
-  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
+  const [customAgents, setCustomAgents] = useState<CustomAgentServer[]>([]);
   const [showCustomAgentModal, setShowCustomAgentModal] = useState(false);
+  const [showCustomAgentsModal, setShowCustomAgentsModal] = useState(false);
+  const [customAgentPersonas, setCustomAgentPersonas] = useState<CustomAgentPersona[]>([]);
+  const [customAgentPersonasLoading, setCustomAgentPersonasLoading] = useState(false);
   const [chatRenderWindowLimit, setChatRenderWindowLimit] = useState(0);
   const [chatRenderWindowTrigger, setChatRenderWindowTrigger] = useState(1500);
   const [chatRenderWindowLimitDraft, setChatRenderWindowLimitDraft] = useState("0");
@@ -517,13 +529,28 @@ export function SettingsPage({ config }: SettingsPageProps) {
     }
   }, []);
 
+  const loadCustomAgentPersonas = useCallback(async () => {
+    setCustomAgentPersonasLoading(true);
+    try {
+      // Centralized loader — collapses concurrent fetches and ensures the
+      // most-recent result is the only one written into the icon registry.
+      const list = await loadCustomAgentPersonasIcon(() => listCustomAgents());
+      setCustomAgentPersonas(list);
+    } catch (err) {
+      console.error("Failed to load custom agents:", err);
+    } finally {
+      setCustomAgentPersonasLoading(false);
+    }
+  }, []);
+
   // Initial load
   useEffect(() => {
     loadConfig();
     checkDependencies();
     loadApplications();
     checkAgentCommands();
-  }, [loadConfig, checkDependencies, loadApplications, checkAgentCommands]);
+    loadCustomAgentPersonas();
+  }, [loadConfig, checkDependencies, loadApplications, checkAgentCommands, loadCustomAgentPersonas]);
 
   // Terminal availability
   const tmuxInstalled = depStates["tmux"]?.status === "installed";
@@ -727,20 +754,20 @@ env_vars = [
       </div>
 
       <div className="space-y-3">
-        {/* Chat Section */}
+        {/* Agent Section */}
         <Section
           id="chat"
-          title="Chat"
+          title="Agent"
           description={isChatAvailable ? "Ready" : "Need Setup"}
-          icon={MessageSquare}
+          icon={Bot}
           iconColor={isChatAvailable ? "var(--color-success)" : "var(--color-warning)"}
           isOpen={openSections.chat}
           onToggle={() => toggleSection("chat")}
         >
           <div className="space-y-5">
-            {/* Chat Coding Agent */}
+            {/* Default Coding Agent */}
             <div>
-              <div className="text-xs font-medium text-[var(--color-text-muted)] mb-2 uppercase tracking-wider select-none">Chat Coding Agent</div>
+              <div className="text-xs font-medium text-[var(--color-text-muted)] mb-2 uppercase tracking-wider select-none">Default Coding Agent</div>
               <AgentPicker
                 value={acpAgent}
                 onChange={setAcpAgent}
@@ -748,8 +775,56 @@ env_vars = [
                 allowCustom={false}
                 placeholder="Select agent..."
                 customAgents={customAgents}
-                onManageCustomAgents={() => setShowCustomAgentModal(true)}
               />
+            </div>
+
+            {/* Custom Agent entry buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
+                onClick={() => setShowCustomAgentsModal(true)}
+                className="flex items-start gap-3 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:border-[var(--color-highlight)]/50 transition-colors text-left"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--color-highlight)]/10">
+                  <UserCog className="w-4 h-4 text-[var(--color-highlight)]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-[var(--color-text)]">
+                    Custom Agents
+                    <span className="ml-2 text-[10px] text-[var(--color-text-muted)] font-normal">
+                      {customAgentPersonas.length > 0 ? `${customAgentPersonas.length} configured` : "None"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                    Personas with preset model & system prompt
+                  </div>
+                </div>
+              </motion.button>
+
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
+                onClick={() => setShowCustomAgentModal(true)}
+                className="flex items-start gap-3 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:border-[var(--color-highlight)]/50 transition-colors text-left"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--color-info)]/10">
+                  <Server className="w-4 h-4 text-[var(--color-info)]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-[var(--color-text)]">
+                    Custom Agent Servers
+                    <span className="ml-2 text-[10px] text-[var(--color-text-muted)] font-normal">
+                      {customAgents.length > 0 ? `${customAgents.length} configured` : "None"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                    For private or self-hosted ACP deploys
+                  </div>
+                </div>
+              </motion.button>
             </div>
 
             {/* Chat render window */}
@@ -1724,7 +1799,7 @@ env_vars = [
 
       </div>
 
-      {/* Custom Agent Modal */}
+      {/* Custom Agent Servers Modal (existing) */}
       <CustomAgentModal
         isOpen={showCustomAgentModal}
         onClose={() => setShowCustomAgentModal(false)}
@@ -1737,6 +1812,20 @@ env_vars = [
           } catch {
             console.error("Failed to save custom agents");
           }
+        }}
+      />
+
+      {/* Custom Agents (Persona) Modal */}
+      <CustomAgentsModal
+        isOpen={showCustomAgentsModal}
+        onClose={() => setShowCustomAgentsModal(false)}
+        agents={customAgentPersonas}
+        baseAgentOptions={chatAgentOptions}
+        customServers={customAgents}
+        loading={customAgentPersonasLoading}
+        onChanged={(next) => {
+          setCustomAgentPersonas(next);
+          setCustomAgentPersonasIconRegistry(next);
         }}
       />
     </motion.div>

@@ -4,6 +4,7 @@ pub mod chat_attachments;
 pub mod chat_history;
 pub mod comments;
 pub mod config;
+pub mod custom_agent;
 pub mod database;
 pub mod migrate_chats;
 pub mod notes;

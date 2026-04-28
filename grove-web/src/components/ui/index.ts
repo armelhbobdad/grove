@@ -5,7 +5,7 @@ export type { ComboboxOption } from "./Combobox";
 export { Tooltip } from "./Tooltip";
 export { DropdownMenu } from "./DropdownMenu";
 export { AppPicker, ideAppOptions, terminalAppOptions } from "./AppPicker";
-export { AgentPicker, agentOptions } from "./AgentPicker";
+export { AgentPicker, AgentPickerMenuItems, agentOptions } from "./AgentPicker";
 export { CustomAgentModal } from "./CustomAgentModal";
 export { MarkdownRenderer } from "./MarkdownRenderer";
 export { SketchChip } from "./SketchChip";
