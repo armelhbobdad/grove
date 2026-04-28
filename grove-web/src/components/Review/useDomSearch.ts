@@ -54,11 +54,21 @@ export function useDomSearch(
 
   // Re-compute on query / enabled / root change
   useEffect(() => {
+    let cancelled = false;
+    const commitState = (nextTotal: number, nextCurrent: number) => {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setTotal(nextTotal);
+        setCurrent(nextCurrent);
+      });
+    };
+
     clearHighlights();
     if (!enabled || !query || !rootRef.current) {
-      setTotal(0);
-      setCurrent(0);
-      return;
+      commitState(0, 0);
+      return () => {
+        cancelled = true;
+      };
     }
 
     const root = rootRef.current;
@@ -102,8 +112,7 @@ export function useDomSearch(
         }
       }
       rangesRef.current = ranges;
-      setTotal(ranges.length);
-      setCurrent(0);
+      commitState(ranges.length, 0);
       if (ranges.length) {
         try {
           const hlAll = new Highlight();
@@ -146,14 +155,16 @@ export function useDomSearch(
         }
       }
       marksRef.current = marks;
-      setTotal(marks.length);
-      setCurrent(0);
+      commitState(marks.length, 0);
       if (marks.length) {
         marks[0].setAttribute(MARK_CURRENT_ATTR, "true");
       }
     }
 
-    return clearHighlights;
+    return () => {
+      cancelled = true;
+      clearHighlights();
+    };
   }, [query, enabled, rootRef, supportsHighlight, clearHighlights]);
 
   // When `current` changes, update which match is the "current" one + scroll into view.

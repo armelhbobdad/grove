@@ -5455,9 +5455,15 @@ const DropdownSelect = ({
   }, [open, enableSearch]);
 
   useEffect(() => {
-    if (!open) {
+    if (open) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
       setSearchQuery("");
-    }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const filteredOptions = useMemo(() => {

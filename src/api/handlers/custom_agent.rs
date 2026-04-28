@@ -235,7 +235,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "flaky in parallel — sketches tests share the process-wide DB connection without holding test_lock for the test body"]
     async fn delete_in_use_persona_returns_409() {
         let _lock = acquire_lock().await;
         let _dir = sandbox_grove_dir();
@@ -257,7 +256,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "flaky in parallel — sketches tests share the process-wide DB connection without holding test_lock for the test body"]
     async fn delete_unused_persona_returns_204() {
         let _lock = acquire_lock().await;
         let _dir = sandbox_grove_dir();
@@ -271,7 +269,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "flaky in parallel — sketches tests share the process-wide DB connection without holding test_lock for the test body"]
     async fn update_base_agent_change_in_use_returns_409() {
         let _lock = acquire_lock().await;
         let _dir = sandbox_grove_dir();
@@ -297,7 +294,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "flaky in parallel — sketches tests share the process-wide DB connection without holding test_lock for the test body"]
     async fn update_same_base_agent_in_use_returns_200() {
         let _lock = acquire_lock().await;
         let _dir = sandbox_grove_dir();
@@ -323,7 +319,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "flaky in parallel — sketches tests share the process-wide DB connection without holding test_lock for the test body"]
     async fn update_base_agent_change_unused_returns_200() {
         let _lock = acquire_lock().await;
         let _dir = sandbox_grove_dir();

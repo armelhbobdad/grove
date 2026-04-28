@@ -165,7 +165,16 @@ export function FilePreviewDrawer({
   };
 
   // Reset iframe match state when query changes
-  useEffect(() => { if (isIframeRenderer) setIframeCurrent(0); }, [searchQuery, isIframeRenderer]);
+  useEffect(() => {
+    if (!isIframeRenderer) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setIframeCurrent(0);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchQuery, isIframeRenderer]);
 
   // Iframe search bridge: send query / goto / clear, listen for results
   useEffect(() => {
@@ -208,7 +217,13 @@ export function FilePreviewDrawer({
         { type: "grove-preview-search:clear", previewId },
         "*",
       );
-      setIframeTotal(0);
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) setIframeTotal(0);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
   }, [searchOpen, isIframeRenderer, previewId]);
 
@@ -231,8 +246,15 @@ export function FilePreviewDrawer({
 
   // Reset search state when file changes
   useEffect(() => {
-    setSearchOpen(false);
-    setSearchQuery("");
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSearchOpen(false);
+      setSearchQuery("");
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fileName]);
 
   // Esc: exit fullscreen first, otherwise close the drawer. Uses capture +
@@ -298,10 +320,17 @@ export function FilePreviewDrawer({
   // Reset comment state when the previewed file changes, so a pending modal
   // from the previous file doesn't submit against the new one.
   useEffect(() => {
-    setPendingLocator(null);
-    setCommentText("");
-    setEditingDraftId(null);
-    setCommentMode(false);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setPendingLocator(null);
+      setCommentText("");
+      setEditingDraftId(null);
+      setCommentMode(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fileName]);
 
   useEffect(() => {

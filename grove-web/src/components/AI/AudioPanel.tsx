@@ -64,9 +64,9 @@ export function AudioPanel({
     });
   }, []);
 
-  const patchAudio = <K extends keyof AudioSettings>(key: K, value: AudioSettings[K]) => {
+  const patchAudio = useCallback(<K extends keyof AudioSettings>(key: K, value: AudioSettings[K]) => {
     patchAudioState((prev) => ({ ...prev, [key]: value }));
-  };
+  }, [patchAudioState]);
 
   const commitMinDuration = useCallback(() => {
     const parsed = Number(draftMinDuration);
@@ -77,7 +77,7 @@ export function AudioPanel({
     if (next !== audio.minDuration) {
       patchAudio("minDuration", next);
     }
-  }, [audio.minDuration, draftMinDuration]);
+  }, [audio.minDuration, draftMinDuration, patchAudio]);
 
   const commitMaxDuration = useCallback(() => {
     const parsed = Number(draftMaxDuration);
@@ -88,7 +88,7 @@ export function AudioPanel({
     if (next !== audio.maxDuration) {
       patchAudio("maxDuration", next);
     }
-  }, [audio.maxDuration, draftMaxDuration]);
+  }, [audio.maxDuration, draftMaxDuration, patchAudio]);
 
   useEffect(() => {
     if (!recordingTarget) return;

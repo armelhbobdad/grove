@@ -847,6 +847,7 @@ mod tests {
 
     /// RAII guard: cleans up the per-test project dir and fake workdir even on panic.
     struct TestEnv {
+        _lock: tokio::sync::MutexGuard<'static, ()>,
         project: String,
         task_id: String,
         workdir: PathBuf,
@@ -854,7 +855,7 @@ mod tests {
 
     impl TestEnv {
         fn new() -> Self {
-            let _lock = crate::storage::database::test_lock().blocking_lock();
+            let lock = crate::storage::database::test_lock().blocking_lock();
             let project = format!("test-{}", Uuid::new_v4());
             let task_id = format!("task-{}", Uuid::new_v4());
             // Fake task workdir under the project dir so Drop cleans it too.
@@ -882,6 +883,7 @@ mod tests {
             };
             save_tasks(&project, &[task]).unwrap();
             Self {
+                _lock: lock,
                 project,
                 task_id,
                 workdir,

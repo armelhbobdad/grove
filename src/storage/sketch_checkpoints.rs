@@ -261,6 +261,7 @@ mod tests {
     use uuid::Uuid;
 
     struct Env {
+        _lock: tokio::sync::MutexGuard<'static, ()>,
         project: String,
         task_id: String,
         sketch_id: String,
@@ -268,7 +269,7 @@ mod tests {
 
     impl Env {
         fn new() -> Self {
-            let _lock = crate::storage::database::test_lock().blocking_lock();
+            let lock = crate::storage::database::test_lock().blocking_lock();
             let project = format!("test-{}", Uuid::new_v4());
             let task_id = format!("task-{}", Uuid::new_v4());
             let workdir = grove_dir().join("projects").join(&project).join("workdir");
@@ -295,6 +296,7 @@ mod tests {
             save_tasks(&project, &[task]).unwrap();
             let sketch_id = format!("sketch-{}", Uuid::new_v4());
             Self {
+                _lock: lock,
                 project,
                 task_id,
                 sketch_id,
