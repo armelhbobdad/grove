@@ -48,7 +48,7 @@ function TypeFilterTabs({ active, onChange }: { active: "coding" | "studio"; onC
 }
 
 export function ProjectSelector({ collapsed, onManageProjects, onAddProject, onProjectSwitch }: ProjectSelectorProps) {
-  const { selectedProject, projects, selectProject } = useProject();
+  const { selectedProject, projects, selectProject, refreshProjects } = useProject();
   const { theme } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -134,6 +134,13 @@ export function ProjectSelector({ collapsed, onManageProjects, onAddProject, onP
       });
     }
   }, [isOpen]);
+
+  // Refresh project list each time the dropdown opens so newly registered or
+  // renamed projects show up without a full page reload.
+  useEffect(() => {
+    if (!isOpen) return;
+    void refreshProjects();
+  }, [isOpen, refreshProjects]);
 
   const handleSelectProject = (project: Project) => {
     const switched = selectedProject?.id !== project.id;

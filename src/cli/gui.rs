@@ -15,6 +15,20 @@ const DAEMON_ENV: &str = "GROVE_GUI_DAEMON";
 /// awkward to wire through capability files, so we ship a tiny custom
 /// command that shells out to the platform opener directly. Only
 /// http/https URLs are accepted.
+/// Toggle the WebView devtools window for the main window.
+///
+/// Available because Tauri is built with the `devtools` feature, so this
+/// works in both debug and release builds. The frontend binds a global
+/// shortcut (Cmd/Ctrl+Shift+I, F12) that calls this command.
+#[tauri::command]
+fn toggle_devtools(window: tauri::WebviewWindow) {
+    if window.is_devtools_open() {
+        window.close_devtools();
+    } else {
+        window.open_devtools();
+    }
+}
+
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -286,7 +300,8 @@ pub async fn execute(port: u16) {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             open_external_url,
-            download_file_dialog
+            download_file_dialog,
+            toggle_devtools
         ])
         .setup(move |app| {
             // Create a window pointing to our HTTP server

@@ -443,8 +443,46 @@ function buildPreviewCommentBridge(previewId: string): string {
   ].join('');
 }
 
+// Sandboxed iframes (`allow-scripts` only, no `allow-same-origin`) throw a
+// SecurityError on any `localStorage` / `sessionStorage` access. React 19 and
+// many libraries touch storage during render, which crashes the preview. This
+// shim installs an in-memory replacement before any other script runs.
+const SANDBOX_STORAGE_SHIM = [
+  '<script>',
+  '(function(){',
+  'function makeStore(){',
+  'var data=Object.create(null);',
+  'return{',
+  'getItem:function(k){return Object.prototype.hasOwnProperty.call(data,k)?data[k]:null;},',
+  'setItem:function(k,v){data[String(k)]=String(v);},',
+  'removeItem:function(k){delete data[k];},',
+  'clear:function(){data=Object.create(null);},',
+  'key:function(i){return Object.keys(data)[i]||null;},',
+  'get length(){return Object.keys(data).length;}',
+  '};',
+  '}',
+  'function install(name){',
+  'try{',
+  'var probe=window[name];',
+  'probe&&probe.getItem("__grove_probe__");',
+  '}catch(e){',
+  'try{Object.defineProperty(window,name,{value:makeStore(),configurable:true,writable:true});}catch(_){}',
+  '}',
+  '}',
+  'install("localStorage");install("sessionStorage");',
+  '})();',
+  '</script>',
+].join('');
+
 function buildHtmlPreviewSrcdoc(html: string, previewId: string): string {
   const bridge = buildPreviewCommentBridge(previewId);
+  if (/<head[^>]*>/i.test(html)) {
+    html = html.replace(/<head[^>]*>/i, (m) => `${m}${SANDBOX_STORAGE_SHIM}`);
+  } else if (/<html[^>]*>/i.test(html)) {
+    html = html.replace(/<html[^>]*>/i, (m) => `${m}<head>${SANDBOX_STORAGE_SHIM}</head>`);
+  } else {
+    html = `${SANDBOX_STORAGE_SHIM}${html}`;
+  }
   if (/<\/body>/i.test(html)) {
     return html.replace(/<\/body>/i, `${bridge}</body>`);
   }
@@ -458,6 +496,7 @@ function buildJsxIframeSrcdoc(code: string, previewId?: string): string {
 
   return [
     '<!DOCTYPE html><html><head><meta charset="utf-8">',
+    SANDBOX_STORAGE_SHIM,
     '<script crossorigin src="https://unpkg.com/react@19/umd/react.development.js"><\\/script>',
     '<script crossorigin src="https://unpkg.com/react-dom@19/umd/react-dom.development.js"><\\/script>',
     '<script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"><\\/script>',
