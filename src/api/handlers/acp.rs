@@ -572,21 +572,18 @@ async fn handle_acp_ws(socket: WebSocket, session_key: String, config: AcpStartC
     //
     // 不再发 WS-only synthetic Cancelled —— 所有 cancel 都走 emit，确保多 WS
     // 视图状态一致。
-    if is_existing {
-        if let Some(ref chat_id) = history_chat_id {
-            let history =
-                chat_history::load_history(&history_project_key, &history_task_id, chat_id);
-            let unresolved_ids = chat_history::unresolved_permission_ids(&history);
-            let live_id = handle.pending_permission_id();
-            for id in unresolved_ids {
-                if Some(&id) == live_id.as_ref() {
-                    continue;
-                }
-                handle.emit(AcpUpdate::PermissionResponse {
-                    id,
-                    option_id: "Cancelled".to_string(),
-                });
+    if let Some(ref chat_id) = history_chat_id {
+        let history = chat_history::load_history(&history_project_key, &history_task_id, chat_id);
+        let unresolved_ids = chat_history::unresolved_permission_ids(&history);
+        let live_id = handle.pending_permission_id();
+        for id in unresolved_ids {
+            if Some(&id) == live_id.as_ref() {
+                continue;
             }
+            handle.emit(AcpUpdate::PermissionResponse {
+                id,
+                option_id: "Cancelled".to_string(),
+            });
         }
     }
 

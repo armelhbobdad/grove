@@ -75,6 +75,7 @@ pub fn should_persist(update: &AcpUpdate) -> bool {
             | AcpUpdate::SessionReady { .. }
             | AcpUpdate::AvailableCommands { .. }
             | AcpUpdate::QueueUpdate { .. }
+            | AcpUpdate::ConnectPhase { .. }
     )
 }
 
@@ -185,37 +186,24 @@ pub fn load_history(project: &str, task_id: &str, chat_id: &str) -> Vec<AcpUpdat
     history
 }
 
-/// On reconnect/history replay, unresolved permission requests, tool calls, and terminal
-/// executions are treated as cancelled. Append synthetic cancellation events so replayed
-/// history is self-consistent.
+/// On reconnect/history replay, unresolved tool calls and terminal executions are treated
+/// as cancelled and synthetic cancellation events are appended so replayed history is
+/// self-consistent. Unresolved permission requests are intentionally NOT cancelled here —
+/// the WS handler owns that path through an id-keyed reconcile against the live
+/// `pending_permission_id()` so a real live dialog isn't silently cancelled when its
+/// PermissionRequest was already in history before WS reconnect.
 pub fn cancel_unresolved_events(project: &str, task_id: &str, chat_id: &str) -> usize {
     let history = load_history(project, task_id, chat_id);
     if history.is_empty() {
         return 0;
     }
 
-    let mut unresolved_permission_ids: Vec<String> = Vec::new();
     let mut unresolved_tools: std::collections::HashMap<String, Vec<(String, Option<u32>)>> =
         std::collections::HashMap::new();
     let mut unresolved_terminals = 0usize;
 
     for event in &history {
         match event {
-            AcpUpdate::PermissionRequest { id, .. } => {
-                unresolved_permission_ids.push(id.clone());
-            }
-            AcpUpdate::PermissionResponse { id, .. } => {
-                // Match by id when present (id-aware path). When the response
-                // carries a legacy empty id, fall back to the FIFO behaviour
-                // so old histories drained one-for-one keep working.
-                if !id.is_empty() {
-                    if let Some(pos) = unresolved_permission_ids.iter().rposition(|qid| qid == id) {
-                        unresolved_permission_ids.remove(pos);
-                    }
-                } else if !unresolved_permission_ids.is_empty() {
-                    unresolved_permission_ids.pop();
-                }
-            }
             AcpUpdate::ToolCall { id, locations, .. } => {
                 unresolved_tools.insert(id.clone(), locations.clone());
             }
@@ -235,8 +223,7 @@ pub fn cancel_unresolved_events(project: &str, task_id: &str, chat_id: &str) -> 
         }
     }
 
-    let unresolved_total =
-        unresolved_permission_ids.len() + unresolved_tools.len() + unresolved_terminals;
+    let unresolved_total = unresolved_tools.len() + unresolved_terminals;
     if unresolved_total == 0 {
         return 0;
     }
@@ -245,15 +232,6 @@ pub fn cancel_unresolved_events(project: &str, task_id: &str, chat_id: &str) -> 
     let file = fs::OpenOptions::new().create(true).append(true).open(&path);
     match file {
         Ok(mut f) => {
-            for id in &unresolved_permission_ids {
-                append_json_line(
-                    &mut f,
-                    &AcpUpdate::PermissionResponse {
-                        id: id.clone(),
-                        option_id: "Cancelled".to_string(),
-                    },
-                );
-            }
             for (id, locations) in unresolved_tools {
                 append_json_line(
                     &mut f,
