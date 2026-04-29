@@ -128,12 +128,39 @@ function renderAgentInjectBadge(
   );
 }
 
+/** Reminder envelope sent from the graph's "Remind" toolbar button.
+ *  Renders as an amber/warning-tinted badge so it's visually distinct from
+ *  agent_inject_send / agent_inject_reply (which are neutral). */
+function renderUserRemindBadge(env: GroveMetaEnvelope): ReactNode {
+  const data = env.data as unknown as AgentInjectData;
+  const Icon = agentIconComponent(data.agent);
+  return (
+    <div
+      className="mb-2 inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium"
+      style={{
+        borderColor: "color-mix(in srgb, var(--color-warning) 40%, transparent)",
+        background: "color-mix(in srgb, var(--color-warning) 10%, transparent)",
+        color: "var(--color-text)",
+      }}
+      title={env.systemPrompt}
+    >
+      <span style={{ color: "var(--color-warning)" }} className="font-semibold">
+        Reminder
+      </span>
+      <span className="opacity-70">about</span>
+      {createElement(Icon, { size: 14, className: "shrink-0" })}
+      <span className="truncate">{data.name}</span>
+    </div>
+  );
+}
+
 export const GROVE_META_RENDERERS: Record<string, Renderer> = {
   mention_spawn: (env) => renderMentionSpawn(env),
   mention_send: (env) => renderMentionSend(env),
   mention_reply: (env) => renderMentionReply(env),
   agent_inject_send: (env) => renderAgentInjectBadge(env, "send"),
   agent_inject_reply: (env) => renderAgentInjectBadge(env, "reply"),
+  user_remind: (env) => renderUserRemindBadge(env),
 };
 
 /** Render an envelope, falling back to `systemPrompt` text on unknown type or

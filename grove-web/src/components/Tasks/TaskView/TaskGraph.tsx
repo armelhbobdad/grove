@@ -1032,35 +1032,54 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
         }}
       >
         <defs>
+          {/* userSpaceOnUse so arrow size is stable across selected/in-flight/idle
+              (default `strokeWidth` units make the arrow scale with line thickness,
+              which produced the chunky overshoot near the edge label). refX is
+              tuned so the tip lands just outside the 24px node radius. */}
           <marker
             id="arrowhead"
+            markerUnits="userSpaceOnUse"
             markerWidth="10"
-            markerHeight="7"
-            refX="28"
-            refY="3.5"
+            markerHeight="8"
+            refX="34"
+            refY="4"
             orient="auto"
           >
-            <polygon points="0 0, 10 3.5, 0 7" fill="var(--color-text-muted)" />
+            <path
+              d="M0 0 L10 4 L0 8 Z"
+              fill="var(--color-text-muted)"
+              strokeLinejoin="round"
+            />
           </marker>
           <marker
             id="arrowhead-in_flight"
+            markerUnits="userSpaceOnUse"
             markerWidth="10"
-            markerHeight="7"
-            refX="28"
-            refY="3.5"
+            markerHeight="8"
+            refX="34"
+            refY="4"
             orient="auto"
           >
-            <polygon points="0 0, 10 3.5, 0 7" fill={EDGE_COLORS.in_flight} />
+            <path
+              d="M0 0 L10 4 L0 8 Z"
+              fill={EDGE_COLORS.in_flight}
+              strokeLinejoin="round"
+            />
           </marker>
           <marker
             id="arrowhead-blocked"
+            markerUnits="userSpaceOnUse"
             markerWidth="10"
-            markerHeight="7"
-            refX="28"
-            refY="3.5"
+            markerHeight="8"
+            refX="34"
+            refY="4"
             orient="auto"
           >
-            <polygon points="0 0, 10 3.5, 0 7" fill={EDGE_COLORS.blocked} />
+            <path
+              d="M0 0 L10 4 L0 8 Z"
+              fill={EDGE_COLORS.blocked}
+              strokeLinejoin="round"
+            />
           </marker>
         </defs>
 
@@ -1775,6 +1794,12 @@ export function TaskGraph({ projectId, taskId }: TaskGraphProps) {
             : null
         }
         nodeStatus={selectedNodeData ? getNodeStatus(selectedNodeData.chat_id) : null}
+        edgeState={(() => {
+          if (selectedEdge == null) return null;
+          const e = data?.edges.find((ed) => ed.edge_id === selectedEdge);
+          if (!e) return null;
+          return deriveEdgeState(e.from, e.to);
+        })()}
         nodeNameById={(id) =>
           data?.nodes.find((n) => n.chat_id === id)?.name ?? id
         }
@@ -1945,6 +1970,8 @@ interface ToolbarProps {
   node: GraphNode | null;
   edge: GraphEdge | null;
   nodeStatus: string | null;
+  /** Live state of `edge`. `null` when no edge is selected. */
+  edgeState: "idle" | "in_flight" | "blocked" | null;
   nodeNameById: (id: string) => string;
   directMessage: string;
   sendingMessage: boolean;
@@ -1999,6 +2026,7 @@ function GraphContextToolbar(props: ToolbarProps) {
     node,
     edge,
     nodeStatus,
+    edgeState,
     nodeNameById,
     directMessage,
     sendingMessage,
@@ -2039,7 +2067,10 @@ function GraphContextToolbar(props: ToolbarProps) {
       <motion.div
         layout
         transition={MODE_TRANSITION}
-        className={`absolute bottom-5 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100%-1.5rem)] ${FLOAT_PILL}`}
+        // Reserve ~210px on each side so the centered context toolbar never
+        // overlaps the bottom-right zoom widget (or any future bottom-left
+        // affordance). 1.5rem of breathing room is kept from the viewport edge.
+        className={`absolute bottom-5 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100%-26rem)] ${FLOAT_PILL}`}
         style={{ originY: 1 }}
       >
         <AnimatePresence mode="popLayout" initial={false}>
@@ -2258,6 +2289,7 @@ function GraphContextToolbar(props: ToolbarProps) {
             >
               <EdgeContextSection
                 edge={edge}
+                edgeState={edgeState}
                 fromName={nodeNameById(edge.from)}
                 toName={nodeNameById(edge.to)}
                 onEditClick={() => onEditEdge(edge)}
@@ -2671,6 +2703,7 @@ function SpawnForm({
 
 function EdgeContextSection({
   edge,
+  edgeState,
   fromName,
   toName,
   onEditClick,
@@ -2678,6 +2711,7 @@ function EdgeContextSection({
   onDeleteClick,
 }: {
   edge: GraphEdge;
+  edgeState: "idle" | "in_flight" | "blocked" | null;
   fromName: string;
   toName: string;
   onEditClick: () => void;
@@ -2685,22 +2719,43 @@ function EdgeContextSection({
   onDeleteClick: () => void;
 }) {
   const hasPending = !!edge.pending_message;
+  // Remind only makes sense when the target is *blocked* on this pending
+  // message — i.e. has acknowledged it but isn't actively working on it.
+  // While the target is `in_flight` (busy), reminding is noise; while `idle`
+  // there's nothing to remind about. Disable accordingly.
+  const canRemind = hasPending && edgeState === "blocked";
+  const remindDisabledTitle = !hasPending
+    ? "No pending message on this edge"
+    : edgeState === "in_flight"
+      ? "Target session is currently working — no need to remind"
+      : "Nothing to remind";
   return (
     <>
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 min-w-0 flex-1 text-[12px]">
         <MessageSquare className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-muted)]" />
-        <span className="text-[12px] text-[var(--color-text)] truncate">
-          <span className="font-medium">{fromName}</span>
-          <span className="mx-1.5 text-[var(--color-text-muted)]">→</span>
-          <span className="font-medium">{toName}</span>
-          {edge.purpose && (
-            <span className="ml-2 text-[var(--color-text-muted)]">
-              · {edge.purpose}
-            </span>
-          )}
+        <span
+          className="font-medium text-[var(--color-text)] truncate max-w-[140px]"
+          title={fromName}
+        >
+          {fromName}
         </span>
+        <span className="text-[var(--color-text-muted)] shrink-0">→</span>
+        <span
+          className="font-medium text-[var(--color-text)] truncate max-w-[140px]"
+          title={toName}
+        >
+          {toName}
+        </span>
+        {edge.purpose && (
+          <span
+            className="text-[var(--color-text-muted)] truncate min-w-0"
+            title={edge.purpose}
+          >
+            · {edge.purpose}
+          </span>
+        )}
       </div>
-      <div className="ml-2 flex items-center gap-1">
+      <div className="ml-2 flex items-center gap-1 shrink-0">
         <ToolbarButton
           icon={<Pencil className="w-3.5 h-3.5" />}
           label="Edit Purpose"
@@ -2710,8 +2765,8 @@ function EdgeContextSection({
           icon={<Bell className="w-3.5 h-3.5" />}
           label="Remind"
           onClick={onRemindClick}
-          disabled={!hasPending}
-          disabledTitle="No pending message on this edge"
+          disabled={!canRemind}
+          disabledTitle={remindDisabledTitle}
         />
         <ToolbarButton
           icon={<Trash2 className="w-3.5 h-3.5" />}
@@ -2740,7 +2795,7 @@ function ToolbarButton({
   danger?: boolean;
 }) {
   const base =
-    "flex items-center gap-1 h-7 px-2.5 rounded-full text-[11.5px] font-medium transition-colors";
+    "flex items-center gap-1 h-7 px-2.5 rounded-full text-[11.5px] font-medium transition-colors shrink-0 whitespace-nowrap";
   const enabled = danger
     ? "text-[var(--color-error)] hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)]"
     : "text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]";
