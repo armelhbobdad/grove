@@ -288,10 +288,13 @@ export function FilePreviewDrawer({
       const data = event.data as { type?: string; previewId?: string; payload?: PreviewCommentLocator; markerId?: string; ids?: string[] };
       if (!data || data.previewId !== previewId) return;
       if (data.type === "grove-preview-comment:selected" && data.payload) {
+        // Keep commentMode true so the picker resumes once the modal closes,
+        // letting users add multiple comments in one session. The `enabled`
+        // prop below gates the overlay on `!pendingLocator` so the picker UI
+        // hides while the modal is up.
         setPendingLocator(data.payload);
         setCommentText("");
         setEditingDraftId(null);
-        setCommentMode(false);
       } else if (data.type === "grove-preview-comment:cancel") {
         setCommentMode(false);
       } else if (data.type === "grove-preview-comment:marker-click" && data.markerId) {
@@ -300,7 +303,6 @@ export function FilePreviewDrawer({
           setPendingLocator(draft.locator);
           setCommentText(draft.comment);
           setEditingDraftId(draft.id);
-          setCommentMode(false);
         }
       } else if (data.type === "grove-preview-comment:markers-stale" && Array.isArray(data.ids) && onDeletePreviewComment) {
         data.ids.forEach((id) => onDeletePreviewComment(id));
@@ -537,7 +539,7 @@ export function FilePreviewDrawer({
                 content,
                 onImageClick: setLightboxUrl,
                 onSvgClick: setLightboxSvg,
-                previewComment: commentable ? { enabled: commentMode, previewId, markers: stableMarkers } : undefined,
+                previewComment: commentable ? { enabled: commentMode && !pendingLocator, previewId, markers: stableMarkers } : undefined,
               })}
             </div>
           ) : (() => {
