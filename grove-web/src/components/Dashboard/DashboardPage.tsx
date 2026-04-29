@@ -68,6 +68,7 @@ function convertRepoStatus(status: RepoStatusResponse): RepoStatus {
     untracked: 0, // included in `uncommitted` total
     hasConflicts: status.has_conflicts,
     hasOrigin: status.has_origin,
+    hasRemote: status.has_remote,
   };
 }
 
@@ -452,7 +453,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const defaultRepoStatus: RepoStatus = {
     currentBranch: selectedProject.currentBranch || "main",
     ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0,
-    hasConflicts: false, hasOrigin: true,
+    hasConflicts: false, hasOrigin: true, hasRemote: true,
   };
   const currentStatus = repoStatus || defaultRepoStatus;
   const { color: projectColor, Icon: ProjectIcon } = getProjectStyle(selectedProject.id, theme.accentPalette);
@@ -887,7 +888,11 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
                 icon={ArrowUp}
                 label="Push"
                 onClick={handlePush}
-                disabled={!currentStatus.hasOrigin || currentStatus.ahead === 0 || isOperating}
+                disabled={
+                  !currentStatus.hasRemote ||
+                  isOperating ||
+                  (currentStatus.hasOrigin && currentStatus.ahead === 0)
+                }
               />
               <RepoAction
                 icon={ArrowUpDown}

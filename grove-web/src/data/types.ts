@@ -88,7 +88,8 @@ export interface RepoStatus {
   unstaged: number;   // modified but not staged
   untracked: number;  // untracked files count
   hasConflicts: boolean;
-  hasOrigin: boolean; // whether the repo has origin for current branch
+  hasOrigin: boolean; // whether the current branch has an upstream on origin
+  hasRemote: boolean; // whether the repo has an `origin` remote configured
 }
 
 // Commit file change details

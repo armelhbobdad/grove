@@ -14,6 +14,7 @@ export interface RepoStatusResponse {
   stash_count: number;
   has_conflicts: boolean;
   has_origin: boolean;
+  has_remote: boolean;
 }
 
 export interface BranchDetailInfo {

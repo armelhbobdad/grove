@@ -24,6 +24,17 @@ Grove is a workspace for you and your AI development team. Write a spec, send a 
 
 Single binary with the Web IDE embedded. Only Git and a terminal multiplexer on Unix.
 
+### For Humans
+
+Copy and paste this prompt to your LLM agent (Claude Code, Cursor, AmpCode, etc.):
+
+> Install and configure Grove by following the instructions here:
+> https://raw.githubusercontent.com/GarrickZ2/grove/master/docs/install.md
+
+Or read the [Installation Guide](docs/install.md) — but seriously, let an agent do it. Humans fat-finger configs.
+
+If you'd rather run a command yourself, pick one:
+
 ```bash
 # Homebrew
 brew tap GarrickZ2/grove && brew install grove
@@ -41,6 +52,16 @@ irm https://raw.githubusercontent.com/GarrickZ2/grove/master/install.ps1 | iex
 cargo install grove-rs                 # TUI + Web + MCP
 cargo install grove-rs --features gui  # + native desktop GUI
 ```
+
+### For LLM Agents
+
+Fetch the installation guide and follow it:
+
+```bash
+curl -s https://raw.githubusercontent.com/GarrickZ2/grove/master/docs/install.md
+```
+
+Note: the published binary name is `grove`. After install, run `grove` inside any Git repo to launch the Web IDE on `http://localhost:3001`, or `grove gui` for the native desktop window. Project state lives under `~/.grove/` (config, tasks, AI summaries, notes); never edit files there by hand.
 
 **Prebuilt binaries** — macOS `.dmg`, Windows `.exe`, Linux `.tar.gz` / `.AppImage`: [Latest release ↗](https://github.com/GarrickZ2/grove/releases/latest)
 

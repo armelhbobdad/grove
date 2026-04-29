@@ -24,8 +24,10 @@ pub struct RepoStatusResponse {
     pub uncommitted: u32,
     pub stash_count: u32,
     pub has_conflicts: bool,
-    /// Whether the repo has an origin remote for the current branch
+    /// Whether the current branch has an upstream tracking ref on origin
     pub has_origin: bool,
+    /// Whether the repository has an `origin` remote configured at all
+    pub has_remote: bool,
 }
 
 /// Branch info with ahead/behind
@@ -184,6 +186,9 @@ pub async fn get_status(Path(id): Path<String>) -> Result<Json<RepoStatusRespons
     // Determine if origin exists for this branch
     let has_origin = ahead.is_some() || behind.is_some();
 
+    // Determine if the repo has an `origin` remote configured at all
+    let has_remote = git_cmd(&project_path, &["remote", "get-url", "origin"]).is_ok();
+
     // Get uncommitted count
     let uncommitted = git::uncommitted_count(&project_path).unwrap_or(0) as u32;
 
@@ -201,6 +206,7 @@ pub async fn get_status(Path(id): Path<String>) -> Result<Json<RepoStatusRespons
         stash_count,
         has_conflicts,
         has_origin,
+        has_remote,
     }))
 }
 
@@ -481,7 +487,7 @@ pub async fn push(Path(id): Path<String>) -> Result<Json<GitOpResponse>, StatusC
 
     // Push with explicit branch and --set-upstream to handle new branches
     // This is equivalent to: git push origin $(git_current_branch)
-    match git_cmd(&project_path, &["push", "origin", &current_branch]) {
+    match git_cmd(&project_path, &["push", "-u", "origin", &current_branch]) {
         Ok(output) => Ok(Json(GitOpResponse {
             success: true,
             message: if output.is_empty() {
