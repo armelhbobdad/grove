@@ -207,7 +207,7 @@ export const FlexLayoutContainer = forwardRef<
   FlexLayoutContainerHandle,
   FlexLayoutContainerProps
 >(({ task, projectId, initialLayout, onLayoutChange, fullscreen = false, onToggleFullscreen }, ref) => {
-  const { terminalAvailable, chatAvailable } = useConfig();
+  const { terminalAvailable } = useConfig();
   const { selectedProject } = useProject();
   const isStudio = selectedProject?.projectType === 'studio';
 
@@ -733,9 +733,7 @@ export const FlexLayoutContainer = forwardRef<
   // Build dropdown items for [+] Add Panel button
   const addPanelItems = useCallback((): DropdownItem[] => {
     const items: DropdownItem[] = [];
-    if (chatAvailable) {
-      items.push({ id: 'chat', label: 'Chat', icon: MessageSquare, onClick: () => addPanel('chat'), shortcut: 'i' });
-    }
+    items.push({ id: 'chat', label: 'Chat', icon: MessageSquare, onClick: () => addPanel('chat'), shortcut: 'i' });
     if (isStudio) {
       items.push({ id: 'artifacts', label: 'Artifacts', icon: FolderOpen, onClick: () => addPanel('artifacts'), shortcut: 'f' });
       items.push({ id: 'sketch', label: 'Sketch', icon: Pencil, onClick: () => addPanel('sketch') });
@@ -763,7 +761,7 @@ export const FlexLayoutContainer = forwardRef<
       items.push({ id: 'comments', label: 'Comments', icon: MessageCircle, onClick: () => addPanel('comments') });
     }
     return items;
-  }, [chatAvailable, terminalAvailable, isStudio, addPanel]);
+  }, [terminalAvailable, isStudio, addPanel]);
 
   // Custom TabSet rendering ([+] add panel + maximize button)
   const onRenderTabSet = useCallback((tabSetNode: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
@@ -1004,11 +1002,9 @@ export const FlexLayoutContainer = forwardRef<
               Open a panel to get started
             </p>
             <div className="flex items-center gap-2">
-              {chatAvailable && (
-                <button onClick={() => addPanel('chat')} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
-                  <MessageSquare size={13} /> Chat
-                </button>
-              )}
+              <button onClick={() => addPanel('chat')} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
+                <MessageSquare size={13} /> Chat
+              </button>
               {isStudio && (
                 <button onClick={() => addPanel('artifacts')} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
                   <FolderOpen size={13} /> Artifacts

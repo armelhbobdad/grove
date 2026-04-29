@@ -1125,6 +1125,26 @@ function reduceHistoryMessages(
   }
 }
 
+// Standalone elapsed-time label for the npx pre-warm phase. Owns its own
+// 1Hz interval so updating the seconds counter does not re-render the
+// 7000-line TaskChat parent. Compact vs. full label format selectable so
+// the same component serves both the fullscreen header and the inline
+// session rail.
+function DownloadingLabel({ startedAt, compact }: { startedAt: number; compact?: boolean }) {
+  const computeSeconds = useCallback(
+    () => Math.floor((Date.now() - startedAt) / 1000),
+    [startedAt],
+  );
+  const [seconds, setSeconds] = useState(computeSeconds);
+  useEffect(() => {
+    const id = setInterval(() => setSeconds(computeSeconds()), 1000);
+    return () => clearInterval(id);
+  }, [computeSeconds]);
+  return compact
+    ? <>{`Downloading ${seconds}s`}</>
+    : <>{`Downloading agent via npx (first run, ~30s) · ${seconds}s`}</>;
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function TaskChat({
@@ -1187,6 +1207,12 @@ export function TaskChat({
 
   // ─── Active chat's live state ─────────────────────────────────────────
   const [isConnected, setIsConnected] = useState(false);
+  // Pre-spawn UI hint pushed by backend when an agent is being installed via
+  // npx for the first time (~30s on cold cache). Cleared on session_ready or
+  // when backend sends phase: "ready". Purely cosmetic — the actual spawn
+  // continues regardless.
+  const [connectPhase, setConnectPhase] = useState<string | null>(null);
+  const [connectPhaseStartedAt, setConnectPhaseStartedAt] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hiddenMessageCount, setHiddenMessageCount] = useState(0);
   const hiddenMessageCountRef = useRef(0);
@@ -2057,6 +2083,8 @@ export function TaskChat({
       setPlanEntries([]);
       setSlashCommands([]);
       setIsConnected(false);
+      setConnectPhase(null);
+      setConnectPhaseStartedAt(null);
       setIsTerminalMode(false);
       setPromptCaps({ image: false, audio: false, embeddedContext: false });
       setPlanFilePath("");
@@ -2412,6 +2440,17 @@ export function TaskChat({
               break;
             case "session_ended":
               setIsConnected(false);
+              setConnectPhase(null);
+              setConnectPhaseStartedAt(null);
+              break;
+            case "connect_phase":
+              if (evt.phase === "downloading") {
+                setConnectPhase("downloading");
+                setConnectPhaseStartedAt(Date.now());
+              } else {
+                setConnectPhase(null);
+                setConnectPhaseStartedAt(null);
+              }
               break;
           }
         }
@@ -2439,8 +2478,19 @@ export function TaskChat({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (msg: any) => {
       switch (msg.type) {
+        case "connect_phase":
+          if (msg.phase === "downloading") {
+            setConnectPhase("downloading");
+            setConnectPhaseStartedAt(Date.now());
+          } else {
+            setConnectPhase(null);
+            setConnectPhaseStartedAt(null);
+          }
+          break;
         case "session_ready":
           setIsConnected(true);
+          setConnectPhase(null);
+          setConnectPhaseStartedAt(null);
           onConnectedProp?.();
           // Dynamic modes/models from agent
           if (msg.available_modes?.length) {
@@ -2700,6 +2750,8 @@ export function TaskChat({
           break;
         case "session_ended":
           setIsConnected(false);
+          setConnectPhase(null);
+          setConnectPhaseStartedAt(null);
           break;
       }
     },
@@ -4275,7 +4327,11 @@ export function TaskChat({
                 className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-[var(--color-success)] animate-pulse" : "bg-[var(--color-warning)]"}`}
               />
               <span className="text-xs text-[var(--color-text-muted)]">
-                {isConnected ? "Connected" : "Connecting..."}
+                {isConnected
+                  ? "Connected"
+                  : connectPhase === "downloading" && connectPhaseStartedAt
+                    ? <DownloadingLabel startedAt={connectPhaseStartedAt} />
+                    : "Connecting..."}
               </span>
               {onToggleFullscreen && (
                 <button
@@ -4364,7 +4420,13 @@ export function TaskChat({
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${isConnected ? "bg-[var(--color-success)]" : "bg-[var(--color-warning)]"}`}
                   />
-                  <span>{isConnected ? "Connected" : "Connecting..."}</span>
+                  <span>
+                    {isConnected
+                      ? "Connected"
+                      : connectPhase === "downloading" && connectPhaseStartedAt
+                        ? <DownloadingLabel startedAt={connectPhaseStartedAt} compact />
+                        : "Connecting..."}
+                  </span>
                 </div>
               </div>
             </div>

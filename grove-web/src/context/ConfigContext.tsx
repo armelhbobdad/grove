@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { getConfig, type Config } from '../api/config';
-import { checkAllDependencies, checkCommands } from '../api';
-import { agentOptions } from '../components/ui';
+import { checkAllDependencies } from '../api';
 
 
 interface ConfigContextValue {
@@ -9,8 +8,7 @@ interface ConfigContextValue {
   loading: boolean;
   refresh: () => Promise<void>;
   terminalAvailable: boolean;
-  chatAvailable: boolean;
-  updateAvailability: (terminal: boolean, chat: boolean) => void;
+  updateAvailability: (terminal: boolean) => void;
 }
 
 const ConfigContext = createContext<ConfigContextValue | undefined>(undefined);
@@ -19,7 +17,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
   const [terminalAvailable, setTerminalAvailable] = useState(true);
-  const [chatAvailable, setChatAvailable] = useState(false);
 
   const loadConfig = async () => {
     setLoading(true);
@@ -37,42 +34,19 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
   const checkAvailability = useCallback(async (cfg: Config | null) => {
     try {
-      // Collect all ACP check commands (including fallbacks)
-      const acpCheckCmds = new Set<string>();
-      for (const opt of agentOptions) {
-        if (opt.acpCheck) {
-          acpCheckCmds.add(opt.acpCheck);
-        }
-        if (opt.acpFallback) {
-          acpCheckCmds.add(opt.acpFallback);
-        }
-      }
-
-      const [envResult, cmdResults] = await Promise.all([
-        checkAllDependencies(),
-        checkCommands([...acpCheckCmds]),
-      ]);
-
+      const envResult = await checkAllDependencies();
       // Terminal: direct mode always available, or tmux/zellij installed
       const isDirectMode = cfg?.web?.terminal_mode === 'direct';
       const tmux = envResult.dependencies.find(d => d.name === 'tmux')?.installed ?? false;
       const zellij = envResult.dependencies.find(d => d.name === 'zellij')?.installed ?? false;
       setTerminalAvailable(isDirectMode || tmux || zellij);
-
-      // Chat: at least one ACP agent command exists (primary or fallback) OR custom agents configured
-      const hasAnyAcp = agentOptions
-        .filter(a => a.acpCheck)
-        .some(a => cmdResults[a.acpCheck!] === true || (a.acpFallback && cmdResults[a.acpFallback] === true));
-      const hasCustom = (cfg?.acp?.custom_agents?.length ?? 0) > 0;
-      setChatAvailable(hasAnyAcp || hasCustom);
     } catch {
       // On error, keep defaults
     }
   }, []);
 
-  const updateAvailability = useCallback((terminal: boolean, chat: boolean) => {
+  const updateAvailability = useCallback((terminal: boolean) => {
     setTerminalAvailable(terminal);
-    setChatAvailable(chat);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -95,7 +69,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       loading,
       refresh,
       terminalAvailable,
-      chatAvailable,
       updateAvailability,
     }}>
       {children}

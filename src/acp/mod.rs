@@ -208,6 +208,15 @@ pub enum AcpUpdate {
     TerminalChunk { output: String },
     /// 终端命令执行完成
     TerminalComplete { exit_code: Option<i32> },
+    /// Pre-spawn UI hint for the chat panel. Currently only emitted on the
+    /// npx path so the user sees "Downloading agent (~30s)" instead of a
+    /// silent 30s "Connecting...". Not persisted, not surfaced on
+    /// walkie-talkie / NodeStatus — purely a TaskChat UX signal.
+    ///
+    /// Phase values: "downloading" (npm fetch in flight), "ready" (pre-warm
+    /// done — TaskChat clears the override and falls back to its normal
+    /// connecting/connected text driven by `connecting`/`SessionReady`).
+    ConnectPhase { phase: String },
 }
 
 /// 权限选项数据（从 ACP PermissionOption 提取，用于 WebSocket 传输）
@@ -1467,6 +1476,57 @@ async fn run_acp_session(
         reader = Box::new(r);
         writer = Box::new(w);
     } else {
+        // Pre-warm npm cache for npx-spawned agents. First-run npx fetches
+        // can stall for ~30s; without this hint the user stares at
+        // "Connecting..." not knowing if the app is dead. Run a dummy
+        // `--version` invocation to populate the cache before the real
+        // spawn. The "downloading" UI hint is only emitted if the pre-warm
+        // is *still running* after 1.5s — hot-cache runs (which finish in
+        // <2s) skip the emit entirely so users don't see a confusing flash.
+        //
+        // Heuristic: assumes built-in npx invocations always look like
+        // `npx -y <pkg>`. Custom agents using more exotic forms (e.g.
+        // `npx --package=X cli-name`) may pre-warm the wrong identifier;
+        // since the result is timeout-wrapped and discarded, the worst case
+        // is a no-op that adds a brief delay before the real spawn.
+        if config.agent_command == "npx" {
+            if let Some(pkg) = config
+                .agent_args
+                .iter()
+                .find(|a| !a.starts_with('-'))
+                .cloned()
+            {
+                let prewarm = tokio::process::Command::new("npx")
+                    .args(["-y", &pkg, "--version"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .status();
+                let prewarm_with_timeout =
+                    tokio::time::timeout(std::time::Duration::from_secs(120), prewarm);
+                tokio::pin!(prewarm_with_timeout);
+                let mut emitted = false;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {
+                        handle.emit(AcpUpdate::ConnectPhase {
+                            phase: "downloading".to_string(),
+                        });
+                        emitted = true;
+                        let _ = (&mut prewarm_with_timeout).await;
+                    }
+                    _ = &mut prewarm_with_timeout => {
+                        // Hot-cache fast path: pre-warm finished before the
+                        // 1.5s threshold; never emit the "downloading" hint.
+                    }
+                }
+                if emitted {
+                    handle.emit(AcpUpdate::ConnectPhase {
+                        phase: "ready".to_string(),
+                    });
+                }
+            }
+        }
         // Local: 子进程
         // Resolve the program through PATH+PATHEXT before spawning. On Windows
         // `CreateProcessW` doesn't search PATHEXT, so a bare "opencode" fails

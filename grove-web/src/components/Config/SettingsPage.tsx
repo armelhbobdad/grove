@@ -624,9 +624,9 @@ export function SettingsPage({ config }: SettingsPageProps) {
   // Sync availability to ConfigContext for Task panel components
   useEffect(() => {
     if (Object.keys(depStates).length > 0) {
-      updateAvailability(isTerminalAvailable, isChatAvailable);
+      updateAvailability(isTerminalAvailable);
     }
-  }, [depStates, commandAvailability, isTerminalAvailable, isChatAvailable, updateAvailability]);
+  }, [depStates, commandAvailability, isTerminalAvailable, updateAvailability]);
 
   // Auto-correct agent selection: pick first available, or clear if none available
   useEffect(() => {

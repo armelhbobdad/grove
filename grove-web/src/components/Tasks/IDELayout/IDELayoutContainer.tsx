@@ -136,7 +136,6 @@ function Toolbar({
   update,
   isStudio,
   terminalAvailable,
-  chatAvailable,
   leading,
   trailing,
 }: {
@@ -144,7 +143,6 @@ function Toolbar({
   update: (partial: Partial<IDELayoutInternalState>) => void;
   isStudio: boolean;
   terminalAvailable: boolean;
-  chatAvailable: boolean;
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
 }) {
@@ -166,22 +164,18 @@ function Toolbar({
     <div className="ide-toolbar">
       {leading && <div className="ide-toolbar__leading">{leading}</div>}
 
-      {chatAvailable && (
-        <>
-          <button
-            onClick={() =>
-              update({ chatVisible: state.chatVisible ? !hasOpenPanel : true })
-            }
-            disabled={state.chatVisible && !hasOpenPanel}
-            className={`ide-toolbar__btn ide-toolbar__btn--chat ${state.chatVisible ? "ide-toolbar__btn--active" : ""}`}
-            title={hasOpenPanel ? "Toggle Chat" : "Chat stays visible until another panel is open"}
-          >
-            <MessageSquare size={13} />
-            <span>Chat</span>
-          </button>
-          <div className="ide-toolbar__separator" />
-        </>
-      )}
+      <button
+        onClick={() =>
+          update({ chatVisible: state.chatVisible ? !hasOpenPanel : true })
+        }
+        disabled={state.chatVisible && !hasOpenPanel}
+        className={`ide-toolbar__btn ide-toolbar__btn--chat ${state.chatVisible ? "ide-toolbar__btn--active" : ""}`}
+        title={hasOpenPanel ? "Toggle Chat" : "Chat stays visible until another panel is open"}
+      >
+        <MessageSquare size={13} />
+        <span>Chat</span>
+      </button>
+      <div className="ide-toolbar__separator" />
 
       <div className="ide-toolbar__group">
         {filteredAux.map(({ type, label, shortcut, icon: Icon }) => {
@@ -272,7 +266,7 @@ function PanelSlot({
 export const IDELayoutContainer = forwardRef<IDELayoutHandle, IDELayoutContainerProps>(
   function IDELayoutContainer({ task, projectId, toolbarLeading, toolbarTrailing }, ref) {
     const { selectedProject } = useProject();
-    const { terminalAvailable, chatAvailable } = useConfig();
+    const { terminalAvailable } = useConfig();
     const isStudio = selectedProject?.projectType === "studio";
     const isGitRepo = selectedProject?.isGitRepo;
 
@@ -616,23 +610,6 @@ export const IDELayoutContainer = forwardRef<IDELayoutHandle, IDELayoutContainer
     };
 
     const renderChat = () => {
-      if (!chatAvailable && isStudio) {
-        return (
-          <div className="ide-center-fallback">
-            <ArtifactsTab projectId={projectId} task={task} previewRequest={state.artifactPreviewRequest} lastChatIdleAt={state.lastChatIdleAt} isChatBusy={state.isChatBusy} />
-          </div>
-        );
-      }
-
-      if (!chatAvailable) {
-        return (
-          <div className="ide-center-empty">
-            <MessageSquare size={18} />
-            <span>Chat is unavailable for this workspace.</span>
-          </div>
-        );
-      }
-
       return (
         <TaskChat
           projectId={projectId} task={task} fullscreen
@@ -699,7 +676,6 @@ export const IDELayoutContainer = forwardRef<IDELayoutHandle, IDELayoutContainer
         update={update}
         isStudio={isStudio}
         terminalAvailable={terminalAvailable}
-        chatAvailable={chatAvailable}
         leading={toolbarLeading}
         trailing={toolbarTrailing}
       />

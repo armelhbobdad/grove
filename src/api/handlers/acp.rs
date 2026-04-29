@@ -193,6 +193,10 @@ enum ServerMessage {
     TerminalComplete {
         exit_code: Option<i32>,
     },
+    /// Pre-spawn UI hint — see `AcpUpdate::ConnectPhase`.
+    ConnectPhase {
+        phase: String,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -399,6 +403,7 @@ impl From<AcpUpdate> for ServerMessage {
             AcpUpdate::TerminalComplete { exit_code } => {
                 ServerMessage::TerminalComplete { exit_code }
             }
+            AcpUpdate::ConnectPhase { phase } => ServerMessage::ConnectPhase { phase },
         }
     }
 }
