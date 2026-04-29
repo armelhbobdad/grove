@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-04-28
+
+### Added
+
+- **Push for branches without upstream** — Dashboard "Push" no longer requires an existing `origin/<branch>` ref. `RepoStatusResponse` now exposes `has_remote` (origin remote configured) alongside `has_origin` (upstream tracking ref); the button enables whenever a remote exists, and the backend pushes with `-u` so a brand-new local branch is published in one click.
+- **README install split + `docs/install.md`** — Install section reorganised into "For Humans" (paste a prompt to your LLM agent) and "For LLM Agents" (`curl` the guide). New `docs/install.md` is an end-to-end, agent-friendly installation reference (platform detection, installers, verification, first run, uninstall).
+
+### Fixed
+
+- **ACP orphan permission requests** — fresh WebSocket connect now cancels permission requests left behind by a previous session so the new client doesn't inherit stale prompts.
+- **Chat unblocked for npx-only setups** — surfaces npx download progress instead of looking idle while the agent CLI bootstraps.
+- **Preview Comment mode stickiness** — Comment mode now persists across submissions in the preview pane.
+- **TaskGraph polish** — toolbar layout, arrowhead rendering, and the Remind action UX cleaned up.
+- **Tauri webview** — external links open in the system browser; embedded images resolve correctly inside the GUI.
+- **Grove stays alive on macOS window close** — closing the GUI window no longer terminates the Grove process.
+
+### Improved
+
+- **GUI/Web devtools + sandboxed-iframe storage** — devtools shortcut wired up; sandboxed iframes get a localStorage shim; project list refreshes on Open.
+
 ## [0.10.1] - 2026-04-28
 
 ### Added
