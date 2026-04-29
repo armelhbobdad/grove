@@ -5698,8 +5698,20 @@ const MessageItem = memo(function MessageItem({
 }) {
   const sketchContext = isStudio ? { projectId, taskId } : undefined;
   const resolveImageUrl = useCallback((src: string) => {
-    if (/^https?:\/\//.test(src)) return src;
-    return `/api/v1/projects/${projectId}/tasks/${taskId}/file?path=${encodeURIComponent(src)}`;
+    if (/^https?:\/\//.test(src) || src.startsWith("data:")) return src;
+    // Strip `file://` so the backend gets a plain absolute path.
+    const stripped = src.startsWith("file://") ? src.slice("file://".length) : src;
+    // Markdown sources arrive already percent-encoded (e.g. `%20` for
+    // spaces). Decode first so we don't double-encode when re-encoding
+    // for the query string. decodeURIComponent throws on malformed
+    // sequences — fall back to the raw src in that case.
+    let decoded = stripped;
+    try {
+      decoded = decodeURIComponent(stripped);
+    } catch {
+      // keep stripped as-is
+    }
+    return `/api/v1/projects/${projectId}/tasks/${taskId}/file/raw?path=${encodeURIComponent(decoded)}`;
   }, [projectId, taskId]);
 
   switch (message.type) {

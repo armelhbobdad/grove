@@ -339,6 +339,10 @@ pub fn create_api_router() -> Router {
             get(handlers::tasks::get_file).put(handlers::tasks::update_file),
         )
         .route(
+            "/projects/{id}/tasks/{taskId}/file/raw",
+            get(handlers::tasks::get_file_raw),
+        )
+        .route(
             "/projects/{id}/tasks/{taskId}/dir-entries",
             get(handlers::tasks::dir_entries),
         )

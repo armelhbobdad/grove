@@ -31,3 +31,45 @@ export function openExternalUrl(url: string): void {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 }
+
+/**
+ * Install a document-level click interceptor that routes any <a href="http(s)://…">
+ * click through `openExternalUrl`, so OS-default browser handles the URL.
+ *
+ * Tauri-only: in a regular browser, native <a> behavior is already correct.
+ *
+ * Why this is needed: Tauri's webview swallows `target="_blank"` /
+ * `window.open` calls, leaving plain markdown / 3rd-party-rendered links
+ * dead. Intercepting at capture phase covers every component without each
+ * one having to wire up its own handler. Components that render to canvas
+ * (e.g. xterm) still need their own integration since they don't emit real
+ * <a> elements.
+ */
+export function installExternalLinkInterceptor(): void {
+  if (!getTauriInternals()) return;
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      // Let modified clicks (e.g. middle-click, save-as) be handled by us
+      // too — Tauri can't honor "open in new tab" anyway, so we collapse
+      // every variant onto "open in OS default browser".
+      if (event.defaultPrevented) return;
+      if (event.button !== 0 && event.button !== 1) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a");
+      if (!anchor) return;
+
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+      if (!/^https?:\/\//i.test(href)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openExternalUrl(href);
+    },
+    true, // capture phase — beat React synthetic-event handlers
+  );
+}

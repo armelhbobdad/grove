@@ -9,7 +9,6 @@ import { VSCodeIcon } from "./VSCodeIcon";
 import { SketchChip } from "./SketchChip";
 import { highlightLines, normalizeLanguage } from "../Review/syntaxHighlight";
 import { useTheme } from "../../context/ThemeContext";
-import { openExternalUrl } from "../../utils/openExternal";
 
 /** Languages whose code blocks may be executed in the terminal. */
 const RUNNABLE_SHELL_LANGS = new Set(["bash", "sh", "shell", "zsh"]);
@@ -774,21 +773,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onFile
               );
             }
           }
-          const isExternal = href && (href.startsWith("http://") || href.startsWith("https://"));
-          if (isExternal) {
-            return (
-              <a
-                href={href}
-                className="text-[var(--color-highlight)] hover:underline break-words cursor-pointer"
-                onClick={(e) => {
-                  e.preventDefault();
-                  openExternalUrl(href);
-                }}
-              >
-                {children}
-              </a>
-            );
-          }
+          // External http(s) links are routed through the global click
+          // interceptor in main.tsx (utils/openExternal.ts), which handles
+          // the Tauri-vs-browser split centrally.
           return (
             <a
               href={href}
@@ -819,14 +806,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onFile
           // below. We collapse internal whitespace to reconstruct the URL.
           const collapsed = text.replace(/\s+/g, "");
           if (!className?.startsWith("language-") && /^https?:\/\/\S+$/.test(collapsed)) {
+            // Click handling is done by the global interceptor.
             return (
               <a
                 href={collapsed}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="text-[var(--color-highlight)] hover:underline break-all cursor-pointer font-mono text-xs"
-                onClick={(e) => {
-                  e.preventDefault();
-                  openExternalUrl(collapsed);
-                }}
               >
                 {collapsed}
               </a>
@@ -928,9 +914,18 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onFile
       // `sketch:` to an empty href, which would hide sketch chips behind a
       // dead link. Pass sketch:// through untouched; everything else keeps
       // the default sanitization (js/vbscript/file blocked, etc.).
-      urlTransform={(url) =>
-        url.startsWith("sketch://") ? url : defaultUrlTransform(url)
-      }
+      // Pass through schemes the default transform would otherwise strip:
+      //   sketch://      — chip rendering depends on this surviving
+      //   data:image/    — inline base64 images embedded by agents
+      //   file://, /abs  — local-path images go through resolveImageUrl in
+      //                    the img component; defaultUrlTransform doesn't
+      //                    affect bare paths anyway, only `file:` URIs.
+      urlTransform={(url) => {
+        if (url.startsWith("sketch://")) return url;
+        if (/^data:image\//i.test(url)) return url;
+        if (url.startsWith("file://")) return url;
+        return defaultUrlTransform(url);
+      }}
     >
       {processedContent}
     </ReactMarkdown>

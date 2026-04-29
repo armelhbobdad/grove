@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useTerminalTheme } from "../../../context";
 import { appendHmacToUrl } from "../../../api/client";
+import { openExternalUrl } from "../../../utils/openExternal";
 import {
   getCached,
   setCached,
@@ -205,7 +206,17 @@ export function XTerminal({
     terminal.loadAddon(fitAddon);
     fitAddonRef.current = fitAddon;
 
-    const webLinksAddon = new WebLinksAddon();
+    // Default WebLinksAddon uses window.open(), which is blocked / mis-routed
+    // inside the Tauri webview. Route clicks through our IPC opener so the
+    // OS default browser handles the URL in both web and GUI modes.
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      // xterm fires this on plain click too — gate on the platform-appropriate
+      // modifier (Cmd on macOS, Ctrl elsewhere) to match terminal conventions.
+      const isMac = navigator.platform.toLowerCase().includes("mac");
+      const modifierHeld = isMac ? event.metaKey : event.ctrlKey;
+      if (!modifierHeld) return;
+      openExternalUrl(uri);
+    });
     terminal.loadAddon(webLinksAddon);
 
     terminal.open(container);
